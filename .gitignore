@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+build/
+
+# Local source backups
+backups/
+
+# Logs & debug
+*.log
+npm-debug.log*
+
+# OS / editor cruft
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+.vscode/
+.idea/
+.*/
+!.github/
+
+# Local working files
+*.jsonl
+*.tasks.json
+logo-toasts.txt
+toast-suggestions.txt
+
+# Local docs
+docs/architecture/*.md
+docs/superpowers/
+docs/checkpoints/
+docs/decisions/
+docs/*.md
+*.md
+!README.md
+!docs/screenshots/README.md
+
+# Local dev tools and assets
+files/fonts/
+files/perf.js
+test/
