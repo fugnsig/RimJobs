@@ -129,7 +129,7 @@ Found a bug or have an idea? Please open an **[issue](https://github.com/fugnsig
 
 ## Support
 
-RimJobs is free and always will be. If it saved you some hassle and you would like to chip in, you can **[buy me a Ko-fi](https://ko-fi.com/rimjobs)** ☕. It took a fair while to put together, I'm not a token billionaire on the fanciest AI plan, so it came along day by day, planning what to try, jotting ideas down and crossing off the ones that went nowhere. Donations are always appreciated and never required or expected, and they don't unlock anything extra. It is and will remain a fan project.
+RimJobs is free and always will be. If it saved you some hassle and you would like to chip in, you can **[buy me a Ko-fi](https://ko-fi.com/rimjobs)** ☕. It took a fair while to put together, I'm not a token billionaire on any fancy AI plan, so it came along day by day, planning what to try, jotting ideas down and crossing off the ones that went nowhere. Donations are always appreciated and never required or expected, and they don't unlock anything extra. It is and will remain a fan project.
 
 ## Acknowledgements
 
