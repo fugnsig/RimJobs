@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+build/
+
+# Local source backups (created by the app's pre-redesign snapshots)
+backups/
+
+# Logs & debug
+*.log
+npm-debug.log*
+
+# Local tooling state
+.claude/
+
+# OS / editor cruft
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Local scratch notes (not part of the app)
+logo-toasts.txt
+toast-suggestions.txt
+
+# AI-assistant working notes (kept local, not for the repo)
+ONBOARDING.md
+SESSION_HANDOFF.md
+UTILITY_REFERENCE.md
+
+# Internal "maybe pile" of unshipped ideas (kept local, not for the repo)
+IDEAS.md
+
+# Tests (kept local, not committed)
+test/

@@ -1,0 +1,642 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RimJobs</title>
+  
+  <link rel="icon" type="image/png" href="rimjobs_logo.png">
+
+  <!-- MODULAR STYLES -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ─── Global error boundary ─── -->
+<div id="error-overlay" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(0,0,0,0.92); color:#e8e9eb; font-family:system-ui,-apple-system,sans-serif; padding:40px; overflow-y:auto">
+  <div style="max-width:560px; margin:0 auto">
+    <div style="font-size:calc(24px * var(--font-scale)); font-weight:800; color:#f0857a; margin-bottom:8px">Something went wrong</div>
+    <div style="font-size:calc(13px * var(--font-scale)); color:#aaa; margin-bottom:20px">Your data was auto-saved. You can reload or try to dismiss this and continue.</div>
+    <pre id="error-details" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:16px; font-size:calc(12px * var(--font-scale)); color:#f0857a; white-space:pre-wrap; word-break:break-word; max-height:300px; overflow-y:auto; margin-bottom:20px"></pre>
+    <div style="display:flex; gap:10px">
+      <button onclick="_copyErrorText(this)" style="flex:1; padding:10px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; background:transparent; color:#f0857a; font-weight:700; font-size:calc(14px * var(--font-scale)); cursor:pointer">Copy Error</button>
+      <button onclick="location.reload()" style="flex:1; padding:10px; border:none; border-radius:8px; background:#e8a838; color:#000; font-weight:700; font-size:calc(14px * var(--font-scale)); cursor:pointer">Reload</button>
+      <button onclick="document.getElementById('error-overlay').style.display='none'" style="flex:1; padding:10px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; background:transparent; color:#e8e9eb; font-weight:700; font-size:calc(14px * var(--font-scale)); cursor:pointer">Dismiss</button>
+    </div>
+  </div>
+</div>
+<script>
+  // Copy error text to clipboard (works even in focusable:false Electron windows)
+  function _copyErrorText(btn) {
+    var d = document.getElementById('error-details');
+    if (!d) return;
+    var text = d.textContent || 'Unknown error';
+    var ok = false;
+    // Try Electron clipboard first
+    try {
+      if (window.overlay && window.overlay.clipboardWrite) {
+        window.overlay.clipboardWrite(text);
+        ok = true;
+      }
+    } catch(_) {}
+    // Fallback: execCommand (works without focus/permissions)
+    if (!ok) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        ok = true;
+      } catch(_) {}
+    }
+    // Last resort: navigator.clipboard
+    if (!ok) {
+      try { navigator.clipboard.writeText(text); } catch(_) {}
+    }
+    if (btn) {
+      btn.textContent = 'Copied!';
+      setTimeout(function() { btn.textContent = 'Copy Error'; }, 1500);
+    }
+  }
+
+  // Catch uncaught errors and unhandled promise rejections
+  function _showErrorOverlay(msg, source, line, col, err) {
+    var overlay = document.getElementById('error-overlay');
+    var details = document.getElementById('error-details');
+    if (!overlay || !details) return;
+    var text = '';
+    if (err && err.stack) text = err.stack;
+    else if (msg) text = msg + (source ? '\n  at ' + source + ':' + line + ':' + col : '');
+    else text = 'Unknown error';
+    details.textContent = text;
+    overlay.style.display = '';
+    // Try to auto-save before things get worse
+    try { if (window.App && App.saveData) App.saveData(); } catch(_) {}
+  }
+  window.onerror = function(msg, source, line, col, err) { _showErrorOverlay(msg, source, line, col, err); };
+  window.addEventListener('unhandledrejection', function(e) { _showErrorOverlay(e.reason && e.reason.message || String(e.reason), '', 0, 0, e.reason); });
+</script>
+
+<!-- Electron overlay titlebar - only visible when running in Electron -->
+<div id="overlay-titlebar" style="display:none">
+  <div class="overlay-drag-region">
+    <span class="overlay-title">RimJobs</span>
+    <span id="raidEstimateToolbar" style="display:none; margin-left:8px; padding:2px 8px; background:rgba(0,0,0,0.3); border-radius:4px; white-space:nowrap"></span>
+  </div>
+  <div class="overlay-controls">
+    <label class="overlay-opacity-label" title="Window opacity">
+      <input type="range" min="30" max="100" value="100" class="overlay-opacity-slider"
+        oninput="window.overlay.setOpacity(this.value/100)">
+    </label>
+    <button class="overlay-btn" id="widgetToggleBtn" onclick="window.overlay.toggleWidgetMode()" title="Toggle widget / full window">&#9634;</button>
+    <button class="overlay-btn" onclick="window.overlay.snapLeft()" title="Snap to left half">&#9699;</button>
+    <button class="overlay-btn" onclick="window.overlay.snapRight()" title="Snap to right half">&#9698;</button>
+    <button class="overlay-btn" id="pinBtn" onclick="App.togglePin()" title="Lock window position">&#128204;</button>
+    <button class="overlay-btn" id="collapseBtn" onclick="window.overlay.minimize()" title="Collapse">&#9660;</button>
+    <button class="overlay-btn" id="expandBtn" onclick="window.overlay.minimize()" title="Expand" style="display:none">&#9650;</button>
+    <button class="overlay-btn" onclick="(App.state.settings.minimizeToTray===false)?window.overlay.minimizeNormal():window.overlay.minimizeToTaskbar()" title="Minimise (to tray by default - change in Settings)">&#8722;</button>
+    <button class="overlay-btn" id="fullscreenBtn" onclick="window.overlay.toggleFullscreen()" title="Fullscreen">&#9974;</button>
+    <button class="overlay-btn overlay-btn-close" onclick="App.showQuitConfirm()" title="Close">&times;</button>
+  </div>
+  <!-- Width-resize grips for the collapsed bar (shown only when minimized). No title
+       attribute: it would pop a tooltip while dragging. -->
+  <div class="overlay-resize-grip overlay-resize-left" data-edge="left"></div>
+  <div class="overlay-resize-grip overlay-resize-right" data-edge="right"></div>
+</div>
+<script>
+  // Show the titlebar only when running inside Electron
+  if (window.overlay) {
+    document.getElementById('overlay-titlebar').style.display = '';
+    document.body.classList.add('has-overlay-titlebar');
+    // Update widget toggle button icon on mode switch
+    if (window.overlay.onWidgetModeChanged) {
+      window.overlay.onWidgetModeChanged(function(isWidget) {
+        var btn = document.getElementById('widgetToggleBtn');
+        if (btn) btn.innerHTML = isWidget ? '&#9634;' : '&#9635;';
+        // Thorough cleanup when switching modes
+        var sidebar = document.querySelector('.sidebar');
+        var backdrop = document.getElementById('drawerBackdrop');
+        var resizer = document.querySelector('.resizer');
+        var expandBtn = document.getElementById('sidebarExpandBtn');
+        if (sidebar) {
+          sidebar.classList.remove('drawer-open');
+          sidebar.classList.remove('collapsed');
+          sidebar.style.display = '';
+          sidebar.style.width = '';
+          sidebar.style.position = '';
+          sidebar.style.height = '';
+          sidebar.style.maxHeight = '';
+          sidebar.style.transform = '';
+          sidebar.style.top = '';
+          sidebar.style.left = '';
+          sidebar.style.bottom = '';
+          sidebar.style.right = '';
+          sidebar.style.zIndex = '';
+        }
+        if (backdrop) backdrop.classList.remove('show');
+        // Reset grid layout - applySettings will set the correct one
+        var appEl = document.querySelector('.app');
+        if (appEl) appEl.style.gridTemplateColumns = '';
+        // Reset resizer visibility
+        if (resizer) resizer.style.display = '';
+        if (expandBtn) expandBtn.style.display = '';
+        // Re-apply settings after resize settles, then re-render active tab
+        setTimeout(function() {
+          if (window.App) {
+            App.applySettings();
+            // Re-render current tab to pick up widget/full layout changes
+            var tab = App.state.activeTab;
+            if (tab === 'sched') App.renderSchedule();
+            if (tab === 'armoury') App.renderArmoury();
+            if (tab === 'dash') App.renderDashboard();
+            if (tab === 'help') App.renderHelp();
+            if (tab === 'notes') App.renderJournal();
+            if (tab === 'blue') App.renderBlueprint();
+          }
+        }, 150);
+      });
+    }
+    // Update the fullscreen button glyph/title when toggled, and record the
+    // mode so the sidebar can restore its per-mode remembered width.
+    if (window.overlay.onFullscreenChanged) {
+      window.overlay.onFullscreenChanged(function(isFs) {
+        var btn = document.getElementById('fullscreenBtn');
+        if (btn) {
+          btn.innerHTML = isFs ? '&#10064;' : '&#9974;';
+          btn.title = isFs ? 'Exit fullscreen' : 'Fullscreen';
+        }
+        if (window.App) {
+          App._isFullscreen = isFs;
+          App.applySettings();
+        }
+      });
+    }
+    // Collapse/expand on minimize
+    if (window.overlay.onMinimizedState) {
+      window.overlay.onMinimizedState(function(minimized) {
+        var appEl = document.querySelector('.app');
+        var collapseBtn = document.getElementById('collapseBtn');
+        var expandBtn = document.getElementById('expandBtn');
+        if (appEl) appEl.style.display = minimized ? 'none' : '';
+        // When collapsed: hide collapse btn, show expand btn
+        if (collapseBtn) collapseBtn.style.display = minimized ? 'none' : '';
+        if (expandBtn) expandBtn.style.display = minimized ? '' : 'none';
+        if (minimized) { document.body.classList.add('is-minimized'); }
+        else {
+          document.body.classList.remove('is-minimized');
+          // Canvas views (blueprints, relations) were 0-sized while the app was
+          // display:none, so their buffers get measured wrong before the
+          // display:none -> '' reflow settles: blueprints went blank, relations
+          // stretched (buffer set, then the 100% CSS box resized under it). Re-fit
+          // after two frames, with a timeout safety net for slower layouts.
+          // Relations only RESIZES (keeps the existing graph, no re-layout);
+          // blueprints does the full re-render a tab switch would.
+          var _refitCanvasFull = function () {
+            try {
+              if (App.state.activeTab === 'blue') { if (App.renderBlueprint) App.renderBlueprint(); }
+              else if (App.state.activeTab === 'relations') { if (App._relResizeHandler) App._relResizeHandler(); else if (App.renderRelations) App.renderRelations(); }
+            } catch (e) {}
+          };
+          var _refitCanvasLight = function () {
+            try {
+              if (App.state.activeTab === 'blue') { if (App._canvasResizeAndDraw) App._canvasResizeAndDraw(); }
+              else if (App.state.activeTab === 'relations') { if (App._relResizeHandler) App._relResizeHandler(); }
+            } catch (e) {}
+          };
+          requestAnimationFrame(function () { requestAnimationFrame(_refitCanvasFull); });
+          setTimeout(_refitCanvasLight, 160);
+        }
+        // Hide/restore console drawer on minimize/restore
+        var con = document.getElementById('consoleDrawer');
+        var badge = document.getElementById('consoleBadge');
+        if (minimized) {
+          App._consoleWasOpen = con && con.style.display !== 'none' && con.style.display !== '';
+          if (con) con.style.display = 'none';
+          if (badge) badge.style.display = 'none';
+        } else if (App._consoleWasOpen) {
+          if (con) { con.style.display = 'flex'; App._consoleCollapsed = false;
+            var body = document.getElementById('consoleDrawerBody'); if (body) body.style.display = '';
+            var handle = document.getElementById('consoleResizeHandle'); if (handle) handle.style.display = '';
+          }
+          App._consoleWasOpen = false;
+          if (App._renderConsoleDrawer) App._renderConsoleDrawer();
+          if (App._updateConsoleBadge) App._updateConsoleBadge();
+        }
+        if (App.updateRaidToolbar) App.updateRaidToolbar();
+      });
+    }
+  }
+</script>
+
+<div class="drawer-backdrop" id="drawerBackdrop" onclick="App.closeDrawer()"></div>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="logo-area">
+      <div class="logo-title">
+        <div class="logo-img-wrap" onclick="App.toast('Tongue-in-cheek colony management.')" style="cursor:pointer">
+          <img src="rimjobs_logo.png" alt="RimJobs Logo" draggable="false">
+        </div>
+        <input id="colonyNameInput" class="colony-name-input" placeholder="Name Your Colony…" oninput="App.setColonyName(this.value)">
+      </div>
+      <div class="logo-sub" id="logoDate" title="In-game date when a save is imported, otherwise your local time in RimWorld's calendar"></div>
+      <div class="logo-sub logo-world" id="logoWorld" style="display:none" onclick="App.copyWorldSeed()" title="World name and generation seed from the imported save. Click to copy the seed."></div>
+    </div>
+
+    <div class="section-title">Actions</div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--gap-sm); margin-bottom:var(--gap-sm)">
+      <button class="btn btn-sm" onclick="App.saveData()" title="Save current state to local storage" style="justify-content:center">Save</button>
+      <button class="btn btn-sm btn-danger" onclick="App.clearAllPawns()" title="Remove all pawns" style="justify-content:center"> Clear Pawns</button>
+      <button class="btn btn-sm btn-accent" onclick="App.openXenoEditor()" style="justify-content:center"> Xenotypes</button>
+      <button class="btn btn-sm btn-accent" onclick="App.openTraitEditor()" style="justify-content:center"> Traits</button>
+    </div>
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">Colony Pawns<button class="btn btn-sm btn-primary manage-pawns-btn" onclick="App.openPawnManager()" title="Open full pawn manager" style="font-size:var(--f-xs);padding:3px 10px;gap:4px;letter-spacing:0">Manage</button></div>
+    <div style="display:flex; gap:var(--gap-sm); margin-bottom:var(--gap-sm)">
+      <input type="text" id="pawnSearch" class="skill-input" placeholder=" Search..." oninput="App.renderSidebar(); App.renderTable()" style="flex:1; text-align:left; padding-left:10px">
+      <button id="collapseAllBtn" class="btn btn-sm" onclick="App.toggleCollapseAll()" style="font-size:var(--f-xs);padding:2px 8px;white-space:nowrap">Collapse All</button>
+      <select id="pawnSort" class="skill-input" onchange="App.setPawnSort(this.value)" style="width:auto; min-width:80px; font-size:var(--f-sm); padding:2px 8px; font-family:inherit; letter-spacing:0.01em"></select>
+    </div>
+    <div id="pawnList" class="pawn-list"></div>
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:var(--gap-sm); margin-top:var(--gap-sm)">
+      <button class="add-pawn-btn" onclick="App.addPawn()">+ Add</button>
+      <button class="add-pawn-btn btn-accent-soft" onclick="App.importPawnFromClipboard()" title="Paste pawn data from clipboard">Import</button>
+      <div style="display:flex; gap:2px">
+        <button class="add-pawn-btn btn-accent-soft" onclick="App.importSaveFile()" title="Import pawns from a RimWorld save file" style="flex:1">Import Game Save</button>
+        <button id="refreshSaveBtn" class="add-pawn-btn btn-accent-soft" onclick="App.refreshSaveFile()" title="Re-read the last imported save file to pick up new changes" style="display:none; width:28px; min-width:28px; padding:0; font-size:var(--f-sm)">&#8635;</button>
+        <button id="exportSaveBtn" class="add-pawn-btn btn-accent-soft" onclick="App.exportEditedSave()" title="Export your edits (skills, traits, health, relationships) back to a new .rws save you can load in RimWorld" style="display:none; width:28px; min-width:28px; padding:0; font-size:var(--f-sm)"><span class="rj-emoji">&#128228;</span></button>
+      </div>
+    </div>
+
+    <button onclick="App.toggleSidebar()" class="sidebar-collapse-btn" title="Collapse Sidebar">
+      <div class="icon-btn collapse-btn">◀</div>
+      <div>Collapse Sidebar</div>
+    </button>
+  </aside>
+
+  <div class="resizer" onmousedown="App.initResize(event)"></div>
+
+  <!-- MAIN AREA -->
+  <main class="main">
+
+    <div class="page-header">
+      <div style="display:flex; align-items:center; gap:var(--gap-md); flex:1">
+        <button id="sidebarExpandBtn" class="icon-btn collapse-btn" onclick="App.toggleSidebar()" title="Expand Sidebar" style="display:none">▶</button>
+        <div class="main-tabs">
+          <div class="main-tab active" id="tab-work" onclick="App.setTab('work')">Priorities</div>
+        <div class="main-tab" id="tab-sched" onclick="App.setTab('sched')">Shift Planner</div>
+        <div class="main-tab" id="tab-armoury" onclick="App.setTab('armoury')">Armoury</div>
+        <div class="main-tab" id="tab-blue" onclick="App.setTab('blue')"> Blueprints</div>
+        <div class="main-tab" id="tab-notes" onclick="App.setTab('notes')"> Journal</div>
+        <div class="main-tab" id="tab-dash" onclick="App.setTab('dash')">Skills Web</div>
+        <div class="main-tab" id="tab-ideo" onclick="App.setTab('ideo')">Ideology</div>
+        <div class="main-tab" id="tab-relations" onclick="App.setTab('relations')">Relations</div>
+        <div class="main-tab" id="tab-records" onclick="App.setTab('records')">Records</div>
+        <div class="main-tab" id="tab-raid" onclick="App.setTab('raid')">Raids</div>
+        <div class="main-tab" id="tab-settings" onclick="App.setTab('settings')">Settings & Misc.</div>
+        <div class="main-tab" id="tab-help" onclick="App.setTab('help')"> Manual</div>
+        <div class="main-tab" id="tab-legal" onclick="App.setTab('legal')">Legal</div>
+        <div id="savePill" onclick="App.state.settings.savePath ? App.showConfirm('Change save location?','Change').then(()=>App.pickSavePath()).catch(()=>{}) : App.pickSavePath()" style="margin-left:auto; padding:3px 10px; font-size:var(--f-xs); color:var(--text3); cursor:pointer; white-space:nowrap; font-weight:600; border-radius:4px; display:flex; align-items:center; gap:4px; transition:all 0.2s" title="Save location"><span style="flex-shrink:0">&#128190;</span><span id="savePillText">Local</span></div>
+      </div>
+    </div>
+    </div><!-- /page-header -->
+
+    <!-- VIEW: WORK -->
+    <div id="view-work" class="view-container">
+      <div id="summaryBar" class="summary-bar"></div>
+      <div class="filter-tabs" id="filterTabs" style="margin-bottom:var(--gap-md); display:flex; gap:var(--gap-sm); align-items:center; justify-content:flex-end">
+        <button class="btn btn-sm" id="manualPrioBtn" onclick="App.toggleManualPriorities()" title="Switch the table between Manual priorities (numbers 1-4) and Simple on/off mode, matching RimWorld's Work tab." style="font-size:var(--f-xs); padding:5px 12px">Manual</button>
+        <button class="btn btn-sm" onclick="App.openJobColumnManager()" title="Choose which job columns show (vanilla/DLC by default; add modded or custom jobs). Drag column headers to reorder." style="font-size:var(--f-xs); padding:5px 12px; margin-right:auto">Columns</button>
+        <button class="btn btn-sm btn-accent" onclick="App.autoAssignAll()" title="Automatically assign job priorities based on Min-Max logic. Does not account for xenotype weaknesses or modded xenotypes." style="font-size:var(--f-xs); padding:5px 12px">Auto-Assign</button>
+        <button class="btn btn-sm" id="optimizerToggle" onclick="App.openWorkPlanner()" style="font-size:var(--f-xs); padding:5px 12px">Work Planner</button>
+      </div>
+      <div id="optimizerPanel" style="display:none; margin-bottom:var(--gap-md); max-height:35vh; overflow-y:auto; flex-shrink:0"></div>
+      <div class="table-wrap" id="tableWrap"></div>
+    </div>
+
+    <!-- VIEW: DASHBOARD -->
+    <div id="view-dash" class="view-container" style="display:none">
+      <!-- Generated by app.js -->
+    </div>
+
+    <!-- VIEW: SCHED -->
+    <div id="view-sched" class="view-container" style="display:none">
+      <div class="view-header">
+        <div class="view-header-content">
+          <h2 class="view-title">24-Hour Shift Planner</h2>
+        </div>
+        <div class="view-header-actions">
+          <input type="text" class="skill-input" placeholder="Filter pawns..." oninput="App._schedFilter=this.value; App.renderSchedule()" style="width:140px; text-align:left; padding-left:10px; font-size:var(--f-xs)">
+          <button class="btn btn-accent" onclick="App.autoOptimizeSchedules()">Optimise</button>
+        </div>
+      </div>
+      <div id="schedContainer"></div>
+    </div>
+
+    <!-- VIEW: ARMOURY -->
+    <div id="view-armoury" class="view-container" style="display:none; flex-direction:column">
+      <div class="view-header">
+        <div class="view-header-content">
+          <h2 class="view-title">Armoury</h2>
+          <p id="armourySubDesc" class="view-subtitle">Compare weapon lethality, burst patterns, and effective DPS at range.</p>
+        </div>
+        <div class="view-header-actions" id="armourySubActions"><!-- generated per sub-tab --></div>
+      </div>
+
+      <!-- Sub-tabs: Weapons / Apparel / Loadouts -->
+      <div class="sub-tab-bar" id="armourySubTabs">
+        <button class="sub-tab" data-sub="weapons" onclick="App.setArmourySubTab('weapons')">Weapons</button>
+        <button class="sub-tab" data-sub="apparel" onclick="App.setArmourySubTab('apparel')">Apparel</button>
+        <button class="sub-tab" data-sub="loadouts" onclick="App.setArmourySubTab('loadouts')">Comparison</button>
+      </div>
+
+      <!-- WEAPONS -->
+      <div id="armouryContent" style="display:grid; grid-template-columns: 1fr; gap:var(--gap-lg)"></div>
+      <div id="armouryComparison" style="display:none; flex-direction:column; gap:var(--gap-md)">
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:var(--gap-md)">
+          <div class="settings-card" style="margin-bottom:0">
+            <h3 class="section-title" style="color:var(--p2-txt)">Weapon A</h3>
+            <div id="comp-form-a" class="comp-form-grid"></div>
+          </div>
+          <div class="settings-card" style="margin-bottom:0">
+            <h3 class="section-title" style="color:var(--p4-txt)">Weapon B</h3>
+            <div id="comp-form-b" class="comp-form-grid"></div>
+          </div>
+        </div>
+        <div id="comparisonAnalysis" class="settings-card" style="background:var(--surface2); border:1px solid var(--accent-glow)"></div>
+      </div>
+
+      <!-- APPAREL -->
+      <div id="apparelContent" style="display:none; grid-template-columns: 1fr; gap:var(--gap-lg)"></div>
+      <div id="apparelComparison" style="display:none; flex-direction:column; gap:var(--gap-md)">
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:var(--gap-md)">
+          <div class="settings-card" style="margin-bottom:0">
+            <h3 class="section-title" style="color:var(--p2-txt)">Apparel A</h3>
+            <div id="comp-app-form-a" class="comp-form-grid"></div>
+          </div>
+          <div class="settings-card" style="margin-bottom:0">
+            <h3 class="section-title" style="color:var(--p4-txt)">Apparel B</h3>
+            <div id="comp-app-form-b" class="comp-form-grid"></div>
+          </div>
+        </div>
+        <div id="apparelComparisonAnalysis" class="settings-card" style="background:var(--surface2); border:1px solid var(--accent-glow)"></div>
+      </div>
+
+      <!-- LOADOUTS -->
+      <div id="apparelLoadout" style="display:none; flex-direction:column; gap:var(--gap-md)"></div>
+    </div>
+
+    <!-- VIEW: BLUEPRINTS -->
+    <div id="view-blue" class="view-container" style="display:none"></div>
+
+    <!-- VIEW: IDEOLOGY -->
+    <div id="view-ideo" class="view-container" style="display:none; overflow-y:auto"></div>
+
+    <!-- VIEW: RELATIONS -->
+    <div id="view-relations" class="view-container" style="display:none; overflow:hidden"></div>
+
+    <!-- VIEW: RECORDS -->
+    <div id="view-records" class="view-container" style="display:none; flex-direction:column"></div>
+
+    <!-- VIEW: RAIDS -->
+    <div id="view-raid" class="view-container" style="display:none; overflow-y:auto">
+      <div class="view-header"><div class="view-header-content"><h2 class="view-title">Raid Calculator</h2><p class="view-subtitle">Estimate raid points from colony wealth, population and difficulty.</p></div></div>
+      <div class="settings-grid" id="raidContainer"></div>
+    </div>
+
+    <!-- VIEW: NOTES -->
+    <div id="view-notes" class="view-container" style="display:none"></div>
+
+    <!-- VIEW: HUB -->
+
+    <!-- VIEW: MANUAL -->
+    <div id="view-help" class="view-container" style="display:none"></div>
+
+    <!-- VIEW: LEGAL -->
+    <div id="view-legal" class="view-container" style="display:none"></div>
+
+    <!-- VIEW: SETTINGS -->
+    <div id="view-settings" class="view-container" style="display:none; overflow-y:auto">
+      <div class="view-header"><div class="view-header-content"><h2 class="view-title">Settings</h2><p class="view-subtitle">Customise the interface and manage all custom content. Changes save automatically.</p></div></div>
+      <div class="settings-grid" id="settingsContainer"></div>
+    </div>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<div id="quitOverlay" style="display:none; position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); align-items:center; justify-content:center">
+  <div id="quitOverlayContent"></div>
+</div>
+<div id="global-tooltip" style="display:none; position:fixed; z-index:999999; width:240px; background:var(--surface3); border:1px solid var(--accent); padding:var(--gap-md); border-radius:var(--radius-sm); color:var(--text2); font-size:var(--f-xs); line-height:1.5; box-shadow:0 8px 24px rgba(0,0,0,0.5); pointer-events:none; font-family:Arial,sans-serif;"></div>
+
+<!-- XENOTYPE MODAL -->
+<div class="modal-overlay" id="xenoModal">
+  <div class="modal" style="max-width:800px">
+    <div class="modal-body" id="xenoModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeXenoEditor()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- TRAIT MODAL -->
+<div class="modal-overlay" id="traitModal">
+  <div class="modal">
+    <div class="modal-body" id="traitModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeTraitEditor()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MATERIAL MODAL -->
+<div class="modal-overlay" id="materialModal">
+  <div class="modal" style="max-width: 400px">
+    <div class="modal-header">
+      <h2 class="modal-title">New Material</h2>
+    </div>
+    <div class="modal-body" id="materialModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeMaterialEditor()">Cancel</button>
+      <button class="btn btn-primary" onclick="App.submitNewMaterial()">Add Material</button>
+    </div>
+  </div>
+</div>
+
+<!-- WEAPON MODAL -->
+<div class="modal-overlay" id="weaponModal">
+  <div class="modal" style="max-width: 600px">
+    <div class="modal-header">
+      <h2 class="modal-title" id="weaponModalTitle">Add New Weapon</h2>
+    </div>
+    <div class="modal-body" id="weaponModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeWeaponEditor()">Cancel</button>
+      <button class="btn btn-primary" onclick="App.saveWeapon()">Save Weapon</button>
+    </div>
+  </div>
+</div>
+
+<!-- APPAREL MODAL -->
+<div class="modal-overlay" id="apparelModal">
+  <div class="modal" style="max-width: 640px">
+    <div class="modal-header">
+      <h2 class="modal-title" id="apparelModalTitle">Add Apparel Item</h2>
+    </div>
+    <div class="modal-body" id="apparelModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeApparelEditor()">Cancel</button>
+      <button class="btn btn-primary" onclick="App.saveApparel()">Save Item</button>
+    </div>
+  </div>
+</div>
+
+<!-- ROOM TAG MODAL -->
+<div class="modal-overlay" id="roomTagModal">
+  <div class="modal" style="max-width: 460px">
+    <div class="modal-header">
+      <h2 class="modal-title" id="roomTagModalTitle">Place Tag</h2>
+    </div>
+    <div class="modal-body" id="roomTagModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeRoomTagModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="App.submitRoomTag()">Place Tag</button>
+    </div>
+  </div>
+</div>
+<!-- STAMP SAVE MODAL -->
+<div class="modal-overlay" id="stampModal">
+  <div class="modal" style="max-width: 420px">
+    <div class="modal-header">
+      <h2 class="modal-title">Save Stamp</h2>
+    </div>
+    <div class="modal-body" id="stampModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeStampModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="App.submitStamp()">Save Stamp</button>
+    </div>
+  </div>
+</div>
+
+<!-- GENERIC CONFIRM / PROMPT MODAL -->
+<div class="modal-overlay" id="genericModal" onclick="if(event.target===this)App._dismissModal(false)">
+  <div class="modal" style="max-width: 420px">
+    <div class="modal-header">
+      <h2 class="modal-title" id="genericModalTitle">Confirm</h2>
+    </div>
+    <div class="modal-body" id="genericModalBody"></div>
+    <div class="modal-footer" id="genericModalFooter"></div>
+  </div>
+</div>
+
+<!-- PAWN MANAGER MODAL -->
+<div class="modal-overlay" id="pawnManagerModal" onclick="if(event.target===this)App.closePawnManager()">
+  <div class="modal" style="max-width:900px; width:100%">
+    <div class="modal-header">
+      <h2 class="modal-title" style="display:flex;align-items:center;gap:10px">Pawn Manager</h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-sm" onclick="App.scanTraitsGenesFromDisk('pmScanStatus')" title="Scan your RimWorld install and mod folder to load every vanilla and modded trait, health condition and relationship type">Scan Mods</button>
+        <button class="btn btn-sm" onclick="App.shareAllPawns()" title="Copy every pawn to the clipboard to share. The recipient pastes with the sidebar Import button to add them all">Share All</button>
+        <button class="btn btn-sm btn-primary" onclick="App.addPawn(); App.renderPawnManager()">+ Add Pawn</button>
+        <button class="overlay-btn" onclick="App.closePawnManager()" title="Close" style="width:28px;height:28px;font-size:calc(16px * var(--font-scale))">&times;</button>
+      </div>
+    </div>
+    <div class="modal-body" id="pawnManagerBody" style="padding:var(--gap-lg); scrollbar-width:thin; scrollbar-color:var(--border-bright) transparent"></div>
+  </div>
+</div>
+
+<!-- BIOME MODAL -->
+<div class="modal-overlay" id="biomeModal">
+  <div class="modal" style="max-width: 400px">
+    <div class="modal-header">
+      <h2 class="modal-title">Custom Background Colour</h2>
+    </div>
+    <div class="modal-body" id="biomeModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeBiomeEditor()">Cancel</button>
+      <button class="btn btn-primary" onclick="App.submitNewBiome()">Add Biome</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="relationModal">
+  <div class="modal" style="max-width: 420px">
+    <div class="modal-header">
+      <h2 class="modal-title">Add Relation</h2>
+    </div>
+    <div class="modal-body" id="relationModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="App.closeRelationModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="App.submitRelation()">Add Relation</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="saveImportModal" onclick="if(event.target===this)App.closeSaveImport()">
+  <div class="modal" style="max-width:850px; width:100%">
+    <div class="modal-header">
+      <h2 class="modal-title">Import Save File</h2>
+      <button class="overlay-btn" onclick="App.closeSaveImport()">&times;</button>
+    </div>
+    <div class="modal-body" id="saveImportBody" style="max-height:60vh; overflow-y:auto"></div>
+    <div class="modal-footer" id="saveImportFooter"></div>
+  </div>
+</div>
+
+<!-- In-app console drawer -->
+<div id="consoleDrawer" style="display:none; position:fixed; bottom:0; left:0; right:0; z-index:99998; background:var(--surface,#1a1b1e); border-top:2px solid var(--accent,#e8a838); font-family:monospace; height:280px; flex-direction:column">
+  <!-- Resize handle -->
+  <div id="consoleResizeHandle" style="height:5px; cursor:ns-resize; background:transparent; position:absolute; top:-3px; left:0; right:0; z-index:1"></div>
+  <!-- Header bar -->
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:5px 12px; background:var(--surface2,#26272b); border-bottom:1px solid var(--border,#333); flex-shrink:0; gap:8px">
+    <div style="display:flex; align-items:center; gap:10px; flex-shrink:0">
+      <span onclick="App.toggleConsoleDrawer()" style="font-size:11px; font-weight:700; color:var(--text2,#aaa); text-transform:uppercase; letter-spacing:0.5px; cursor:pointer" title="Click to collapse/expand">Console</span>
+      <!-- Level filter pills -->
+      <div id="consoleFilters" style="display:flex; gap:3px; align-items:center">
+        <button onclick="App._setConsoleFilter('all')" data-filter="all" class="con-filter active" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:var(--accent,#e8a838); color:#000; font-weight:700">All</button>
+        <button onclick="App._setConsoleFilter('error')" data-filter="error" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:#f0857a; font-weight:600"><span class="con-badge-error"></span>Errors</button>
+        <button onclick="App._setConsoleFilter('warn')" data-filter="warn" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:#e8a838; font-weight:600"><span class="con-badge-warn"></span>Warns</button>
+        <button onclick="App._setConsoleFilter('info')" data-filter="info" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:var(--text3,#888); font-weight:600">Info</button>
+        <button onclick="App._setConsoleFilter('log')" data-filter="log" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:var(--text3,#888); font-weight:600">Log</button>
+      </div>
+    </div>
+    <!-- Search + actions -->
+    <div style="display:flex; gap:6px; align-items:center; flex:1; max-width:400px; justify-content:flex-end">
+      <input id="consoleSearch" type="text" placeholder="Filter logs..." oninput="App._renderConsoleDrawer()" style="flex:1; max-width:180px; padding:2px 6px; font-size:10px; font-family:monospace; background:var(--surface,#1a1b1e); border:1px solid var(--border,#444); border-radius:3px; color:var(--text2,#ccc); outline:none">
+      <button onclick="App._copyConsoleLogs()" title="Copy all visible logs" style="padding:2px 6px; font-size:10px; background:transparent; border:1px solid var(--border,#444); border-radius:3px; color:var(--text3,#888); cursor:pointer">Copy</button>
+      <button onclick="App.clearConsoleLogs()" style="padding:2px 6px; font-size:10px; background:transparent; border:1px solid var(--border,#444); border-radius:3px; color:var(--text3,#888); cursor:pointer">Clear</button>
+      <button onclick="App.toggleConsoleDrawer()" title="Collapse / Expand (Ctrl+`)" style="padding:2px 6px; font-size:10px; background:transparent; border:1px solid var(--border,#444); border-radius:3px; color:var(--text3,#888); cursor:pointer">_</button>
+      <button onclick="App.closeConsoleDrawer()" title="Close and disable console" style="padding:2px 6px; font-size:10px; background:transparent; border:1px solid var(--border,#444); border-radius:3px; color:var(--text3,#888); cursor:pointer">X</button>
+    </div>
+  </div>
+  <div id="consoleDrawerBody" style="overflow-y:auto; flex:1; padding:4px 12px"></div>
+</div>
+<!-- Console error badge (visible when drawer closed but errors exist) -->
+<div id="consoleBadge" onclick="App.toggleConsoleDrawer()" style="display:none; position:fixed; bottom:12px; right:12px; z-index:99997; background:#f0857a; color:#000; font-size:11px; font-weight:700; font-family:monospace; padding:4px 10px; border-radius:12px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.4); animation:consoleBadgePulse 2s ease-in-out infinite" title="Console errors detected - click to open">0 errors</div>
+<style>
+  @keyframes consoleBadgePulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+</style>
+
+<!-- MODULAR SCRIPTS -->
+<script src="data.js"></script>
+<script src="engine.js"></script>
+<script src="charts.js"></script>
+<script src="app.js"></script>
+<script src="app-pawns.js"></script>
+<script src="app-render.js"></script>
+<script src="app-schedule.js"></script>
+<script src="app-blueprint.js"></script>
+<script src="app-relations.js"></script>
+<script src="app-raid.js"></script>
+<script src="app-priorities.js"></script>
+<script src="app-editors.js"></script>
+<script src="app-combat.js"></script>
+<script src="app-tabs.js"></script>
+<script src="app-save.js"></script>
+
+
+</body>
+</html>
