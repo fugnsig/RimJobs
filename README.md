@@ -136,6 +136,7 @@ RimJobs is free and always will be. If it saved you some hassle and you would li
 - Game data is sourced from RimWorld's game files and the **[RimWorld Wiki](https://rimworldwiki.com)**.
 - **[RimSearcher](https://github.com/kearril/RimSearcher)** by kearril (MIT), an MCP server for fast searching of RimWorld's source code. The game-accurate combat, armour-penetration and raid maths in RimJobs were verified against RimWorld's decompiled source with it.
 - Blueprint sharing is an offline take on the in-game **[Blueprints](https://steamcommunity.com/sharedfiles/filedetails/?id=708455313)** mod by **[Fluffy](https://steamcommunity.com/id/FluffyMods)**, whose work inspired the feature. RimJobs is not affiliated with or endorsed by Fluffy or kearril.
+- A big shoutout to **[The Progression Modpack](https://steamcommunity.com/sharedfiles/filedetails/?id=3521297585)** by ferny, the sprawling curated mod list that inspired this project and gave it no shortage of mod-heavy colonies to make sense of. RimJobs is not affiliated with or endorsed by ferny.
 
 ## License
 
