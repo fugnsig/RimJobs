@@ -1,0 +1,40 @@
+{
+  "name": "rimjobs",
+  "version": "1.3.37",
+  "description": "RimJobs - RimWorld companion app",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable"
+  },
+  "author": "Brodie Zotti",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.brodiezotti.rimjobs",
+    "productName": "RimJobs",
+    "executableName": "RimJobs",
+    "win": {
+      "target": "portable",
+      "icon": "files/rimjobs.ico"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "keyboard-hook.js",
+      "files/**/*",
+      "!files/.claude",
+      "!files/.claude/**",
+      "node_modules/koffi/**/*"
+    ],
+    "portable": {
+      "artifactName": "RimJobs.exe"
+    }
+  },
+  "dependencies": {
+    "koffi": "^3.0.0"
+  }
+}
