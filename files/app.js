@@ -1136,25 +1136,19 @@ const App = {
       else App.state.settings.sidebarWidthWindowed = newWidth;
       r.setProperty('--sidebar-width-base', newWidth + 'px');
       if (appEl) appEl.style.gridTemplateColumns = newWidth + 'px 4px 1fr';
-      label = 'Sidebar width: ' + Math.round(newWidth) + 'px (' + (App._isFullscreenMode() ? 'fullscreen' : 'windowed') + ')';
     } else {
       const newWidth = Math.max(80, Math.min(400, App._resizing.startWidth + delta));
       App.state.settings.pawnColWidth = newWidth;
       r.setProperty('--pawn-col-width-base', newWidth + 'px');
-      label = 'Column width: ' + Math.round(newWidth) + 'px';
     }
-    App._showResizeReadout(label, e.clientX, e.clientY);
   },
   onResizeEnd() {
     if (!App._resizing) return;
     App.saveData();
     document.body.classList.remove('resizing-active');
     App._resizing = null;
-    App._hideResizeReadout();
   },
 
-  // Floating px readout shown while dragging a resizer, so the exact width is
-  // measurable. Follows the cursor; removed on release.
   _showResizeReadout(text, x, y) {
     let el = document.getElementById('resizeReadout');
     if (!el) {
