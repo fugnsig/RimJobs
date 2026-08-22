@@ -20,7 +20,7 @@ const Engine = {
       return 1.0 * wsMod;
     }
 
-    const skill = App.effectiveSkill(pawn, job.skill || 'intel');
+    const skill = App.effectiveSkill(pawn, job.skill || 'intellectual');
     const f = job.speedFormula;
 
     if (f.curve) {
@@ -196,7 +196,7 @@ const Engine = {
 
       // Calculate "Aptitude Scores" using real RimWorld work speed formulas + growth potential
       const rankings = capable.map(p => {
-        const skill = App.effectiveSkill(p, j.skill || 'intellectual');
+        const skill = j.skill ? App.effectiveSkill(p, j.skill) : 0;
         const passion = Engine.passionBucket(p, j.skill);
         const roleDef = App.getRole(p.role || 'none');
         const isRoleSkill = j.skill && (roleDef.skillMods || {})[j.skill];
@@ -815,12 +815,12 @@ const Engine = {
   _bestPawnForJob(capable, job) {
     if (capable.length === 0) return null;
     const ranked = capable.map(p => {
-      const skill = App.effectiveSkill(p, job.skill || 'intellectual');
+      const skill = job.skill ? App.effectiveSkill(p, job.skill) : 0;
       const passion = Engine.passionBucket(p, job.skill);
       const realSpeed = this.calculateRealWorkSpeed(p, job);
       // Score combines real work speed (dominant) with passion for growth potential
       const score = (realSpeed * 100) + (passion * 25);
-      return { pawnId: p.id, pawnName: p.nickname || p.name, skill, passion, score, realSpeed };
+      return { pawnId: p.id, pawnName: p.nickname || p.name, skill, passion, score, realSpeed, hasSkill: !!job.skill };
     }).sort((a, b) => b.score - a.score);
     return ranked[0];
   },

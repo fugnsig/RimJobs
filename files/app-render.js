@@ -12,6 +12,7 @@ Object.assign(App, {
     safe(() => this.renderTable(), 'table');
     if (this.state.activeTab === 'dash') safe(() => this.renderDashboard(), 'dashboard');
     if (this.state.activeTab === 'blue') safe(() => this.renderBlueprint(), 'blueprint');
+    if (this.state.activeTab === 'sched') safe(() => this.renderSchedule(), 'schedule');
     if (this.state.activeTab === 'armoury') safe(() => this.renderArmoury(), 'armoury');
     if (this.state.activeTab === 'relations') safe(() => this._relRefresh(), 'relations');
     if (this.state.activeTab === 'records') safe(() => this.renderRecords(), 'records');
@@ -550,7 +551,8 @@ Object.assign(App, {
     const isWidget = window.innerWidth <= 550;
     const sidebarH = (portrait && !isWidget) ? window.innerHeight * 0.45 : 0;
     const availH = window.innerHeight - sidebarH - 200;
-    const availW = isWidget ? window.innerWidth - 32 : window.innerWidth - (portrait ? 32 : 520);
+    const sideW = (!portrait && !isWidget && !this.state.settings.sidebarCollapsed) ? (this.state.settings.sidebarWidth + 36) : 32;
+    const availW = window.innerWidth - sideW;
     // radarSize = viewBox resolution (the SVG itself is responsive via CSS width:100%).
     // Use a generous base so labels render crisp; CSS min/max-width prevents visual extremes.
     const radarSize = isWidget
@@ -593,7 +595,8 @@ Object.assign(App, {
         <div class="settings-desc" style="margin-top:${isWidget ? '6px' : '10px'}; text-align:center; max-width:340px">Each spoke = colony average (0-20). Wider = more rounded.</div>
       </div>`;
 
-    if (isWidget || portrait) {
+    const narrowContent = availW < 700;
+    if (isWidget || portrait || narrowContent) {
       const cardGap = isWidget ? '8px' : '12px';
       const cardPad = isWidget ? '4px' : '4px';
       // Widget/portrait: a single vertical stack that scrolls as a whole. Each
@@ -608,7 +611,7 @@ Object.assign(App, {
           </div>
         </div>`;
       container.innerHTML = `
-        <div style="display:flex; flex-direction:column; gap:${cardGap}; padding:${cardPad}; overflow-y:auto; flex:1; min-height:0">
+        <div style="display:flex; flex-direction:column; gap:${cardGap}; padding:${cardPad}; overflow-y:auto; flex:1; min-height:0; max-width:900px; margin:0 auto">
           <div style="display:flex; justify-content:center; flex-shrink:0">${radarCard}</div>
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:${cardGap}; flex-shrink:0">${viabilityCard}${colonistsCard}</div>
           ${bottleneckWidget}
