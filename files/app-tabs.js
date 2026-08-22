@@ -197,6 +197,13 @@ Object.assign(App, {
         </div>
         <div class="settings-row">
           <div>
+            <div class="settings-label">Show resize label</div>
+            <div class="settings-desc">Show a pixel-width label when dragging the sidebar or column resizer.</div>
+          </div>
+          <input type="checkbox" ${s.showResizeLabel?'checked':''} onchange="App.state.settings.showResizeLabel=this.checked">
+        </div>
+        <div class="settings-row">
+          <div>
             <div class="settings-label">Vertical job titles</div>
             <div class="settings-desc">Rotate job column headers vertically to save horizontal space.</div>
           </div>

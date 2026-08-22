@@ -199,6 +199,7 @@ const App = {
       priorityWrap: true,
       rowHighlighting: true,
       compactSidebar: false,
+      showResizeLabel: false,
       sidebarCollapsed: false,
       showBiomePatterns: true,
       showRaidEstimate: false,
@@ -1131,22 +1132,25 @@ const App = {
     if (App._resizing.type === 'sidebar') {
       const newWidth = Math.max(200, Math.min(600, App._resizing.startWidth + delta));
       App.state.settings.sidebarWidth = newWidth;
-      // Remember this width for the current mode only (fullscreen vs windowed)
       if (App._isFullscreenMode()) App.state.settings.sidebarWidthFull = newWidth;
       else App.state.settings.sidebarWidthWindowed = newWidth;
       r.setProperty('--sidebar-width-base', newWidth + 'px');
       if (appEl) appEl.style.gridTemplateColumns = newWidth + 'px 4px 1fr';
+      label = Math.round(newWidth) + 'px (' + (App._isFullscreenMode() ? 'fullscreen' : 'windowed') + ')';
     } else {
       const newWidth = Math.max(80, Math.min(400, App._resizing.startWidth + delta));
       App.state.settings.pawnColWidth = newWidth;
       r.setProperty('--pawn-col-width-base', newWidth + 'px');
+      label = Math.round(newWidth) + 'px';
     }
+    if (App.state.settings.showResizeLabel) App._showResizeReadout(label, e.clientX, e.clientY);
   },
   onResizeEnd() {
     if (!App._resizing) return;
     App.saveData();
     document.body.classList.remove('resizing-active');
     App._resizing = null;
+    App._hideResizeReadout();
   },
 
   _showResizeReadout(text, x, y) {
