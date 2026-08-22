@@ -257,7 +257,7 @@ Object.assign(App, {
             <div style="font-weight:700; font-size:var(--f-sm)">${_escapeHtml(g.jobName)}</div>
             <div style="font-size:var(--f-xs); color:var(--text3)">${_escapeHtml(g.reason)}</div>
           </div>
-          ${g.bestPawn ? `<div style="font-size:var(--f-xs); color:var(--text2); text-align:right; flex-shrink:0">Best: ${_escapeHtml(g.bestPawn.pawnName)}<br><span style="color:var(--accent)">Skill ${g.bestPawn.skill}</span></div>
+          ${g.bestPawn ? `<div style="font-size:var(--f-xs); color:var(--text2); text-align:right; flex-shrink:0">Best: ${_escapeHtml(g.bestPawn.pawnName)}${g.bestPawn.hasSkill ? `<br><span style="color:var(--accent)">Skill ${g.bestPawn.skill}</span>` : ''}</div>
           <button class="btn btn-sm" onclick="App.applyOptimizerSuggestion('${g.bestPawn.pawnId}','${g.jobId}',1)" style="flex-shrink:0; font-size:calc(10px * var(--font-scale)); padding:4px 8px">Set P1</button>` : ''}
         </div>`;
       });

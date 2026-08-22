@@ -565,6 +565,7 @@ body.light-theme .cat-label-input:hover { background: rgba(0,0,0,0.03); }
   user-select: text;
   -webkit-user-select: text;
 }
+#view-dash { overflow-y: auto; }
 
 /* -- RESIZERS -- */
 body.resizing-active { user-select: none; cursor: col-resize; }
@@ -1548,11 +1549,12 @@ body.light-theme .records-table tbody tr:nth-child(even) td { background: var(--
 /* -- SKILLS WEB DASHBOARD -- */
 .dash-layout {
   display: grid;
-  /* Radar takes the dominant left column; stat cards stack on the right. */
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 340px);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
   gap: var(--gap-lg);
-  align-items: stretch;
+  align-items: start;
   padding: var(--gap-md);
+  max-width: 1200px;
+  margin: 0 auto;
 }
 .dash-side {
   display: flex;
