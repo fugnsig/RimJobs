@@ -362,9 +362,149 @@ const CapabilityEvidence = {
   fromTraits(pawn) { return { effects: [], unresolved: [] }; },
   fromGenes(pawn) { return { effects: [], unresolved: [] }; },
   fromXenotype(pawn) { return { effects: [], unresolved: [] }; },
-  fromBackstories(pawn) { return { effects: [], unresolved: [] }; },
-  fromRole(pawn) { return { effects: [], unresolved: [] }; },
-  fromIdeology(pawn) { return { effects: [], unresolved: [] }; },
+  fromBackstories(pawn) {
+    const effects = [];
+    const unresolved = [];
+    if (!pawn) return { effects, unresolved };
+    const slots = [
+      { key: 'childhood', slot: 'child' },
+      { key: 'adulthood', slot: 'adult' },
+    ];
+    for (const { key, slot } of slots) {
+      const bsId = pawn[key];
+      if (!bsId) continue;
+      const resolved = (typeof App !== 'undefined' && App._resolveBackstory)
+        ? App._resolveBackstory(bsId)
+        : null;
+      if (!resolved) {
+        unresolved.push(_makeUnresolved('backstory', bsId,
+          'Backstory could not be resolved',
+          { rawTarget: bsId }));
+        continue;
+      }
+      const modId = _modIdOf(resolved);
+      const provenance = { sourceKind: 'backstory', sourceId: bsId, modId };
+      const confidence = modId ? 'inferred' : 'verified';
+      // Skill modifiers
+      if (resolved.skills) {
+        const skillEntries = Object.entries(resolved.skills);
+        for (let i = 0; i < skillEntries.length; i++) {
+          const appSkillId = skillEntries[i][0];
+          const val = skillEntries[i][1];
+          if (val === 0) continue;
+          const eid = 'backstory:' + bsId + ':' + slot + ':skillMods:' + appSkillId;
+          effects.push(_makeEvidence(eid, 'skillOffset', appSkillId, val,
+            provenance, confidence));
+        }
+      }
+      // Permission entries via classifier
+      if (resolved.incapable) {
+        for (let i = 0; i < resolved.incapable.length; i++) {
+          const incapId = resolved.incapable[i];
+          const eid = 'backstory:' + bsId + ':' + slot + ':incapable:' + incapId;
+          _classifyIncap(incapId, effects, unresolved, {
+            evidenceId: eid,
+            provenance,
+            confidence,
+          });
+        }
+      }
+    }
+    return { effects, unresolved };
+  },
+
+  fromRole(pawn) {
+    const effects = [];
+    const unresolved = [];
+    if (!pawn) return { effects, unresolved };
+    const roleId = pawn.role;
+    if (!roleId || roleId === 'none') return { effects, unresolved };
+    const roleDef = _resolveRoleStrict(roleId);
+    if (!roleDef) {
+      unresolved.push(_makeUnresolved('role', roleId,
+        'Role could not be resolved',
+        { rawTarget: roleId }));
+      return { effects, unresolved };
+    }
+    const modId = _modIdOf(roleDef);
+    const provenance = { sourceKind: 'role', sourceId: roleId, modId };
+    const confidence = modId ? 'inferred' : 'verified';
+    // Skill modifiers
+    if (roleDef.skillMods) {
+      const skillEntries = Object.entries(roleDef.skillMods);
+      for (let i = 0; i < skillEntries.length; i++) {
+        const skillId = skillEntries[i][0];
+        const val = skillEntries[i][1];
+        if (val === 0) continue;
+        const eid = 'role:' + roleId + ':skillMods:' + skillId;
+        effects.push(_makeEvidence(eid, 'skillOffset', skillId, val,
+          provenance, confidence));
+      }
+    }
+    // Work speed
+    if (roleDef.workSpeed && roleDef.workSpeed !== 0) {
+      const eid = 'role:' + roleId + ':workSpeed';
+      effects.push(_makeEvidence(eid, 'statOffset', STAT.WORK_SPEED_GLOBAL,
+        roleDef.workSpeed, provenance, confidence));
+    }
+    // Permission entries via classifier
+    if (roleDef.incap) {
+      for (let i = 0; i < roleDef.incap.length; i++) {
+        const incapId = roleDef.incap[i];
+        const eid = 'role:' + roleId + ':incapable:' + incapId;
+        _classifyIncap(incapId, effects, unresolved, {
+          evidenceId: eid,
+          provenance,
+          confidence,
+        });
+      }
+    }
+    return { effects, unresolved };
+  },
+
+  fromIdeology(pawn) {
+    const effects = [];
+    const unresolved = [];
+    if (typeof App === 'undefined' || !App.getIdeoEffects) return { effects, unresolved };
+    const fx = App.getIdeoEffects();
+    if (!fx) return { effects, unresolved };
+    const provenance = { sourceKind: 'ideology', sourceId: 'colony' };
+    const confidence = 'derived';
+    // Combat skill -> shoot and melee offsets
+    if (fx.combatSkill && fx.combatSkill !== 0) {
+      effects.push(_makeEvidence('ideology:colony:combatSkill:shoot',
+        'skillOffset', 'shoot', fx.combatSkill, provenance, confidence));
+      effects.push(_makeEvidence('ideology:colony:combatSkill:melee',
+        'skillOffset', 'melee', fx.combatSkill, provenance, confidence));
+    }
+    // Social skill
+    if (fx.socialSkill && fx.socialSkill !== 0) {
+      effects.push(_makeEvidence('ideology:colony:socialSkill:social',
+        'skillOffset', 'social', fx.socialSkill, provenance, confidence));
+    }
+    // Research speed -> intel offset (production checks 'intellectual' but app
+    // skill id is 'intel' - the effectiveSkill branch never fires; we still
+    // emit the evidence so downstream consumers see what the ideology claims)
+    if (fx.researchSpeed && fx.researchSpeed !== 0) {
+      effects.push(_makeEvidence('ideology:colony:researchSpeed:intel',
+        'skillOffset', 'intel', fx.researchSpeed, provenance, confidence));
+    }
+    // Work speed
+    if (fx.workSpeed && fx.workSpeed !== 0) {
+      effects.push(_makeEvidence('ideology:colony:workSpeed',
+        'statOffset', STAT.WORK_SPEED_GLOBAL, fx.workSpeed, provenance, confidence));
+    }
+    // Legacy settings precept: combat_focus
+    if (typeof App !== 'undefined' && App.state && App.state.precepts &&
+        App.state.precepts['combat_focus'] && App.state.precepts['combat_focus'] !== 0) {
+      const cfVal = App.state.precepts['combat_focus'];
+      effects.push(_makeEvidence('ideology:colony:combatFocus:shoot',
+        'skillOffset', 'shoot', cfVal, provenance, confidence));
+      effects.push(_makeEvidence('ideology:colony:combatFocus:melee',
+        'skillOffset', 'melee', cfVal, provenance, confidence));
+    }
+    return { effects, unresolved };
+  },
 
   bodyEvidenceFromPawnHealth(pawn) { return []; },
   effectsFromHediffDefinitions(pawn) { return { effects: [], unresolved: [] }; },
