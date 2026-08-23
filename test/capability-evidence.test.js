@@ -458,5 +458,292 @@ module.exports = function run() {
     App.getIdeoEffects = savedFn;
   }
 
+  // ======================================================================
+  // TRAIT TESTS: CE-TR-001 through CE-TR-016
+  // ======================================================================
+
+  // CE-TR-001: Industrious work speed (+35%)
+  {
+    const pawn = mk('tr1', { traits: ['industrious'] });
+    const result = CE.fromTraits(pawn);
+
+    const wsEv = findEv(result.effects, 'trait:industrious:workSpeed');
+    ok(wsEv != null, 'CE-TR-001 workSpeed evidence exists');
+    ok(wsEv && wsEv.type === 'statOffset', 'CE-TR-001 workSpeed type');
+    ok(wsEv && wsEv.target === 'workSpeedGlobal', 'CE-TR-001 workSpeed target');
+    ok(wsEv && Math.abs(wsEv.value - 0.35) < 1e-10, 'CE-TR-001 workSpeed value');
+    ok(wsEv && wsEv.provenance.sourceKind === 'trait', 'CE-TR-001 provenance sourceKind');
+    ok(wsEv && wsEv.provenance.sourceId === 'industrious', 'CE-TR-001 provenance sourceId');
+    ok(wsEv && wsEv.confidence === 'verified', 'CE-TR-001 confidence verified');
+  }
+
+  // CE-TR-002: Fast learner learning-rate as factor (offset 0.75 -> factor 1.75)
+  {
+    const pawn = mk('tr2', { traits: ['fast_learner'] });
+    const result = CE.fromTraits(pawn);
+
+    const lrEv = findEv(result.effects, 'trait:fast_learner:learningRate');
+    ok(lrEv != null, 'CE-TR-002 learningRate evidence exists');
+    ok(lrEv && lrEv.type === 'statFactor', 'CE-TR-002 learningRate type is statFactor');
+    ok(lrEv && lrEv.target === 'learningRate', 'CE-TR-002 learningRate target');
+    ok(lrEv && Math.abs(lrEv.value - 1.75) < 1e-10, 'CE-TR-002 learningRate value is 1.75 (1 + 0.75)');
+  }
+
+  // CE-TR-003: Slow learner negative offset (offset -0.75 -> factor 0.25)
+  {
+    const pawn = mk('tr3', { traits: ['slow_learner'] });
+    const result = CE.fromTraits(pawn);
+
+    const lrEv = findEv(result.effects, 'trait:slow_learner:learningRate');
+    ok(lrEv != null, 'CE-TR-003 slow learner evidence exists');
+    ok(lrEv && Math.abs(lrEv.value - 0.25) < 1e-10, 'CE-TR-003 slow learner factor is 0.25');
+  }
+
+  // CE-TR-004: Gourmand skill modifier (cook +4)
+  {
+    const pawn = mk('tr4', { traits: ['gourmand'] });
+    const result = CE.fromTraits(pawn);
+
+    const cookEv = findEv(result.effects, 'trait:gourmand:skillMods:cook');
+    ok(cookEv != null, 'CE-TR-004 gourmand cook evidence exists');
+    ok(cookEv && cookEv.type === 'skillOffset', 'CE-TR-004 gourmand cook type');
+    ok(cookEv && cookEv.target === 'cook', 'CE-TR-004 gourmand cook target');
+    ok(cookEv && cookEv.value === 4, 'CE-TR-004 gourmand cook value');
+  }
+
+  // CE-TR-005: Brawler skill modifiers (melee +4, shoot -10)
+  {
+    const pawn = mk('tr5', { traits: ['brawler'] });
+    const result = CE.fromTraits(pawn);
+
+    const meleeEv = findEv(result.effects, 'trait:brawler:skillMods:melee');
+    ok(meleeEv != null, 'CE-TR-005 brawler melee evidence exists');
+    ok(meleeEv && meleeEv.value === 4, 'CE-TR-005 brawler melee value');
+
+    const shootEv = findEv(result.effects, 'trait:brawler:skillMods:shoot');
+    ok(shootEv != null, 'CE-TR-005 brawler shoot evidence exists');
+    ok(shootEv && shootEv.value === -10, 'CE-TR-005 brawler shoot value');
+  }
+
+  // CE-TR-006: Pyromaniac permission classification via _classifyIncap
+  // 'firefight' is in both JOBS and INCAP_OPTIONS -> ambiguous -> unresolved
+  {
+    const pawn = mk('tr6', { traits: ['pyromaniac'] });
+    const result = CE.fromTraits(pawn);
+
+    // firefight is ambiguous - should be in unresolved, not effects
+    const ffEv = findEv(result.effects, 'trait:pyromaniac:incapable:firefight');
+    ok(ffEv == null, 'CE-TR-006 firefight not in effects (ambiguous)');
+
+    const ffUr = result.unresolved.find(u =>
+      u.sourceKind === 'trait' && u.rawTarget === 'firefight');
+    ok(ffUr != null, 'CE-TR-006 firefight in unresolved');
+    ok(ffUr && ffUr.reason && ffUr.reason.indexOf('Ambiguous') >= 0,
+      'CE-TR-006 firefight reason mentions Ambiguous');
+
+    // But breakThreshold should still be emitted as a stat effect
+    const btEv = findEv(result.effects, 'trait:pyromaniac:breakThreshold');
+    ok(btEv != null, 'CE-TR-006 pyromaniac breakThreshold exists');
+    ok(btEv && Math.abs(btEv.value - 0.08) < 1e-10, 'CE-TR-006 pyromaniac breakThreshold value');
+  }
+
+  // CE-TR-007: Depressive/neurotic break threshold - definition-backed only, no fake joy
+  {
+    const pawn = mk('tr7', { traits: ['depressive', 'neurotic'] });
+    const result = CE.fromTraits(pawn);
+
+    const depBt = findEv(result.effects, 'trait:depressive:breakThreshold');
+    ok(depBt != null, 'CE-TR-007 depressive breakThreshold exists');
+    ok(depBt && depBt.type === 'statOffset', 'CE-TR-007 depressive breakThreshold type');
+    ok(depBt && depBt.target === 'mentalBreakThreshold', 'CE-TR-007 depressive breakThreshold target');
+    ok(depBt && Math.abs(depBt.value - 0.06) < 1e-10, 'CE-TR-007 depressive breakThreshold value');
+
+    const neuBt = findEv(result.effects, 'trait:neurotic:breakThreshold');
+    ok(neuBt != null, 'CE-TR-007 neurotic breakThreshold exists');
+    ok(neuBt && Math.abs(neuBt.value - 0.08) < 1e-10, 'CE-TR-007 neurotic breakThreshold value');
+
+    // Neurotic also has workSpeed
+    const neuWs = findEv(result.effects, 'trait:neurotic:workSpeed');
+    ok(neuWs != null, 'CE-TR-007 neurotic workSpeed exists');
+    ok(neuWs && Math.abs(neuWs.value - 0.20) < 1e-10, 'CE-TR-007 neurotic workSpeed value');
+
+    // No fake needOffset('joy') evidence should exist
+    const joyEffects = result.effects.filter(e =>
+      e.type === 'needOffset' || (e.type === 'statOffset' && e.target === 'joy'));
+    ok(joyEffects.length === 0, 'CE-TR-007 no fake joy need evidence');
+  }
+
+  // CE-TR-008: Night Owl exact evidence windows and weights
+  {
+    const pawn = mk('tr8', { traits: ['night_owl'] });
+    const result = CE.fromTraits(pawn);
+
+    const avoidEv = findEv(result.effects, 'trait:night_owl:avoidHours');
+    ok(avoidEv != null, 'CE-TR-008 avoidHours evidence exists');
+    ok(avoidEv && avoidEv.type === 'avoidHours', 'CE-TR-008 avoidHours type');
+    ok(avoidEv && avoidEv.target === null, 'CE-TR-008 avoidHours target null');
+    ok(avoidEv && avoidEv.value === null, 'CE-TR-008 avoidHours value null');
+    ok(avoidEv && JSON.stringify(avoidEv.hours) === JSON.stringify([11,12,13,14,15,16,17]),
+      'CE-TR-008 avoidHours hours match engine');
+    ok(avoidEv && avoidEv.weight === 4, 'CE-TR-008 avoidHours weight 4');
+
+    const preferEv = findEv(result.effects, 'trait:night_owl:preferHours');
+    ok(preferEv != null, 'CE-TR-008 preferHours evidence exists');
+    ok(preferEv && preferEv.type === 'preferHours', 'CE-TR-008 preferHours type');
+    ok(preferEv && JSON.stringify(preferEv.hours) === JSON.stringify([23,0,1,2,3,4,5]),
+      'CE-TR-008 preferHours hours match engine');
+    ok(preferEv && preferEv.weight === 2, 'CE-TR-008 preferHours weight 2');
+
+    // Provenance and confidence on temporal records
+    ok(avoidEv && avoidEv.provenance.sourceKind === 'trait', 'CE-TR-008 avoidHours provenance');
+    ok(avoidEv && avoidEv.confidence === 'verified', 'CE-TR-008 avoidHours confidence');
+    ok(preferEv && preferEv.provenance.sourceKind === 'trait', 'CE-TR-008 preferHours provenance');
+    ok(preferEv && preferEv.confidence === 'verified', 'CE-TR-008 preferHours confidence');
+  }
+
+  // CE-TR-009: Quick Sleeper 6-hour override
+  {
+    const pawn = mk('tr9', { traits: ['quick_sleeper'] });
+    const result = CE.fromTraits(pawn);
+
+    const slEv = findEv(result.effects, 'trait:quick_sleeper:sleepHoursOverride');
+    ok(slEv != null, 'CE-TR-009 sleepHoursOverride evidence exists');
+    ok(slEv && slEv.type === 'sleepHoursOverride', 'CE-TR-009 sleepHoursOverride type');
+    ok(slEv && slEv.value === 6, 'CE-TR-009 sleepHoursOverride value 6');
+    ok(slEv && slEv.provenance.sourceKind === 'trait', 'CE-TR-009 provenance');
+    ok(slEv && slEv.confidence === 'verified', 'CE-TR-009 confidence verified');
+  }
+
+  // CE-TR-010: Body Mastery 0-hour override
+  {
+    const pawn = mk('tr10', { traits: ['body_mastery'] });
+    const result = CE.fromTraits(pawn);
+
+    const slEv = findEv(result.effects, 'trait:body_mastery:sleepHoursOverride');
+    ok(slEv != null, 'CE-TR-010 sleepHoursOverride evidence exists');
+    ok(slEv && slEv.type === 'sleepHoursOverride', 'CE-TR-010 sleepHoursOverride type');
+    ok(slEv && slEv.value === 0, 'CE-TR-010 sleepHoursOverride value 0');
+  }
+
+  // CE-TR-011: Ascetic recreation recommendation
+  {
+    const pawn = mk('tr11', { traits: ['ascetic'] });
+    const result = CE.fromTraits(pawn);
+
+    const recEv = findEv(result.effects, 'trait:ascetic:recreationHoursRecommendation');
+    ok(recEv != null, 'CE-TR-011 recreationHoursRecommendation exists');
+    ok(recEv && recEv.type === 'recreationHoursRecommendation',
+      'CE-TR-011 recreationHoursRecommendation type');
+    ok(recEv && recEv.value === -1, 'CE-TR-011 recreationHoursRecommendation value -1');
+    ok(recEv && recEv.target === null, 'CE-TR-011 target null');
+  }
+
+  // CE-TR-012: Multiple independent same-target trait effects survive
+  {
+    const pawn = mk('tr12', { traits: ['industrious', 'neurotic'] });
+    const result = CE.fromTraits(pawn);
+
+    const indWs = findEv(result.effects, 'trait:industrious:workSpeed');
+    const neuWs = findEv(result.effects, 'trait:neurotic:workSpeed');
+    ok(indWs != null, 'CE-TR-012 industrious workSpeed exists');
+    ok(neuWs != null, 'CE-TR-012 neurotic workSpeed exists');
+    ok(indWs && neuWs && indWs.evidenceId !== neuWs.evidenceId,
+      'CE-TR-012 distinct evidence IDs');
+    // Both target the same stat but from different traits
+    ok(indWs && indWs.target === 'workSpeedGlobal', 'CE-TR-012 industrious target');
+    ok(neuWs && neuWs.target === 'workSpeedGlobal', 'CE-TR-012 neurotic target');
+  }
+
+  // CE-TR-013: Unknown trait -> unresolved
+  {
+    const pawn = mk('tr13', { traits: ['fabricated_mod_trait_xyz'] });
+    const result = CE.fromTraits(pawn);
+
+    ok(result.effects.length === 0, 'CE-TR-013 no effects for unknown trait');
+    ok(result.unresolved.length >= 1, 'CE-TR-013 has unresolved');
+    const ur = result.unresolved.find(u =>
+      u.sourceKind === 'trait' && u.sourceId === 'fabricated_mod_trait_xyz');
+    ok(ur != null, 'CE-TR-013 unresolved entry exists');
+    ok(ur && ur.reason && ur.reason.indexOf('could not be resolved') >= 0,
+      'CE-TR-013 unresolved reason');
+  }
+
+  // CE-TR-014: Undergrounder produces no evidence from trait adapter
+  {
+    const pawn = mk('tr14', { traits: ['undergrounder'] });
+    const result = CE.fromTraits(pawn);
+
+    ok(result.effects.length === 0, 'CE-TR-014 undergrounder no effects');
+    ok(result.unresolved.length === 0, 'CE-TR-014 undergrounder no unresolved');
+  }
+
+  // CE-TR-015: No temporal condition is evaluated in C2 (only evidence emitted)
+  // Temporal records are pure data - no schedule state consulted, no if-hour checks
+  {
+    const pawn = mk('tr15', { traits: ['night_owl', 'quick_sleeper', 'ascetic'] });
+    const result = CE.fromTraits(pawn);
+
+    // All temporal effects should have provenance and verified confidence
+    const temporalTypes = new Set([
+      'avoidHours', 'preferHours', 'sleepHoursOverride', 'recreationHoursRecommendation'
+    ]);
+    const temporalEffects = result.effects.filter(e => temporalTypes.has(e.type));
+    ok(temporalEffects.length >= 4, 'CE-TR-015 temporal effects emitted');
+    for (const te of temporalEffects) {
+      ok(te.provenance != null, 'CE-TR-015 temporal ' + te.type + ' has provenance');
+      ok(te.confidence === 'verified', 'CE-TR-015 temporal ' + te.type + ' confidence verified');
+      // No 'when' clause - no runtime condition evaluated
+      ok(te.when === null, 'CE-TR-015 temporal ' + te.type + ' when is null');
+    }
+  }
+
+  // CE-TR-016: Modded custom trait preserves modId and inferred confidence
+  {
+    App.state.customTraits['modded_fast_worker'] = {
+      label: 'Modded Fast Worker', description: 'Test', workSpeed: 0.25,
+      learningRate: 0, breakThreshold: 0, skillMods: {},
+      modId: 'test.mod.traits',
+    };
+    const pawn = mk('tr16', { traits: ['modded_fast_worker'] });
+    const result = CE.fromTraits(pawn);
+
+    const wsEv = findEv(result.effects, 'trait:modded_fast_worker:workSpeed');
+    ok(wsEv != null, 'CE-TR-016 modded trait evidence exists');
+    ok(wsEv && wsEv.provenance.modId === 'test.mod.traits',
+      'CE-TR-016 modId preserved');
+    ok(wsEv && wsEv.confidence === 'inferred',
+      'CE-TR-016 modded trait confidence inferred');
+    delete App.state.customTraits['modded_fast_worker'];
+  }
+
+  // ======================================================================
+  // CROSS-ADAPTER: include trait adapter in unique-ID check
+  // ======================================================================
+
+  // CE-XA-002: Combined evidence from all four adapters has unique IDs
+  {
+    const savedFn = App.getIdeoEffects;
+    App.getIdeoEffects = () => ({ mood: 0, workSpeed: 0, combatSkill: 1, socialSkill: 0, researchSpeed: 0 });
+    const pawn = mk('xa2', {
+      childhood: 'ArtisanFarmer23', role: 'leader',
+      traits: ['industrious', 'night_owl']
+    });
+
+    const bsResult = CE.fromBackstories(pawn);
+    const roleResult = CE.fromRole(pawn);
+    const ideoResult = CE.fromIdeology(pawn);
+    const traitResult = CE.fromTraits(pawn);
+
+    const allEffects = [
+      ...bsResult.effects, ...roleResult.effects,
+      ...ideoResult.effects, ...traitResult.effects
+    ];
+    const ids = allEffects.map(e => e.evidenceId);
+    const idSet = new Set(ids);
+    ok(idSet.size === ids.length, 'CE-XA-002 all cross-adapter evidence IDs unique (with traits)');
+
+    App.getIdeoEffects = savedFn;
+  }
+
   return { name: 'capability evidence (C2 adapters)', failures, total };
 };
