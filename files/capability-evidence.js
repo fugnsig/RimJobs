@@ -615,7 +615,183 @@ const CapabilityEvidence = {
 
     return { effects, unresolved };
   },
-  fromXenotype(pawn) { return { effects: [], unresolved: [] }; },
+  fromXenotype(pawn) {
+    const effects = [];
+    const unresolved = [];
+    if (!pawn) return { effects, unresolved };
+
+    const xenoId = pawn.xenotype;
+    if (!xenoId) return { effects, unresolved };
+
+    // 1. Resolve xenotype strictly - unknown -> unresolved, NEVER Baseliner
+    const xeno = _resolveXenoStrict(xenoId);
+    if (!xeno) {
+      unresolved.push(_makeUnresolved('xenotype', xenoId,
+        'Xenotype could not be resolved',
+        { rawTarget: xenoId }));
+      return { effects, unresolved };
+    }
+
+    const modId = _modIdOf(xeno);
+    const provenance = { sourceKind: 'xenotype', sourceId: xenoId, modId };
+    const baseConfidence = modId ? 'inferred' : 'derived';
+
+    // 2. Check if pawn has explicit gene state differing from template
+    const hasExplicitGenes = Array.isArray(pawn.geneDefIds) && pawn.geneDefIds.length > 0;
+    const templateGenes = Array.isArray(xeno.genes) ? xeno.genes : [];
+
+    let explicitDiffersFromTemplate = false;
+    if (hasExplicitGenes) {
+      const sorted1 = pawn.geneDefIds.slice().sort();
+      const sorted2 = templateGenes.slice().sort();
+      explicitDiffersFromTemplate = sorted1.length !== sorted2.length ||
+        sorted1.some((g, i) => g !== sorted2[i]);
+    }
+
+    // 3. Aggregate skill/incap fallback (skip if pawn genes differ from template)
+    if (!explicitDiffersFromTemplate) {
+      // Resolve template genes using same logic as fromGenes
+      const allGenes = typeof GENES !== 'undefined' ? GENES : [];
+      const customGeneMap = (typeof App !== 'undefined' && App.state && App.state.customGenes)
+        ? App.state.customGenes : {};
+
+      const resolvedDefs = [];
+      let unresolvedGeneCount = 0;
+
+      for (let i = 0; i < templateGenes.length; i++) {
+        const gId = templateGenes[i];
+        const def = allGenes.find(g => g.id === gId)
+          || customGeneMap[gId]
+          || (typeof _sanId === 'function' ? customGeneMap['mod_gene_' + _sanId(gId)] : null)
+          || null;
+        if (def) {
+          resolvedDefs.push(def);
+        } else {
+          unresolvedGeneCount++;
+        }
+      }
+
+      // Summary-only xenotype: no gene list but has aggregate data
+      const isSummaryOnly = templateGenes.length === 0;
+
+      // --- Skill dimensions ---
+      if (xeno.skillMods) {
+        const entries = Object.entries(xeno.skillMods);
+        for (let s = 0; s < entries.length; s++) {
+          const skillId = entries[s][0];
+          const aggregateValue = entries[s][1];
+          if (aggregateValue === 0) continue;
+
+          const eid = 'xeno:' + xenoId + ':skillMods:' + skillId;
+
+          if (isSummaryOnly) {
+            effects.push(_makeEvidence(eid, 'skillOffset', skillId, aggregateValue,
+              provenance, 'inferred', { authority: 'summaryFallback' }));
+            continue;
+          }
+
+          // Sum resolved gene contributions for this skill
+          let resolvedTotal = 0;
+          let anyResolvedContributes = false;
+          for (let r = 0; r < resolvedDefs.length; r++) {
+            if (resolvedDefs[r].skillMods && resolvedDefs[r].skillMods[skillId]) {
+              resolvedTotal += resolvedDefs[r].skillMods[skillId];
+              anyResolvedContributes = true;
+            }
+          }
+
+          if (unresolvedGeneCount === 0) {
+            // Case A: all template genes resolved - atomic is authoritative
+            if (resolvedTotal !== aggregateValue) {
+              unresolved.push(_makeUnresolved('xenotype', xenoId,
+                'Aggregate/atomic mismatch for skill ' + skillId +
+                ': aggregate=' + aggregateValue + ', resolved=' + resolvedTotal,
+                { rawTarget: skillId,
+                  rawData: { aggregate: aggregateValue, resolved: resolvedTotal } }));
+            }
+          } else if (anyResolvedContributes) {
+            // Case C: partial resolution - no overlapping aggregate
+            unresolved.push(_makeUnresolved('xenotype', xenoId,
+              'Partial gene resolution for skill ' + skillId +
+              ': some template genes unresolved',
+              { rawTarget: skillId,
+                rawData: { aggregate: aggregateValue, resolvedContribution: resolvedTotal } }));
+          } else {
+            // Case B: zero resolved genes contribute - summary fallback
+            effects.push(_makeEvidence(eid, 'skillOffset', skillId, aggregateValue,
+              provenance, 'inferred', { authority: 'summaryFallback' }));
+          }
+        }
+      }
+
+      // --- Incapable dimensions ---
+      if (xeno.incapable) {
+        for (let c = 0; c < xeno.incapable.length; c++) {
+          const incapId = xeno.incapable[c];
+          const eid = 'xeno:' + xenoId + ':incapable:' + incapId;
+
+          if (isSummaryOnly) {
+            _classifyIncap(incapId, effects, unresolved, {
+              evidenceId: eid,
+              provenance,
+              confidence: 'inferred',
+              opts: { authority: 'summaryFallback' },
+            });
+            continue;
+          }
+
+          // Check if any resolved gene contributes this incapable
+          let resolvedCovers = false;
+          for (let r = 0; r < resolvedDefs.length; r++) {
+            if (resolvedDefs[r].incapable &&
+                resolvedDefs[r].incapable.indexOf(incapId) >= 0) {
+              resolvedCovers = true;
+              break;
+            }
+          }
+
+          if (unresolvedGeneCount === 0) {
+            // Case A: all resolved - atomic handles it
+            if (!resolvedCovers) {
+              unresolved.push(_makeUnresolved('xenotype', xenoId,
+                'Aggregate/atomic mismatch for incapable ' + incapId +
+                ': aggregate declares it but no resolved gene provides it',
+                { rawTarget: incapId }));
+            }
+          } else if (!resolvedCovers) {
+            // Case B: no resolved gene covers it - summary fallback
+            _classifyIncap(incapId, effects, unresolved, {
+              evidenceId: eid,
+              provenance,
+              confidence: 'inferred',
+              opts: { authority: 'summaryFallback' },
+            });
+          }
+          // else: Case C/covered - atomic handles it, no aggregate needed
+        }
+      }
+    }
+
+    // --- UV sensitivity ---
+    if (xeno.uvSensitivity) {
+      // Undergrounder exemption: engine.js suppresses UV penalty for undergrounders
+      const hasUndergrounder = Array.isArray(pawn.traits) &&
+        pawn.traits.indexOf('undergrounder') >= 0;
+      if (!hasUndergrounder) {
+        const eid = 'xeno:' + xenoId + ':uv';
+        effects.push(_makeEvidence(eid, 'avoidCondition', null, null,
+          provenance, baseConfidence, {
+            fields: {
+              condition: 'daylight',
+              fallbackHours: { start: 6, end: 18 },
+              weight: 4,
+            },
+          }));
+      }
+    }
+
+    return { effects, unresolved };
+  },
   fromBackstories(pawn) {
     const effects = [];
     const unresolved = [];

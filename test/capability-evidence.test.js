@@ -928,5 +928,363 @@ module.exports = function run() {
     App.getIdeoEffects = savedFn;
   }
 
+  // ======================================================================
+  // XENOTYPE TESTS: CE-XN-001 through CE-XN-013
+  // ======================================================================
+
+  // CE-XN-001: Baseliner produces no effects or unresolved
+  {
+    const pawn = mk('xn1', { xenotype: 'baseliner' });
+    const result = CE.fromXenotype(pawn);
+
+    ok(result.effects.length === 0, 'CE-XN-001 baseliner no effects');
+    ok(result.unresolved.length === 0, 'CE-XN-001 baseliner no unresolved');
+  }
+
+  // CE-XN-002: No xenotype produces no effects or unresolved
+  {
+    const pawn1 = mk('xn2a', { xenotype: null });
+    const result1 = CE.fromXenotype(pawn1);
+    ok(result1.effects.length === 0, 'CE-XN-002 null xenotype no effects');
+    ok(result1.unresolved.length === 0, 'CE-XN-002 null xenotype no unresolved');
+
+    const pawn2 = mk('xn2b', {});
+    const result2 = CE.fromXenotype(pawn2);
+    ok(result2.effects.length === 0, 'CE-XN-002 missing xenotype no effects');
+    ok(result2.unresolved.length === 0, 'CE-XN-002 missing xenotype no unresolved');
+  }
+
+  // CE-XN-003: Unknown xenotype -> unresolved, NOT silently Baseliner
+  {
+    const pawn = mk('xn3', { xenotype: 'ModdedXenoZZZ' });
+    const result = CE.fromXenotype(pawn);
+
+    ok(result.effects.length === 0, 'CE-XN-003 unknown xeno no effects');
+    ok(result.unresolved.length >= 1, 'CE-XN-003 has unresolved');
+    const ur = result.unresolved.find(u =>
+      u.sourceKind === 'xenotype' && u.sourceId === 'ModdedXenoZZZ');
+    ok(ur != null, 'CE-XN-003 unresolved entry exists');
+    ok(ur && ur.reason && ur.reason.indexOf('could not be resolved') >= 0,
+      'CE-XN-003 unresolved reason');
+  }
+
+  // CE-XN-004: Zero-resolved aggregate fallback (Case B) - dirtmole mine:8
+  // Dirtmole template genes use game-internal names that do not resolve
+  // via GENES array, so zero resolved genes contribute to mine dimension.
+  {
+    const pawn = mk('xn4', { xenotype: 'dirtmole' });
+    const result = CE.fromXenotype(pawn);
+
+    const mineEv = findEv(result.effects, 'xeno:dirtmole:skillMods:mine');
+    ok(mineEv != null, 'CE-XN-004 mine aggregate fallback emitted');
+    ok(mineEv && mineEv.type === 'skillOffset', 'CE-XN-004 mine type');
+    ok(mineEv && mineEv.target === 'mine', 'CE-XN-004 mine target');
+    ok(mineEv && mineEv.value === 8, 'CE-XN-004 mine value');
+    ok(mineEv && mineEv.authority === 'summaryFallback',
+      'CE-XN-004 mine authority is summaryFallback');
+    ok(mineEv && mineEv.confidence === 'inferred',
+      'CE-XN-004 mine confidence is inferred');
+    ok(mineEv && mineEv.provenance.sourceKind === 'xenotype',
+      'CE-XN-004 mine provenance sourceKind');
+    ok(mineEv && mineEv.provenance.sourceId === 'dirtmole',
+      'CE-XN-004 mine provenance sourceId');
+  }
+
+  // CE-XN-005: All-resolved aggregate suppression (Case A)
+  // Custom xenotype where ALL template genes resolve via GENES array.
+  // Aggregate should NOT be emitted - atomic gene evidence is authoritative.
+  {
+    App.state.customXenotypes['testAllResolved'] = {
+      label: 'Test All Resolved', color: '#fff',
+      genes: ['gene_mining_good'],
+      skillMods: { mine: 4 }, incapable: [], passions: [], uvSensitivity: 0,
+    };
+    const pawn = mk('xn5', { xenotype: 'testAllResolved' });
+    const result = CE.fromXenotype(pawn);
+
+    // Aggregate suppressed - gene_mining_good resolves and covers mine:4
+    const mineEv = findEv(result.effects, 'xeno:testAllResolved:skillMods:mine');
+    ok(mineEv == null, 'CE-XN-005 aggregate suppressed when all genes resolved');
+    ok(result.unresolved.length === 0,
+      'CE-XN-005 no unresolved when resolved total matches aggregate');
+    delete App.state.customXenotypes['testAllResolved'];
+  }
+
+  // CE-XN-006: Aggregate/atomic mismatch preserved as unresolved (Case A mismatch)
+  // All template genes resolve but sum doesn't match aggregate.
+  {
+    App.state.customXenotypes['testMismatch'] = {
+      label: 'Test Mismatch', color: '#fff',
+      genes: ['gene_mining_good'],
+      skillMods: { mine: 8 }, incapable: [], passions: [], uvSensitivity: 0,
+    };
+    const pawn = mk('xn6', { xenotype: 'testMismatch' });
+    const result = CE.fromXenotype(pawn);
+
+    // Aggregate suppressed (Case A) but mismatch noted
+    const mineEv = findEv(result.effects, 'xeno:testMismatch:skillMods:mine');
+    ok(mineEv == null, 'CE-XN-006 aggregate suppressed despite mismatch');
+
+    const ur = result.unresolved.find(u =>
+      u.sourceKind === 'xenotype' && u.rawTarget === 'mine' &&
+      u.reason && u.reason.indexOf('mismatch') >= 0);
+    ok(ur != null, 'CE-XN-006 mismatch preserved in unresolved');
+    ok(ur && ur.rawData && ur.rawData.aggregate === 8,
+      'CE-XN-006 rawData.aggregate preserved');
+    ok(ur && ur.rawData && ur.rawData.resolved === 4,
+      'CE-XN-006 rawData.resolved preserved');
+    delete App.state.customXenotypes['testMismatch'];
+  }
+
+  // CE-XN-007: Partial resolution - no overlapping aggregate (Case C)
+  // Mix of resolvable and non-resolvable genes; a resolved gene contributes
+  // to the same skill dimension as the aggregate.
+  {
+    App.state.customXenotypes['testPartial'] = {
+      label: 'Test Partial', color: '#fff',
+      genes: ['gene_mining_good', 'UnresolvableGameGene_XYZ'],
+      skillMods: { mine: 8 }, incapable: [], passions: [], uvSensitivity: 0,
+    };
+    const pawn = mk('xn7', { xenotype: 'testPartial' });
+    const result = CE.fromXenotype(pawn);
+
+    // No aggregate emitted (Case C)
+    const mineEv = findEv(result.effects, 'xeno:testPartial:skillMods:mine');
+    ok(mineEv == null, 'CE-XN-007 no overlapping aggregate in partial case');
+
+    // Partial resolution noted in unresolved
+    const ur = result.unresolved.find(u =>
+      u.sourceKind === 'xenotype' && u.rawTarget === 'mine' &&
+      u.reason && u.reason.indexOf('Partial') >= 0);
+    ok(ur != null, 'CE-XN-007 partial resolution in unresolved');
+    delete App.state.customXenotypes['testPartial'];
+  }
+
+  // CE-XN-008: Summary-only custom xenotype fallback
+  // A xenotype with skillMods but no gene list emits summary fallback.
+  {
+    App.state.customXenotypes['testSummaryOnly'] = {
+      label: 'Test Summary Only', color: '#fff',
+      skillMods: { shoot: 4, melee: -4 }, incapable: ['violence'],
+      passions: [], uvSensitivity: 0,
+    };
+    const pawn = mk('xn8', { xenotype: 'testSummaryOnly' });
+    const result = CE.fromXenotype(pawn);
+
+    const shootEv = findEv(result.effects, 'xeno:testSummaryOnly:skillMods:shoot');
+    ok(shootEv != null, 'CE-XN-008 summary-only shoot emitted');
+    ok(shootEv && shootEv.authority === 'summaryFallback',
+      'CE-XN-008 shoot authority summaryFallback');
+    ok(shootEv && shootEv.value === 4, 'CE-XN-008 shoot value');
+
+    const meleeEv = findEv(result.effects, 'xeno:testSummaryOnly:skillMods:melee');
+    ok(meleeEv != null, 'CE-XN-008 summary-only melee emitted');
+    ok(meleeEv && meleeEv.value === -4, 'CE-XN-008 melee value');
+
+    // violence classified through _classifyIncap
+    const violenceEv = findEv(result.effects, 'xeno:testSummaryOnly:incapable:violence');
+    ok(violenceEv != null, 'CE-XN-008 summary-only violence emitted');
+    ok(violenceEv && violenceEv.type === 'disableWorkTag',
+      'CE-XN-008 violence classified as disableWorkTag');
+    ok(violenceEv && violenceEv.authority === 'summaryFallback',
+      'CE-XN-008 violence authority summaryFallback');
+    delete App.state.customXenotypes['testSummaryOnly'];
+  }
+
+  // CE-XN-009: Atomic and aggregate same skill never both survive
+  // Verify that fromGenes and fromXenotype don't double-count.
+  {
+    App.state.customXenotypes['testNoDoubleCount'] = {
+      label: 'Test No Double Count', color: '#fff',
+      genes: ['gene_mining_good'],
+      skillMods: { mine: 4 }, incapable: [], passions: [], uvSensitivity: 0,
+    };
+    const pawn = mk('xn9', { xenotype: 'testNoDoubleCount' });
+    const geneResult = CE.fromGenes(pawn);
+    const xenoResult = CE.fromXenotype(pawn);
+
+    // gene adapter should emit mine evidence (from template fallback)
+    const geneMinEv = geneResult.effects.filter(e =>
+      e.target === 'mine' && e.type === 'skillOffset');
+    ok(geneMinEv.length === 1, 'CE-XN-009 gene adapter has exactly one mine effect');
+
+    // xeno adapter should NOT emit mine evidence (Case A suppresses it)
+    const xenoMinEv = xenoResult.effects.filter(e =>
+      e.target === 'mine' && e.type === 'skillOffset');
+    ok(xenoMinEv.length === 0, 'CE-XN-009 xeno adapter has no mine effect (suppressed)');
+
+    delete App.state.customXenotypes['testNoDoubleCount'];
+  }
+
+  // CE-XN-010: UV sensitivity emits avoidCondition with daylight/hours/weight
+  {
+    const pawn = mk('xn10', { xenotype: 'dirtmole' });
+    const result = CE.fromXenotype(pawn);
+
+    const uvEv = findEv(result.effects, 'xeno:dirtmole:uv');
+    ok(uvEv != null, 'CE-XN-010 UV evidence emitted');
+    ok(uvEv && uvEv.type === 'avoidCondition', 'CE-XN-010 UV type');
+    ok(uvEv && uvEv.condition === 'daylight', 'CE-XN-010 UV condition daylight');
+    ok(uvEv && uvEv.fallbackHours && uvEv.fallbackHours.start === 6,
+      'CE-XN-010 UV fallbackHours start');
+    ok(uvEv && uvEv.fallbackHours && uvEv.fallbackHours.end === 18,
+      'CE-XN-010 UV fallbackHours end');
+    ok(uvEv && uvEv.weight === 4, 'CE-XN-010 UV weight');
+    ok(uvEv && uvEv.provenance.sourceKind === 'xenotype',
+      'CE-XN-010 UV provenance sourceKind');
+  }
+
+  // CE-XN-011: Undergrounder + UV -> no UV evidence
+  {
+    const pawn = mk('xn11', { xenotype: 'dirtmole', traits: ['undergrounder'] });
+    const result = CE.fromXenotype(pawn);
+
+    const uvEv = findEv(result.effects, 'xeno:dirtmole:uv');
+    ok(uvEv == null, 'CE-XN-011 undergrounder suppresses UV evidence');
+    // Skill aggregate should still work
+    const mineEv = findEv(result.effects, 'xeno:dirtmole:skillMods:mine');
+    ok(mineEv != null, 'CE-XN-011 skill aggregate still emitted');
+  }
+
+  // CE-XN-012: Explicit pawn genes that differ from template prevent fallback
+  {
+    App.state.customXenotypes['testExplicitGenes'] = {
+      label: 'Test Explicit Genes', color: '#fff',
+      genes: ['gene_mining_good'],
+      skillMods: { mine: 4 }, incapable: [], passions: [], uvSensitivity: 1,
+    };
+    const pawn = mk('xn12', {
+      xenotype: 'testExplicitGenes',
+      geneDefIds: ['gene_shooting_great'],
+    });
+    const result = CE.fromXenotype(pawn);
+
+    // Skill aggregate should NOT be emitted - pawn genes differ from template
+    const mineEv = findEv(result.effects, 'xeno:testExplicitGenes:skillMods:mine');
+    ok(mineEv == null,
+      'CE-XN-012 explicit pawn genes prevent template aggregate fallback');
+
+    // UV evidence should still emit (xeno property, not gene aggregate)
+    const uvEv = findEv(result.effects, 'xeno:testExplicitGenes:uv');
+    ok(uvEv != null, 'CE-XN-012 UV still emits with explicit pawn genes');
+    delete App.state.customXenotypes['testExplicitGenes'];
+  }
+
+  // CE-XN-013: AUTH-001 - unrelated same-target effect from different source survives
+  // A gene and xenotype aggregate for DIFFERENT skills both survive normalisation.
+  {
+    App.state.customXenotypes['testAuth001'] = {
+      label: 'Test Auth', color: '#fff',
+      genes: ['gene_shooting_great', 'FakeUnresolvableGene_999'],
+      skillMods: { shoot: 8, mine: 4 }, incapable: [], passions: [], uvSensitivity: 0,
+    };
+    const pawn = mk('xn13', { xenotype: 'testAuth001' });
+    const geneResult = CE.fromGenes(pawn);
+    const xenoResult = CE.fromXenotype(pawn);
+
+    // gene adapter handles shoot (resolves gene_shooting_great)
+    const geneShootEv = geneResult.effects.filter(e =>
+      e.target === 'shoot' && e.type === 'skillOffset');
+    ok(geneShootEv.length >= 1,
+      'CE-XN-013 gene adapter emits shoot effect');
+
+    // xeno adapter should NOT emit shoot (gene_shooting_great contributes - Case C)
+    const xenoShootEv = findEv(xenoResult.effects, 'xeno:testAuth001:skillMods:shoot');
+    ok(xenoShootEv == null,
+      'CE-XN-013 xeno does not emit overlapping shoot aggregate');
+
+    // xeno adapter SHOULD emit mine as fallback (no resolved gene contributes)
+    const xenoMineEv = findEv(xenoResult.effects, 'xeno:testAuth001:skillMods:mine');
+    ok(xenoMineEv != null,
+      'CE-XN-013 unrelated mine aggregate survives as fallback');
+    ok(xenoMineEv && xenoMineEv.authority === 'summaryFallback',
+      'CE-XN-013 mine authority summaryFallback');
+
+    // Combine and normalise - both survive (different evidenceIds, null supersessionKeys)
+    const combined = [...geneResult.effects, ...xenoResult.effects];
+    const normalised = CE._normaliseEffects(combined, []);
+    const normShoot = normalised.filter(e =>
+      e.target === 'shoot' && e.type === 'skillOffset');
+    const normMine = normalised.filter(e =>
+      e.target === 'mine' && e.type === 'skillOffset');
+    ok(normShoot.length >= 1,
+      'CE-XN-013 shoot survives normalisation');
+    ok(normMine.length >= 1,
+      'CE-XN-013 mine survives normalisation');
+
+    delete App.state.customXenotypes['testAuth001'];
+  }
+
+  // CE-XN-014: Fallback supersessionKey is null (not clashing with gene evidence)
+  {
+    const pawn = mk('xn14', { xenotype: 'dirtmole' });
+    const result = CE.fromXenotype(pawn);
+
+    for (const ev of result.effects) {
+      ok(ev.supersessionKey === null,
+        'CE-XN-014 ' + ev.evidenceId + ' supersessionKey is null');
+    }
+  }
+
+  // CE-XN-015: Sanguophage UV (uvSensitivity:1) emits avoidCondition
+  {
+    const pawn = mk('xn15', { xenotype: 'sanguophage' });
+    const result = CE.fromXenotype(pawn);
+
+    const uvEv = findEv(result.effects, 'xeno:sanguophage:uv');
+    ok(uvEv != null, 'CE-XN-015 sanguophage UV evidence emitted');
+    ok(uvEv && uvEv.condition === 'daylight', 'CE-XN-015 sanguophage UV condition');
+  }
+
+  // CE-XN-016: Highmate incapable violence via aggregate fallback
+  // Highmate template genes include ViolenceDisabled which resolves to
+  // gene_incap_violence in our GENES array? No - ViolenceDisabled is a
+  // game-internal name that does not resolve. So Case B applies.
+  {
+    const pawn = mk('xn16', { xenotype: 'highmate' });
+    const result = CE.fromXenotype(pawn);
+
+    const violenceEv = findEv(result.effects, 'xeno:highmate:incapable:violence');
+    ok(violenceEv != null, 'CE-XN-016 highmate violence aggregate emitted');
+    ok(violenceEv && violenceEv.type === 'disableWorkTag',
+      'CE-XN-016 highmate violence classified as disableWorkTag');
+    ok(violenceEv && violenceEv.authority === 'summaryFallback',
+      'CE-XN-016 highmate violence authority summaryFallback');
+  }
+
+  // ======================================================================
+  // CROSS-ADAPTER: include xenotype adapter in unique-ID check
+  // ======================================================================
+
+  // CE-XA-003: Combined evidence from all six adapters has unique IDs
+  {
+    const savedFn = App.getIdeoEffects;
+    App.getIdeoEffects = () => ({ mood: 0, workSpeed: 0, combatSkill: 1, socialSkill: 0, researchSpeed: 0 });
+    const pawn = mk('xa3', {
+      childhood: 'ArtisanFarmer23', role: 'leader',
+      traits: ['industrious', 'night_owl'],
+      xenotype: 'dirtmole',
+    });
+
+    const bsResult = CE.fromBackstories(pawn);
+    const roleResult = CE.fromRole(pawn);
+    const ideoResult = CE.fromIdeology(pawn);
+    const traitResult = CE.fromTraits(pawn);
+    const geneResult = CE.fromGenes(pawn);
+    const xenoResult = CE.fromXenotype(pawn);
+
+    const allEffects = [
+      ...bsResult.effects, ...roleResult.effects,
+      ...ideoResult.effects, ...traitResult.effects,
+      ...geneResult.effects, ...xenoResult.effects,
+    ];
+    const ids = allEffects.map(e => e.evidenceId);
+    const idSet = new Set(ids);
+    ok(idSet.size === ids.length,
+      'CE-XA-003 all cross-adapter evidence IDs unique (with xenotype)');
+
+    App.getIdeoEffects = savedFn;
+  }
+
   return { name: 'capability evidence (C2 adapters)', failures, total };
 };
