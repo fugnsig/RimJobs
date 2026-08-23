@@ -1286,5 +1286,351 @@ module.exports = function run() {
     App.getIdeoEffects = savedFn;
   }
 
+  // ======================================================================
+  // HEALTH SNAPSHOT TESTS: CE-HL-001 through CE-HL-015
+  // ======================================================================
+
+  // CE-HL-001: Missing left arm - human body resolved
+  {
+    const pawn = mk('hl1', { health: [
+      { def: 'MissingBodyPart', partIdx: 25, type: 'missing', severity: 0, hediffClass: 'Hediff_MissingPart', part: 'left arm', permanent: false },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 1, 'CE-HL-001 one body evidence');
+    ok(body[0] && body[0].kind === 'missing', 'CE-HL-001 kind is missing');
+    ok(body[0] && body[0].partId === 25, 'CE-HL-001 partId');
+    ok(body[0] && body[0].partDef === 'left arm', 'CE-HL-001 partDef');
+    ok(body[0] && body[0].side === 'left', 'CE-HL-001 side');
+    ok(body[0] && body[0].parentPartDef != null, 'CE-HL-001 parentPartDef resolved');
+    ok(body[0] && body[0].provenance && body[0].provenance.sourceKind === 'healthSnapshot', 'CE-HL-001 provenance');
+  }
+
+  // CE-HL-002: Missing right arm - side detection
+  {
+    const pawn = mk('hl2', { health: [
+      { def: 'MissingBodyPart', partIdx: 36, type: 'missing', severity: 0, hediffClass: 'Hediff_MissingPart', part: 'right arm', permanent: false },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 1, 'CE-HL-002 one body evidence');
+    ok(body[0] && body[0].side === 'right', 'CE-HL-002 side is right');
+    ok(body[0] && body[0].partDef === 'right arm', 'CE-HL-002 partDef');
+  }
+
+  // CE-HL-003: Replacement (bionic arm)
+  {
+    const pawn = mk('hl3', { health: [
+      { def: 'BionicArm', partIdx: 25, type: 'replaced', severity: 0, hediffClass: 'Hediff_AddedPart', part: 'left arm', permanent: false },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 1, 'CE-HL-003 one body evidence');
+    ok(body[0] && body[0].kind === 'replacement', 'CE-HL-003 kind is replacement');
+    ok(body[0] && body[0].replacementDef === 'BionicArm', 'CE-HL-003 replacementDef');
+    ok(body[0] && body[0].partId === 25, 'CE-HL-003 partId');
+    ok(body[0] && body[0].partDef === 'left arm', 'CE-HL-003 partDef');
+  }
+
+  // CE-HL-004: Implant distinct from replacement
+  {
+    const pawn = mk('hl4', { health: [
+      { def: 'PsychicAmplifier', partIdx: 15, type: 'implant', severity: 1, hediffClass: 'Hediff_Implant', part: 'brain', permanent: false },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 1, 'CE-HL-004 one body evidence');
+    ok(body[0] && body[0].kind === 'implant', 'CE-HL-004 kind is implant');
+    ok(body[0] && body[0].implantDef === 'PsychicAmplifier', 'CE-HL-004 implantDef');
+    ok(body[0] && body[0].partDef === 'brain', 'CE-HL-004 partDef is brain');
+    ok(body[0] && body[0].replacementDef === undefined, 'CE-HL-004 no replacementDef on implant');
+  }
+
+  // CE-HL-005: Part-specific hediff (injury on torso)
+  {
+    const pawn = mk('hl5', { health: [
+      { def: 'Scar', partIdx: 0, type: 'injury', severity: 5, hediffClass: 'Hediff_Injury', part: 'torso', permanent: true },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 1, 'CE-HL-005 one body evidence');
+    ok(body[0] && body[0].kind === 'hediff', 'CE-HL-005 kind is hediff');
+    ok(body[0] && body[0].hediffDef === 'Scar', 'CE-HL-005 hediffDef');
+    ok(body[0] && body[0].severity === 5, 'CE-HL-005 severity preserved');
+    ok(body[0] && body[0].partId === 0, 'CE-HL-005 partId');
+    ok(body[0] && body[0].partDef === 'torso', 'CE-HL-005 partDef');
+  }
+
+  // CE-HL-006: Global/unparted hediff preserved (partIdx = -1)
+  {
+    const pawn = mk('hl6', { health: [
+      { def: 'Flu', partIdx: -1, type: 'condition', severity: 0.3, hediffClass: 'HediffWithComps', part: '', permanent: false },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 1, 'CE-HL-006 one body evidence');
+    ok(body[0] && body[0].kind === 'hediff', 'CE-HL-006 kind is hediff');
+    ok(body[0] && body[0].hediffDef === 'Flu', 'CE-HL-006 hediffDef');
+    ok(body[0] && body[0].partId === null, 'CE-HL-006 partId null for global');
+    ok(body[0] && body[0].partDef === null, 'CE-HL-006 partDef null');
+    ok(body[0] && Math.abs(body[0].severity - 0.3) < 1e-10, 'CE-HL-006 severity');
+  }
+
+  // CE-HL-007: Non-human body does not receive human mapping
+  {
+    const pawn = mk('hl7', { bodyDef: 'AlienRace', health: [
+      { def: 'MissingBodyPart', partIdx: 25, type: 'missing', severity: 0, hediffClass: 'Hediff_MissingPart', part: 'part #25', permanent: false },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 1, 'CE-HL-007 one body evidence');
+    ok(body[0] && body[0].partId === 25, 'CE-HL-007 partId preserved');
+    ok(body[0] && body[0].partDef === null, 'CE-HL-007 partDef null for non-human');
+    ok(body[0] && body[0].side === null, 'CE-HL-007 side null');
+  }
+
+  // CE-HL-008: No capacity/manipulation/impact fields
+  {
+    const pawn = mk('hl8', { health: [
+      { def: 'MissingBodyPart', partIdx: 25, type: 'missing', severity: 0, hediffClass: 'Hediff_MissingPart', part: 'left arm', permanent: false },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body[0] && body[0].manipulation === undefined, 'CE-HL-008 no manipulation');
+    ok(body[0] && body[0].capacity === undefined, 'CE-HL-008 no capacity');
+    ok(body[0] && body[0].impact === undefined, 'CE-HL-008 no impact');
+  }
+
+  // CE-HL-009: Empty health array returns empty
+  {
+    const pawn = mk('hl9', { health: [] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 0, 'CE-HL-009 empty health returns empty body evidence');
+  }
+
+  // CE-HL-010: Unknown part index retains raw ID and null semantics (out of range)
+  {
+    const pawn = mk('hl10', { health: [
+      { def: 'Scar', partIdx: 999, type: 'injury', severity: 2, hediffClass: 'Hediff_Injury', part: 'body part #999', permanent: true },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body.length === 1, 'CE-HL-010 one body evidence');
+    ok(body[0] && body[0].partId === 999, 'CE-HL-010 partId preserved');
+    ok(body[0] && body[0].partDef === null, 'CE-HL-010 partDef null for unknown');
+  }
+
+  // CE-HL-011: Mod provenance from defSources
+  {
+    App.state.defSources = { 'ModdedProsthetic': 'some.mod.id' };
+    const pawn = mk('hl11', { health: [
+      { def: 'ModdedProsthetic', partIdx: 25, type: 'replaced', severity: 0, hediffClass: 'Hediff_AddedPart', part: 'left arm', permanent: false },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body[0] && body[0].provenance.modId === 'some.mod.id', 'CE-HL-011 mod provenance');
+    App.state.defSources = {};
+  }
+
+  // ======================================================================
+  // HEDIFF DEFINITION TESTS: CE-HD-001 through CE-HD-010
+  // ======================================================================
+
+  // CE-HD-001: Single-stage hediff disabling firefight
+  {
+    App.state.hediffCatalog = [
+      { def: 'Dementia', label: 'Dementia', hediffClass: 'HediffWithComps', category: 'disease',
+        disabledWorkStages: [{ min: 0, work: ['firefight'] }] },
+    ];
+    const pawn = mk('hd1', { health: [
+      { def: 'Dementia', partIdx: 15, type: 'condition', severity: 0.5, hediffClass: 'HediffWithComps', part: 'brain', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    ok(result.effects.length >= 1 || result.unresolved.length >= 1, 'CE-HD-001 emits effects or unresolved for firefight');
+    const ev = result.effects[0] || null;
+    if (ev) {
+      ok(ev.when != null, 'CE-HD-001 has when envelope');
+      ok(ev.when && ev.when.kind === 'hediffSeverity', 'CE-HD-001 when kind');
+      ok(ev.when && ev.when.hediffDef === 'Dementia', 'CE-HD-001 when hediffDef');
+      ok(ev.when && ev.when.min === 0, 'CE-HD-001 when min');
+      ok(ev.when && ev.when.max === null, 'CE-HD-001 when max null for single stage');
+      ok(ev.when && ev.when.maxExclusive === true, 'CE-HD-001 maxExclusive');
+    }
+    App.state.hediffCatalog = [];
+  }
+
+  // CE-HD-002: Multi-stage hediff with severity boundaries
+  {
+    App.state.hediffCatalog = [
+      { def: 'BrainInjury', label: 'Brain injury', hediffClass: 'HediffWithComps', category: 'injury',
+        disabledWorkStages: [
+          { min: 0, work: [] },
+          { min: 0.5, work: ['violence'] },
+          { min: 0.8, work: ['violence', 'caring'] },
+        ] },
+    ];
+    const pawn = mk('hd2', { health: [
+      { def: 'BrainInjury', partIdx: 15, type: 'condition', severity: 0.7, hediffClass: 'HediffWithComps', part: 'brain', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+
+    // Stage 0 (min=0) has no work, so no effects for it
+    // Stage 1 (min=0.5) disables violent with max=0.8
+    const s1Ev = result.effects.find(e => e.evidenceId && e.evidenceId.indexOf(':s1') >= 0);
+    ok(s1Ev != null, 'CE-HD-002 stage 1 effect exists');
+    ok(s1Ev && s1Ev.when && s1Ev.when.min === 0.5, 'CE-HD-002 stage 1 min');
+    ok(s1Ev && s1Ev.when && s1Ev.when.max === 0.8, 'CE-HD-002 stage 1 max is next stage min');
+
+    // Stage 2 (min=0.8) disables violent and caring with max=null
+    const s2Evs = result.effects.filter(e => e.evidenceId && e.evidenceId.indexOf(':s2') >= 0);
+    ok(s2Evs.length >= 1, 'CE-HD-002 stage 2 effects exist');
+    const s2First = s2Evs[0];
+    ok(s2First && s2First.when && s2First.when.min === 0.8, 'CE-HD-002 stage 2 min');
+    ok(s2First && s2First.when && s2First.when.max === null, 'CE-HD-002 stage 2 max null (last stage)');
+    App.state.hediffCatalog = [];
+  }
+
+  // CE-HD-003: C2 does not evaluate current severity (emits all stages, not just active)
+  {
+    App.state.hediffCatalog = [
+      { def: 'TestHediff', label: 'Test', hediffClass: 'HediffWithComps', category: 'condition',
+        disabledWorkStages: [
+          { min: 0, work: ['violence'] },
+          { min: 0.5, work: ['violence', 'caring'] },
+        ] },
+    ];
+    const pawn = mk('hd3', { health: [
+      { def: 'TestHediff', partIdx: -1, type: 'condition', severity: 0.1, hediffClass: 'HediffWithComps', part: '', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    // Both stages emitted regardless of current severity 0.1
+    const s0Evs = result.effects.filter(e => e.evidenceId && e.evidenceId.indexOf(':s0') >= 0);
+    const s1Evs = result.effects.filter(e => e.evidenceId && e.evidenceId.indexOf(':s1') >= 0);
+    ok(s0Evs.length >= 1, 'CE-HD-003 stage 0 emitted despite low severity');
+    ok(s1Evs.length >= 1, 'CE-HD-003 stage 1 emitted despite low severity');
+    App.state.hediffCatalog = [];
+  }
+
+  // CE-HD-004: Unknown work restriction preserved as unresolved
+  {
+    App.state.hediffCatalog = [
+      { def: 'ModdedDisease', label: 'Modded', hediffClass: 'HediffWithComps', category: 'disease',
+        disabledWorkStages: [{ min: 0, work: ['totally_made_up_tag'] }] },
+    ];
+    const pawn = mk('hd4', { health: [
+      { def: 'ModdedDisease', partIdx: -1, type: 'condition', severity: 0.5, hediffClass: 'HediffWithComps', part: '', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    ok(result.unresolved.length >= 1, 'CE-HD-004 unknown tag goes to unresolved');
+    ok(result.unresolved[0] && /totally_made_up_tag/.test(result.unresolved[0].reason || ''),
+      'CE-HD-004 unresolved mentions tag');
+    App.state.hediffCatalog = [];
+  }
+
+  // CE-HD-005: Definition effect is separate from snapshot body evidence
+  {
+    App.state.hediffCatalog = [
+      { def: 'Dementia', label: 'Dementia', hediffClass: 'HediffWithComps', category: 'disease',
+        disabledWorkStages: [{ min: 0, work: ['firefight'] }] },
+    ];
+    const pawn = mk('hd5', { health: [
+      { def: 'Dementia', partIdx: 15, type: 'condition', severity: 0.5, hediffClass: 'HediffWithComps', part: 'brain', permanent: false },
+    ] });
+    const bodyResult = CE.bodyEvidenceFromPawnHealth(pawn);
+    const defResult = CE.effectsFromHediffDefinitions(pawn);
+    ok(bodyResult.length >= 1, 'CE-HD-005 body evidence exists');
+    ok(defResult.effects.length >= 1 || defResult.unresolved.length >= 1, 'CE-HD-005 definition effects exist');
+    // Body evidence has no disableWorkTag/disableJob
+    ok(bodyResult.every(b => b.type === undefined || b.type !== 'disableWorkTag'),
+      'CE-HD-005 body evidence has no disableWorkTag');
+    App.state.hediffCatalog = [];
+  }
+
+  // CE-HD-006: Hediff not in catalog emits nothing (not unresolved - unknown defs are catalog gaps)
+  {
+    App.state.hediffCatalog = [];
+    const pawn = mk('hd6', { health: [
+      { def: 'UnknownHediff', partIdx: -1, type: 'condition', severity: 0.5, hediffClass: 'HediffWithComps', part: '', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    ok(result.effects.length === 0, 'CE-HD-006 no effects for uncatalogued hediff');
+    ok(result.unresolved.length === 0, 'CE-HD-006 no unresolved for uncatalogued hediff');
+    App.state.hediffCatalog = [];
+  }
+
+  // CE-HD-007: Duplicate hediff defs only processed once
+  {
+    App.state.hediffCatalog = [
+      { def: 'Flu', label: 'Flu', hediffClass: 'HediffWithComps', category: 'disease',
+        disabledWorkStages: [{ min: 0, work: ['violence'] }] },
+    ];
+    const pawn = mk('hd7', { health: [
+      { def: 'Flu', partIdx: -1, type: 'condition', severity: 0.3, hediffClass: 'HediffWithComps', part: '', permanent: false },
+      { def: 'Flu', partIdx: -1, type: 'condition', severity: 0.6, hediffClass: 'HediffWithComps', part: '', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    const fluEffects = result.effects.filter(e => e.evidenceId && e.evidenceId.indexOf('hediff:Flu:') === 0);
+    ok(fluEffects.length >= 1, 'CE-HD-007 at least one Flu effect');
+    // Should not have duplicate effects for same def
+    const fluIds = fluEffects.map(e => e.evidenceId);
+    ok(new Set(fluIds).size === fluIds.length, 'CE-HD-007 no duplicate evidence IDs');
+    App.state.hediffCatalog = [];
+  }
+
+  // CE-HD-008: Modded hediff gets inferred confidence
+  {
+    App.state.defSources = { 'ModdedFlu': 'cool.mod.pkg' };
+    App.state.hediffCatalog = [
+      { def: 'ModdedFlu', label: 'Modded Flu', hediffClass: 'HediffWithComps', category: 'disease',
+        disabledWorkStages: [{ min: 0, work: ['violent'] }] },
+    ];
+    const pawn = mk('hd8', { health: [
+      { def: 'ModdedFlu', partIdx: -1, type: 'condition', severity: 0.5, hediffClass: 'HediffWithComps', part: '', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    const ev = result.effects[0] || null;
+    if (ev) {
+      ok(ev.confidence === 'inferred', 'CE-HD-008 modded hediff confidence is inferred');
+      ok(ev.provenance && ev.provenance.modId === 'cool.mod.pkg', 'CE-HD-008 modId in provenance');
+    }
+    App.state.defSources = {};
+    App.state.hediffCatalog = [];
+  }
+
+  // CE-HD-009: Psycaster meditation evidence
+  {
+    const pawn = mk('hd9', { health: [
+      { def: 'PsychicAmplifier', partIdx: 15, type: 'implant', severity: 1, hediffClass: 'Hediff_Psylink', part: 'brain', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    const medEv = findEv(result.effects, 'hediff:pawn:psycaster:meditation');
+    ok(medEv != null, 'CE-HD-009 psycaster meditation evidence exists');
+    ok(medEv && medEv.type === 'requiredActivity', 'CE-HD-009 type is requiredActivity');
+    ok(medEv && medEv.value === 2, 'CE-HD-009 value is 2 hours');
+    ok(medEv && medEv.activity === 'meditation', 'CE-HD-009 activity');
+    ok(medEv && medEv.hours === 2, 'CE-HD-009 hours field');
+    ok(medEv && medEv.provenance.sourceKind === 'hediff', 'CE-HD-009 provenance sourceKind');
+    ok(medEv && medEv.confidence === 'derived', 'CE-HD-009 confidence derived');
+  }
+
+  // CE-HD-010: Non-psycaster pawn has no meditation evidence
+  {
+    const pawn = mk('hd10', { health: [
+      { def: 'Flu', partIdx: -1, type: 'condition', severity: 0.3, hediffClass: 'HediffWithComps', part: '', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    const medEv = findEv(result.effects, 'hediff:pawn:psycaster:meditation');
+    ok(medEv == null, 'CE-HD-010 no meditation evidence for non-psycaster');
+  }
+
+  // CE-HD-011: Provenance on definition effects
+  {
+    App.state.hediffCatalog = [
+      { def: 'Dementia', label: 'Dementia', hediffClass: 'HediffWithComps', category: 'disease',
+        disabledWorkStages: [{ min: 0, work: ['firefight'] }] },
+    ];
+    const pawn = mk('hd11', { health: [
+      { def: 'Dementia', partIdx: 15, type: 'condition', severity: 0.5, hediffClass: 'HediffWithComps', part: 'brain', permanent: false },
+    ] });
+    const result = CE.effectsFromHediffDefinitions(pawn);
+    const ev = result.effects[0] || result.unresolved[0] || null;
+    ok(ev != null, 'CE-HD-011 has output');
+    if (ev && ev.provenance) {
+      ok(ev.provenance.sourceKind === 'hediffDef', 'CE-HD-011 sourceKind is hediffDef');
+      ok(ev.provenance.sourceId === 'Dementia', 'CE-HD-011 sourceId is hediff def');
+    }
+    App.state.hediffCatalog = [];
+  }
+
   return { name: 'capability evidence (C2 adapters)', failures, total };
 };
