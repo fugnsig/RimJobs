@@ -717,30 +717,213 @@ module.exports = function run() {
   }
 
   // ======================================================================
+  // GENE TESTS: CE-GN-001 through CE-GN-011
+  // ======================================================================
+
+  // Extract GENES array for test reference
+  vm.runInContext('globalThis._GENES = GENES', ctx);
+  const GENES = ctx._GENES;
+
+  // CE-GN-001: Vanilla skill gene emits skillOffset
+  {
+    const pawn = mk('gn1', { geneDefIds: ['gene_shooting_great'] });
+    const result = CE.fromGenes(pawn);
+
+    const ev = findEv(result.effects, 'gene:gene_shooting_great:skillMods:shoot');
+    ok(ev != null, 'CE-GN-001 shoot evidence exists');
+    ok(ev && ev.type === 'skillOffset', 'CE-GN-001 shoot type');
+    ok(ev && ev.target === 'shoot', 'CE-GN-001 shoot target');
+    ok(ev && ev.value === 8, 'CE-GN-001 shoot value');
+    ok(ev && ev.provenance.sourceKind === 'gene', 'CE-GN-001 provenance sourceKind');
+    ok(ev && ev.provenance.sourceId === 'gene_shooting_great', 'CE-GN-001 provenance sourceId');
+    ok(ev && ev.confidence === 'verified', 'CE-GN-001 confidence verified');
+  }
+
+  // CE-GN-002: Sleepless gene emits sleepHoursOverride with value 0
+  {
+    const pawn = mk('gn2', { geneDefIds: ['gene_no_sleep'] });
+    const result = CE.fromGenes(pawn);
+
+    const ev = findEv(result.effects, 'gene:gene_no_sleep:sleepHoursOverride');
+    ok(ev != null, 'CE-GN-002 sleepHoursOverride evidence exists');
+    ok(ev && ev.type === 'sleepHoursOverride', 'CE-GN-002 sleepHoursOverride type');
+    ok(ev && ev.value === 0, 'CE-GN-002 sleepHoursOverride value 0');
+  }
+
+  // CE-GN-003: Gene incapable entries go through _classifyIncap
+  {
+    const pawn = mk('gn3', { geneDefIds: ['gene_incap_violence'] });
+    const result = CE.fromGenes(pawn);
+
+    const ev = findEv(result.effects, 'gene:gene_incap_violence:incapable:violence');
+    ok(ev != null, 'CE-GN-003 violence evidence exists');
+    ok(ev && ev.type === 'disableWorkTag', 'CE-GN-003 violence classified as disableWorkTag');
+  }
+
+  // CE-GN-004: Unresolvable gene in unresolvedSources
+  {
+    const pawn = mk('gn4', { geneDefIds: ['SomeFakeModGene_XYZ'] });
+    const result = CE.fromGenes(pawn);
+
+    ok(result.effects.length === 0, 'CE-GN-004 no effects for unknown gene');
+    ok(result.unresolved.length >= 1, 'CE-GN-004 has unresolved');
+    const ur = result.unresolved.find(u =>
+      u.sourceKind === 'gene' && u.sourceId === 'SomeFakeModGene_XYZ');
+    ok(ur != null, 'CE-GN-004 unresolved entry exists');
+    ok(ur && ur.reason && ur.reason.indexOf('could not be resolved') >= 0,
+      'CE-GN-004 unresolved reason');
+  }
+
+  // CE-GN-005: derivedContext for xenotype-template-sourced genes
+  {
+    // Set up a xenotype with a known gene, then create a pawn without geneDefIds
+    App.state.customXenotypes['testXenoGn5'] = {
+      label: 'Test Xeno', color: '#fff', genes: ['gene_shooting_great'],
+      skillMods: {}, incapable: [], passions: [], uvSensitivity: 0,
+    };
+    const pawn = mk('gn5', { xenotype: 'testXenoGn5' });
+    // No geneDefIds - falls back to xenotype template
+    const result = CE.fromGenes(pawn);
+
+    const ev = findEv(result.effects, 'gene:gene_shooting_great:skillMods:shoot');
+    ok(ev != null, 'CE-GN-005 template gene evidence exists');
+    ok(ev && ev.derivedContext != null, 'CE-GN-005 derivedContext present');
+    ok(ev && ev.derivedContext && ev.derivedContext.xenotypeId === 'testXenoGn5',
+      'CE-GN-005 derivedContext xenotypeId');
+    ok(ev && ev.derivedContext && ev.derivedContext.origin === 'xenotypeTemplate',
+      'CE-GN-005 derivedContext origin');
+    delete App.state.customXenotypes['testXenoGn5'];
+  }
+
+  // CE-GN-006: Explicit pawn genes preferred over template
+  {
+    App.state.customXenotypes['testXenoGn6'] = {
+      label: 'Test Xeno 6', color: '#fff', genes: ['gene_melee_great'],
+      skillMods: {}, incapable: [], passions: [], uvSensitivity: 0,
+    };
+    const pawn = mk('gn6', {
+      xenotype: 'testXenoGn6',
+      geneDefIds: ['gene_shooting_good'],
+    });
+    const result = CE.fromGenes(pawn);
+
+    // Should have shooting from pawnState, NOT melee from template
+    const shootEv = findEv(result.effects, 'gene:gene_shooting_good:skillMods:shoot');
+    ok(shootEv != null, 'CE-GN-006 pawnState gene used');
+    ok(shootEv && shootEv.derivedContext === null, 'CE-GN-006 no derivedContext for pawnState');
+
+    const meleeEv = findEv(result.effects, 'gene:gene_melee_great:skillMods:melee');
+    ok(meleeEv == null, 'CE-GN-006 template gene NOT used when pawnState present');
+    delete App.state.customXenotypes['testXenoGn6'];
+  }
+
+  // CE-GN-007: moveSpeed preserved as unresolved, NOT mapped to Moving capacity
+  {
+    const pawn = mk('gn7', { geneDefIds: ['gene_fast_runner'] });
+    const result = CE.fromGenes(pawn);
+
+    // No capacity evidence for Moving
+    const movingEffects = result.effects.filter(e => e.target === 'moving');
+    ok(movingEffects.length === 0, 'CE-GN-007 moveSpeed not mapped to Moving capacity');
+
+    // Should be in unresolved with rawTarget 'moveSpeed'
+    const ur = result.unresolved.find(u =>
+      u.sourceKind === 'gene' && u.rawTarget === 'moveSpeed');
+    ok(ur != null, 'CE-GN-007 moveSpeed in unresolved');
+    ok(ur && ur.rawData === 0.4, 'CE-GN-007 moveSpeed rawData preserved');
+  }
+
+  // CE-GN-008: Gene workSpeed as statOffset (modded gene with workSpeed)
+  {
+    App.state.customGenes['modded_gene_fast_work'] = {
+      id: 'modded_gene_fast_work', label: 'Modded Fast Work',
+      workSpeed: 0.25, modId: 'test.mod.genes',
+    };
+    const pawn = mk('gn8', { geneDefIds: ['modded_gene_fast_work'] });
+    const result = CE.fromGenes(pawn);
+
+    const wsEv = findEv(result.effects, 'gene:modded_gene_fast_work:workSpeed');
+    ok(wsEv != null, 'CE-GN-008 workSpeed evidence exists');
+    ok(wsEv && wsEv.type === 'statOffset', 'CE-GN-008 workSpeed type');
+    ok(wsEv && wsEv.target === 'workSpeedGlobal', 'CE-GN-008 workSpeed target');
+    ok(wsEv && Math.abs(wsEv.value - 0.25) < 1e-10, 'CE-GN-008 workSpeed value');
+    delete App.state.customGenes['modded_gene_fast_work'];
+  }
+
+  // CE-GN-009: Gene learningRate as statFactor (1 + offset)
+  {
+    const pawn = mk('gn9', { geneDefIds: ['gene_quick_study'] });
+    const result = CE.fromGenes(pawn);
+
+    const lrEv = findEv(result.effects, 'gene:gene_quick_study:learningRate');
+    ok(lrEv != null, 'CE-GN-009 learningRate evidence exists');
+    ok(lrEv && lrEv.type === 'statFactor', 'CE-GN-009 learningRate type is statFactor');
+    ok(lrEv && lrEv.target === 'learningRate', 'CE-GN-009 learningRate target');
+    ok(lrEv && Math.abs(lrEv.value - 1.5) < 1e-10,
+      'CE-GN-009 learningRate value is 1.5 (1 + 0.5)');
+  }
+
+  // CE-GN-010: modId preserved for custom/modded genes
+  {
+    App.state.customGenes['modded_gene_crafty'] = {
+      id: 'modded_gene_crafty', label: 'Crafty Gene',
+      skillMods: { craft: 6 }, modId: 'craft.mod.id',
+    };
+    const pawn = mk('gn10', { geneDefIds: ['modded_gene_crafty'] });
+    const result = CE.fromGenes(pawn);
+
+    const ev = findEv(result.effects, 'gene:modded_gene_crafty:skillMods:craft');
+    ok(ev != null, 'CE-GN-010 modded gene evidence exists');
+    ok(ev && ev.provenance.modId === 'craft.mod.id', 'CE-GN-010 modId preserved');
+    ok(ev && ev.confidence === 'inferred', 'CE-GN-010 modded gene confidence inferred');
+    delete App.state.customGenes['modded_gene_crafty'];
+  }
+
+  // CE-GN-011: No gene identity checks leak outside adapter
+  // (gene adapter returns only standard evidence records, not raw gene defs)
+  {
+    const pawn = mk('gn11', { geneDefIds: ['gene_shooting_great', 'gene_no_sleep'] });
+    const result = CE.fromGenes(pawn);
+
+    for (const ev of result.effects) {
+      ok(ev.evidenceId != null, 'CE-GN-011 ' + ev.evidenceId + ' has evidenceId');
+      ok(ev.type != null, 'CE-GN-011 ' + ev.evidenceId + ' has type');
+      ok(ev.provenance != null, 'CE-GN-011 ' + ev.evidenceId + ' has provenance');
+      ok(ev.confidence != null, 'CE-GN-011 ' + ev.evidenceId + ' has confidence');
+      // No raw gene definition leaking
+      ok(ev.category == null, 'CE-GN-011 ' + ev.evidenceId + ' no category leak');
+      ok(ev.description == null, 'CE-GN-011 ' + ev.evidenceId + ' no description leak');
+    }
+  }
+
+  // ======================================================================
   // CROSS-ADAPTER: include trait adapter in unique-ID check
   // ======================================================================
 
-  // CE-XA-002: Combined evidence from all four adapters has unique IDs
+  // CE-XA-002: Combined evidence from all five adapters has unique IDs
   {
     const savedFn = App.getIdeoEffects;
     App.getIdeoEffects = () => ({ mood: 0, workSpeed: 0, combatSkill: 1, socialSkill: 0, researchSpeed: 0 });
     const pawn = mk('xa2', {
       childhood: 'ArtisanFarmer23', role: 'leader',
-      traits: ['industrious', 'night_owl']
+      traits: ['industrious', 'night_owl'],
+      geneDefIds: ['gene_shooting_great', 'gene_no_sleep'],
     });
 
     const bsResult = CE.fromBackstories(pawn);
     const roleResult = CE.fromRole(pawn);
     const ideoResult = CE.fromIdeology(pawn);
     const traitResult = CE.fromTraits(pawn);
+    const geneResult = CE.fromGenes(pawn);
 
     const allEffects = [
       ...bsResult.effects, ...roleResult.effects,
-      ...ideoResult.effects, ...traitResult.effects
+      ...ideoResult.effects, ...traitResult.effects,
+      ...geneResult.effects
     ];
     const ids = allEffects.map(e => e.evidenceId);
     const idSet = new Set(ids);
-    ok(idSet.size === ids.length, 'CE-XA-002 all cross-adapter evidence IDs unique (with traits)');
+    ok(idSet.size === ids.length, 'CE-XA-002 all cross-adapter evidence IDs unique (with traits and genes)');
 
     App.getIdeoEffects = savedFn;
   }
