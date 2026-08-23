@@ -502,7 +502,119 @@ const CapabilityEvidence = {
 
     return { effects, unresolved };
   },
-  fromGenes(pawn) { return { effects: [], unresolved: [] }; },
+  fromGenes(pawn) {
+    const effects = [];
+    const unresolved = [];
+    if (!pawn) return { effects, unresolved };
+
+    const refs = _geneRefsForPawn(pawn);
+    if (refs.length === 0) return { effects, unresolved };
+
+    const allGenes = typeof GENES !== 'undefined' ? GENES : [];
+    const customGenes = (typeof App !== 'undefined' && App.state && App.state.customGenes)
+      ? App.state.customGenes : {};
+
+    for (let i = 0; i < refs.length; i++) {
+      const ref = refs[i];
+      const gId = ref.geneId;
+      if (!gId) continue;
+
+      // Resolve gene definition (mirrors App._resolveGeneDef)
+      const def = allGenes.find(g => g.id === gId)
+        || customGenes[gId]
+        || (typeof _sanId === 'function' ? customGenes['mod_gene_' + _sanId(gId)] : null)
+        || null;
+
+      if (!def) {
+        unresolved.push(_makeUnresolved('gene', gId,
+          'Gene could not be resolved',
+          {
+            rawTarget: gId,
+            derivedContext: ref.origin === 'xenotypeTemplate'
+              ? { xenotypeId: ref.xenotypeId, origin: 'xenotypeTemplate' }
+              : null,
+          }));
+        continue;
+      }
+
+      const modId = _modIdOf(def);
+      const provenance = { sourceKind: 'gene', sourceId: gId, modId };
+      const confidence = modId ? 'inferred' : 'verified';
+      const derivedCtx = ref.origin === 'xenotypeTemplate'
+        ? { xenotypeId: ref.xenotypeId, origin: 'xenotypeTemplate' }
+        : null;
+      const baseOpts = derivedCtx ? { derivedContext: derivedCtx } : {};
+
+      // Skill modifiers
+      if (def.skillMods) {
+        const entries = Object.entries(def.skillMods);
+        for (let s = 0; s < entries.length; s++) {
+          const skillId = entries[s][0];
+          const val = entries[s][1];
+          if (val === 0) continue;
+          const eid = 'gene:' + gId + ':skillMods:' + skillId;
+          effects.push(_makeEvidence(eid, 'skillOffset', skillId, val,
+            provenance, confidence, baseOpts));
+        }
+      }
+
+      // Work speed (offset)
+      if (def.workSpeed && def.workSpeed !== 0) {
+        const eid = 'gene:' + gId + ':workSpeed';
+        effects.push(_makeEvidence(eid, 'statOffset', STAT.WORK_SPEED_GLOBAL,
+          def.workSpeed, provenance, confidence, baseOpts));
+      }
+
+      // Learning rate - stored as offset, emit as factor (1 + offset)
+      if (def.learningRate && def.learningRate !== 0) {
+        const eid = 'gene:' + gId + ':learningRate';
+        effects.push(_makeEvidence(eid, 'statFactor', STAT.LEARNING_RATE,
+          1 + def.learningRate, provenance, confidence, baseOpts));
+      }
+
+      // Move speed - NOT mapped to Moving capacity, preserved as unresolved
+      if (def.moveSpeed && def.moveSpeed !== 0) {
+        unresolved.push(_makeUnresolved('gene', gId,
+          'moveSpeed is a stat, not a capacity',
+          {
+            rawTarget: 'moveSpeed',
+            rawData: def.moveSpeed,
+            modId: modId,
+            derivedContext: derivedCtx,
+          }));
+      }
+
+      // Permission entries (incapable)
+      if (def.incapable) {
+        for (let c = 0; c < def.incapable.length; c++) {
+          const incapId = def.incapable[c];
+          const eid = 'gene:' + gId + ':incapable:' + incapId;
+          _classifyIncap(incapId, effects, unresolved, {
+            evidenceId: eid,
+            provenance,
+            confidence,
+            opts: baseOpts,
+          });
+        }
+      }
+
+      // Sleepless gene (gene_no_sleep) - emit sleepHoursOverride 0
+      if (def.id === 'gene_no_sleep' || def.label === 'Sleepless') {
+        const eid = 'gene:' + gId + ':sleepHoursOverride';
+        effects.push(_makeEvidence(eid, 'sleepHoursOverride', null, 0,
+          provenance, confidence, baseOpts));
+      }
+
+      // Low Sleep gene (matched by id pattern, same as engine.js)
+      if (def.id !== 'gene_no_sleep' && /low_?sleep/i.test(String(def.id || gId))) {
+        const eid = 'gene:' + gId + ':sleepHoursOverride';
+        effects.push(_makeEvidence(eid, 'sleepHoursOverride', null, 3,
+          provenance, confidence, baseOpts));
+      }
+    }
+
+    return { effects, unresolved };
+  },
   fromXenotype(pawn) { return { effects: [], unresolved: [] }; },
   fromBackstories(pawn) {
     const effects = [];
