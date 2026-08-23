@@ -936,8 +936,128 @@ const CapabilityEvidence = {
     return { effects, unresolved };
   },
 
-  bodyEvidenceFromPawnHealth(pawn) { return []; },
-  effectsFromHediffDefinitions(pawn) { return { effects: [], unresolved: [] }; },
+  bodyEvidenceFromPawnHealth(pawn) {
+    if (!pawn || !Array.isArray(pawn.health) || !pawn.health.length) return [];
+    const results = [];
+    for (const hi of pawn.health) {
+      if (!hi || !hi.def) continue;
+      const rawIdx = hi.partIdx;
+      const hasPartRef = rawIdx != null && rawIdx >= 0;
+      const resolved = hasPartRef ? _resolveBodyPart(pawn, rawIdx) : null;
+      const pId = resolved ? resolved.partId : null;
+      const pDef = resolved ? resolved.partDef : null;
+      const pSide = resolved ? resolved.side : null;
+      const pParent = resolved ? resolved.parentPartDef : null;
+      const modId = (typeof App !== 'undefined' && App.state && App.state.defSources)
+        ? (App.state.defSources[hi.def] || null) : null;
+      const prov = { sourceKind: 'healthSnapshot', sourceId: hi.def, modId };
+
+      if (hi.type === 'missing') {
+        if (!hasPartRef) continue;
+        results.push(_makeBodyEvidence('missing', {
+          partId: pId, partDef: pDef, side: pSide, parentPartDef: pParent,
+          provenance: prov,
+        }));
+      } else if (hi.type === 'replaced') {
+        results.push(_makeBodyEvidence('replacement', {
+          partId: pId, partDef: pDef, side: pSide, parentPartDef: pParent,
+          provenance: prov,
+          extra: { replacementDef: hi.def },
+        }));
+      } else if (hi.type === 'implant') {
+        results.push(_makeBodyEvidence('implant', {
+          partId: pId, partDef: pDef, side: pSide, parentPartDef: pParent,
+          provenance: prov,
+          extra: { implantDef: hi.def },
+        }));
+      } else {
+        results.push(_makeBodyEvidence('hediff', {
+          partId: pId, partDef: pDef, side: pSide,
+          provenance: prov,
+          extra: {
+            hediffDef: hi.def,
+            severity: hi.severity != null ? hi.severity : 0,
+            stage: null,
+          },
+        }));
+      }
+    }
+    return results;
+  },
+
+  effectsFromHediffDefinitions(pawn) {
+    const effects = [];
+    const unresolved = [];
+    if (!pawn || !Array.isArray(pawn.health) || !pawn.health.length) return { effects, unresolved };
+
+    const cat = (typeof App !== 'undefined' && App.state && Array.isArray(App.state.hediffCatalog))
+      ? App.state.hediffCatalog : [];
+    const catMap = {};
+    for (const c of cat) { if (c && c.def) catMap[c.def] = c; }
+
+    const defSources = (typeof App !== 'undefined' && App.state && App.state.defSources) || {};
+    const seenDefs = new Set();
+
+    for (const hi of pawn.health) {
+      if (!hi || !hi.def || seenDefs.has(hi.def)) continue;
+      seenDefs.add(hi.def);
+
+      const entry = catMap[hi.def];
+      if (!entry) continue;
+
+      const modId = defSources[hi.def] || null;
+      const provenance = { sourceKind: 'hediffDef', sourceId: hi.def, modId };
+      const confidence = modId ? 'inferred' : 'verified';
+
+      if (!Array.isArray(entry.disabledWorkStages) || !entry.disabledWorkStages.length) continue;
+
+      const stages = entry.disabledWorkStages;
+      for (let si = 0; si < stages.length; si++) {
+        const stage = stages[si];
+        if (!stage.work || !stage.work.length) continue;
+        const nextStage = si + 1 < stages.length ? stages[si + 1] : null;
+        const when = {
+          kind: 'hediffSeverity',
+          hediffDef: hi.def,
+          min: stage.min,
+          max: nextStage ? nextStage.min : null,
+          maxExclusive: true,
+        };
+        for (const incapId of stage.work) {
+          const eid = 'hediff:' + hi.def + ':' + incapId + ':s' + si;
+          _classifyIncap(incapId, effects, unresolved, {
+            evidenceId: eid,
+            provenance,
+            confidence,
+            opts: { when },
+          });
+        }
+      }
+    }
+
+    // Psycaster meditation: genuine profiling rule from engine.js optimizeSchedules.
+    // Pawns with a psylink hediff get 2 hours dedicated meditation time.
+    const healthArr = pawn.health;
+    let psyDef = null;
+    for (const h of healthArr) {
+      if (!h || !h.def) continue;
+      if (/psylink|psychicamp/i.test(h.def) || h.hediffClass === 'Hediff_Psylink') {
+        psyDef = h.def;
+        break;
+      }
+    }
+    if (psyDef) {
+      effects.push(_makeEvidence(
+        'hediff:pawn:psycaster:meditation',
+        'requiredActivity', null, 2,
+        { sourceKind: 'hediff', sourceId: psyDef },
+        'derived',
+        { fields: { activity: 'meditation', hours: 2 } }
+      ));
+    }
+
+    return { effects, unresolved };
+  },
 
   collectPawnEvidence(pawn) {
     return {
