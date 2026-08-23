@@ -1060,11 +1060,56 @@ const CapabilityEvidence = {
   },
 
   collectPawnEvidence(pawn) {
+    if (!pawn) {
+      return {
+        effects: [],
+        bodyEvidence: [],
+        pawnState: { age: null, lifeStage: null, currentStatus: {}, baseSkills: {}, basePassions: {} },
+        unresolvedSources: [],
+      };
+    }
+
+    const allEffects = [];
+    const allUnresolved = [];
+
+    const adapters = [
+      this.fromTraits(pawn),
+      this.fromGenes(pawn),
+      this.fromXenotype(pawn),
+      this.fromBackstories(pawn),
+      this.fromRole(pawn),
+      this.fromIdeology(pawn),
+      this.effectsFromHediffDefinitions(pawn),
+    ];
+    for (const result of adapters) {
+      if (result.effects) allEffects.push(...result.effects);
+      if (result.unresolved) allUnresolved.push(...result.unresolved);
+    }
+
+    const normalised = _normaliseEffects(allEffects, allUnresolved);
+    const bodyEvidence = this.bodyEvidenceFromPawnHealth(pawn);
+
+    const skills = pawn.skills || {};
+    const baseSkills = {};
+    for (const k of Object.keys(skills)) baseSkills[k] = skills[k];
+
+    const passions = pawn.passions || {};
+    const basePassions = {};
+    for (const k of Object.keys(passions)) basePassions[k] = passions[k];
+
     return {
-      effects: [],
-      bodyEvidence: [],
-      pawnState: {},
-      unresolvedSources: [],
+      effects: normalised,
+      bodyEvidence,
+      pawnState: {
+        age: pawn.bioAge == null ? null : pawn.bioAge,
+        lifeStage: pawn.lifeStage == null ? null : pawn.lifeStage,
+        currentStatus: {
+          downed: !!pawn.downed,
+        },
+        baseSkills,
+        basePassions,
+      },
+      unresolvedSources: allUnresolved,
     };
   },
 
