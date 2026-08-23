@@ -350,6 +350,67 @@ function _resolveBodyPart(pawn, partIdx) {
   });
 }
 
+// ─── Trait resolution ─────────────────────────────────────────────────────────
+
+function _resolveTraitStrict(traitId) {
+  if (!traitId) return null;
+  if (typeof TRAITS !== 'undefined') {
+    const found = TRAITS.find(t => t.id === traitId);
+    if (found) return found;
+  }
+  if (typeof App !== 'undefined' && App.state &&
+      App.state.customTraits && App.state.customTraits[traitId]) {
+    const ct = App.state.customTraits[traitId];
+    return Object.assign({}, ct, { id: traitId });
+  }
+  return null;
+}
+
+// Temporal trait mappings - verified against engine.js optimizeSchedules.
+// Night Owl: avoidAwake hours 11-17 (weight 4 in sleep-slot scoring),
+//            prefer hours 23-5 (comment: "gains 23h-6h", weight 2).
+// Quick Sleeper: sleepHours = 6.
+// Body Mastery: sleepHours = 0.
+// Ascetic: joyHours -= 1 (min 1).
+const _TEMPORAL_TRAITS = {
+  night_owl(traitId, provenance, confidence) {
+    const results = [];
+    results.push(_makeEvidence(
+      'trait:' + traitId + ':avoidHours', 'avoidHours', null, null,
+      provenance, confidence,
+      { fields: { hours: [11, 12, 13, 14, 15, 16, 17], weight: 4 } }
+    ));
+    results.push(_makeEvidence(
+      'trait:' + traitId + ':preferHours', 'preferHours', null, null,
+      provenance, confidence,
+      { fields: { hours: [23, 0, 1, 2, 3, 4, 5], weight: 2 } }
+    ));
+    return results;
+  },
+  quick_sleeper(traitId, provenance, confidence) {
+    return [_makeEvidence(
+      'trait:' + traitId + ':sleepHoursOverride', 'sleepHoursOverride',
+      null, 6, provenance, confidence
+    )];
+  },
+  body_mastery(traitId, provenance, confidence) {
+    return [_makeEvidence(
+      'trait:' + traitId + ':sleepHoursOverride', 'sleepHoursOverride',
+      null, 0, provenance, confidence
+    )];
+  },
+  ascetic(traitId, provenance, confidence) {
+    return [_makeEvidence(
+      'trait:' + traitId + ':recreationHoursRecommendation',
+      'recreationHoursRecommendation', null, -1,
+      provenance, confidence
+    )];
+  },
+};
+
+// Traits whose evidence is handled by other adapters (not emitted here).
+const _SKIP_TRAITS = new Set(['undergrounder']);
+
 // ─── Module object ─────────────────────────────────────────────────────────────
 
 const CapabilityEvidence = {
@@ -359,7 +420,88 @@ const CapabilityEvidence = {
   AUTHORITY_RANK: AUTHORITY_RANK,
   VALID_CONFIDENCE: VALID_CONFIDENCE,
 
-  fromTraits(pawn) { return { effects: [], unresolved: [] }; },
+  fromTraits(pawn) {
+    const effects = [];
+    const unresolved = [];
+    if (!pawn || !Array.isArray(pawn.traits)) return { effects, unresolved };
+
+    for (let i = 0; i < pawn.traits.length; i++) {
+      const traitId = pawn.traits[i];
+      if (!traitId) continue;
+
+      // Skip traits whose evidence belongs in another adapter
+      if (_SKIP_TRAITS.has(traitId)) continue;
+
+      const def = _resolveTraitStrict(traitId);
+      if (!def) {
+        unresolved.push(_makeUnresolved('trait', traitId,
+          'Trait could not be resolved', { rawTarget: traitId }));
+        continue;
+      }
+
+      const modId = _modIdOf(def);
+      const provenance = { sourceKind: 'trait', sourceId: traitId, modId };
+      const confidence = modId ? 'inferred' : 'verified';
+
+      // Skill modifiers
+      if (def.skillMods) {
+        const entries = Object.entries(def.skillMods);
+        for (let s = 0; s < entries.length; s++) {
+          const skillId = entries[s][0];
+          const val = entries[s][1];
+          if (val === 0) continue;
+          const eid = 'trait:' + traitId + ':skillMods:' + skillId;
+          effects.push(_makeEvidence(eid, 'skillOffset', skillId, val,
+            provenance, confidence));
+        }
+      }
+
+      // Work speed (offset)
+      if (def.workSpeed && def.workSpeed !== 0) {
+        const eid = 'trait:' + traitId + ':workSpeed';
+        effects.push(_makeEvidence(eid, 'statOffset', STAT.WORK_SPEED_GLOBAL,
+          def.workSpeed, provenance, confidence));
+      }
+
+      // Learning rate - stored as offset (0.75 = +75%), emit as factor (1.75)
+      if (def.learningRate && def.learningRate !== 0) {
+        const eid = 'trait:' + traitId + ':learningRate';
+        effects.push(_makeEvidence(eid, 'statFactor', STAT.LEARNING_RATE,
+          1 + def.learningRate, provenance, confidence));
+      }
+
+      // Mental break threshold (offset)
+      if (def.breakThreshold && def.breakThreshold !== 0) {
+        const eid = 'trait:' + traitId + ':breakThreshold';
+        effects.push(_makeEvidence(eid, 'statOffset',
+          STAT.MENTAL_BREAK_THRESHOLD, def.breakThreshold,
+          provenance, confidence));
+      }
+
+      // Permission entries (incapable)
+      if (def.incapable) {
+        for (let c = 0; c < def.incapable.length; c++) {
+          const incapId = def.incapable[c];
+          const eid = 'trait:' + traitId + ':incapable:' + incapId;
+          _classifyIncap(incapId, effects, unresolved, {
+            evidenceId: eid,
+            provenance,
+            confidence,
+          });
+        }
+      }
+
+      // Temporal mappings (scheduler-relevant evidence)
+      if (_TEMPORAL_TRAITS[traitId]) {
+        const temporal = _TEMPORAL_TRAITS[traitId](traitId, provenance, confidence);
+        for (let t = 0; t < temporal.length; t++) {
+          effects.push(temporal[t]);
+        }
+      }
+    }
+
+    return { effects, unresolved };
+  },
   fromGenes(pawn) { return { effects: [], unresolved: [] }; },
   fromXenotype(pawn) { return { effects: [], unresolved: [] }; },
   fromBackstories(pawn) {
@@ -529,6 +671,7 @@ const CapabilityEvidence = {
   _makeBodyEvidence: _makeBodyEvidence,
   _makeUnresolved: _makeUnresolved,
   _modIdOf: _modIdOf,
+  _resolveTraitStrict: _resolveTraitStrict,
   _KNOWN_JOB_IDS: _KNOWN_JOB_IDS,
   _KNOWN_INCAP_IDS: _KNOWN_INCAP_IDS,
 };
