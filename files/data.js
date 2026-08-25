@@ -868,6 +868,49 @@ function _makeCompleteness(completeness, reasons, provenance) {
   };
 }
 
+// C4 permission source preservation. These records sit beside the legacy
+// lower-case `incapable` projections; C1 continues to consume the legacy field.
+function _parsePermissionSource(scope, sourceField, targetKind) {
+  const el = _directChild(scope, sourceField);
+  const inherited = !!(scope && scope.hasAttribute && scope.hasAttribute('ParentName'));
+  if (!el) {
+    return {
+      sourceField,
+      targetKind,
+      presence: inherited ? 'unknown' : 'absent',
+      rawValue: null,
+      targets: [],
+      completeness: inherited ? 'unknown' : 'complete',
+    };
+  }
+  const listItems = _directChildren(el, 'li');
+  const tokens = listItems.length
+    ? listItems.map(li => String(li.textContent || '').trim()).filter(Boolean)
+    : String(el.textContent || '').split(',').map(value => value.trim()).filter(Boolean);
+  const targets = [];
+  let complete = true;
+  for (const rawTarget of tokens) {
+    if (/^none$/i.test(rawTarget)) continue;
+    let canonicalTarget = null;
+    if (targetKind === 'workTag') {
+      canonicalTarget = Object.prototype.hasOwnProperty.call(RIMWORLD_WORK_TAG_VALUES, rawTarget)
+        ? rawTarget : null;
+    } else if (/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(rawTarget)) {
+      canonicalTarget = rawTarget;
+    }
+    if (!canonicalTarget) complete = false;
+    targets.push({ rawTarget, canonicalTarget });
+  }
+  return {
+    sourceField,
+    targetKind,
+    presence: 'present',
+    rawValue: String(el.textContent || '').trim() || null,
+    targets,
+    completeness: complete ? 'complete' : 'partial',
+  };
+}
+
 // Parse scanned <TraitDef> XML into { id: traitObj }. "Names + basic data":
 // one entry per trait degree (what a pawn actually has), with skillGains mapped
 // to skillMods where the XML declares them. Renderer-only (uses DOMParser).
@@ -927,7 +970,11 @@ function parseTraitsFromXML(xmlString) {
         id, label: _capFirst((label || dn).trim()),
         description: 'Scanned from installed content.',
         workSpeed: 0, learningRate: 0, breakThreshold: 0,
-        skillMods: gainsOf(scope), modSource: 'Scanned mod'
+        skillMods: gainsOf(scope), modSource: 'Scanned mod',
+        permissionSources: [
+          _parsePermissionSource(tDef, 'disabledWorkTypes', 'workType'),
+          _parsePermissionSource(tDef, 'disabledWorkTags', 'workTag'),
+        ],
       };
       if (traitIncap.length) results[id].incapable = [...traitIncap];
     };
@@ -1185,7 +1232,11 @@ function parseHediffCatalogFromXML(xmlString) {
         if (hidden) anyHidden = true;
         if (capMods.length || partEfficiencyOffset != null || partIgnoreMissingHP != null
           || capacityFactorEffectMultiplier) anyCapMod = true;
-        disabledWorkStages.push({ min, work });
+        disabledWorkStages.push({
+          min,
+          work,
+          permissionSources: [_parsePermissionSource(li, 'disabledWorkTags', 'workTag')],
+        });
         hiddenStages.push({ min, hidden });
         capModStages.push({
           minSeverity: min,
@@ -1200,7 +1251,14 @@ function parseHediffCatalogFromXML(xmlString) {
       const work = [];
       const disabled = _directChild(h, 'disabledWorkTags');
       if (disabled) mapTags(disabled.textContent, work);
-      if (work.length) { anyDisable = true; disabledWorkStages.push({ min: 0, work }); }
+      if (work.length) {
+        anyDisable = true;
+        disabledWorkStages.push({
+          min: 0,
+          work,
+          permissionSources: [_parsePermissionSource(h, 'disabledWorkTags', 'workTag')],
+        });
+      }
     }
     const entry = {
       def,
@@ -1358,7 +1416,8 @@ function parseGenesFromXML(xmlString) {
     const id = 'mod_gene_' + _sanId(dn);
     const out = {
       id, label: _capFirst(label.trim()), category: _capFirst(cat),
-      description: desc, skillMods, modSource: 'Scanned mod'
+      description: desc, skillMods, modSource: 'Scanned mod',
+      permissionSources: [_parsePermissionSource(gDef, 'disabledWorkTags', 'workTag')],
     };
     if (incapable.length) out.incapable = [...new Set(incapable)];
     results[id] = out;
@@ -1439,7 +1498,17 @@ function parseBackstoriesFromXML(xmlString) {
         if (inc && incapable.indexOf(inc) < 0) incapable.push(inc);
       }
     }
-    results[dn] = { id: dn, slot, title, titleShort, desc, skills, incapable, modSource: 'Scanned' };
+    results[dn] = {
+      id: dn,
+      slot,
+      title,
+      titleShort,
+      desc,
+      skills,
+      incapable,
+      permissionSources: [_parsePermissionSource(b, 'workDisables', 'workTag')],
+      modSource: 'Scanned',
+    };
   }
   return results;
 }
@@ -1455,7 +1524,7 @@ const TRAITS = [
   { id: 'ascetic', label: 'Ascetic', description: 'Prefers simple lifestyle.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
   { id: 'greedy', label: 'Greedy', description: 'Needs impressive bedroom.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
   { id: 'jealous', label: 'Jealous', description: 'Dislikes others having better rooms.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
-  { id: 'pyromaniac', label: 'Pyromaniac', description: 'Loves fire; will start fires.', workSpeed: 0, learningRate: 0, breakThreshold: 0.08, skillMods: {}, incapable: ['firefight'] },
+  { id: 'pyromaniac', label: 'Pyromaniac', description: 'Loves fire; will start fires.', workSpeed: 0, learningRate: 0, breakThreshold: 0.08, skillMods: {}, incapable: ['firefight'], disabledWorkTagsExact: ['Firefighting'] },
   { id: 'bloodlust', label: 'Bloodlust', description: 'Rush from hurting people.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
   { id: 'cannibal', label: 'Cannibal', description: 'Likes eating human meat.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
   { id: 'psychopath', label: 'Psychopath', description: 'No empathy for others.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
@@ -1516,17 +1585,17 @@ const TRAITS = [
 // 'skilled_labor', which is safe because every role that disables Constructing also
 // disables Crafting (the other jobs skilled_labor blocks).
 const DEFAULT_ROLES = [
-  { id: 'none', label: 'No Role', skillMods: {}, workSpeed: 0, incap: [], description: 'Standard member.' },
-  { id: 'leader', label: 'Colony Leader', skillMods: { social: 4 }, workSpeed: 0.1, incap: [], description: 'Inspired leadership. +4 Social, +10% work speed. No work restrictions.' },
-  { id: 'guide', label: 'Moral Guide', skillMods: { social: 6 }, workSpeed: 0, incap: [], description: 'Spiritual focus. +6 Social. No work restrictions.' },
-  { id: 'production', label: 'Production Specialist', skillMods: { craft: 6, construct: 6 }, workSpeed: 0.5, incap: ['dumb_labor', 'animals', 'cooking', 'plantwork', 'mining'], description: 'Focus on efficiency. +6 Craft/Build, +50% work speed. Refuses dumb labour, animals, cooking, plant work and mining.' },
-  { id: 'shooting', label: 'Shooting Specialist', skillMods: { shoot: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'mining', 'skilled_labor'], description: 'Combat elite. +4 Shooting, Aiming speed bonus. Refuses crafting, cooking, plant work, mining and construction.' },
-  { id: 'melee', label: 'Melee Specialist', skillMods: { melee: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'mining', 'skilled_labor', 'hunting'], description: 'CQC Expert. +4 Melee. Refuses crafting, cooking, plant work, mining, construction and hunting.' },
-  { id: 'medical', label: 'Medical Specialist', skillMods: { medicine: 4 }, workSpeed: 0, incap: ['violence'], description: 'Master healer. +4 Medicine, +50% tend speed. Refuses all violence.' },
-  { id: 'mining', label: 'Mining Specialist', skillMods: { mine: 4 }, workSpeed: 0.5, incap: ['animals', 'crafting', 'cooking', 'plantwork', 'skilled_labor'], description: 'Deep driller. +4 Mining, +50% mining speed. Refuses animals, crafting, cooking, plant work and construction.' },
-  { id: 'plants', label: 'Plants Specialist', skillMods: { plant: 4 }, workSpeed: 0.5, incap: ['animals', 'crafting', 'cooking', 'skilled_labor', 'mining'], description: 'Green thumb. +4 Plants, +50% harvest yield/speed. Refuses animals, crafting, cooking, construction and mining.' },
-  { id: 'animal', label: 'Animal Specialist', skillMods: { animal: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'skilled_labor', 'mining'], description: 'Beast master. +4 Animals, +50% tame/train chance. Refuses crafting, cooking, plant work, construction and mining.' },
-  { id: 'research', label: 'Research Specialist', skillMods: { intel: 4 }, workSpeed: 0.5, incap: ['dumb_labor', 'animals', 'cooking', 'plantwork', 'mining'], description: 'Great thinker. +4 Intellectual, +50% research speed. Refuses dumb labour, animals, cooking, plant work and mining.' },
+  { id: 'none', label: 'No Role', skillMods: {}, workSpeed: 0, incap: [], disabledWorkTagsExact: [], description: 'Standard member.' },
+  { id: 'leader', label: 'Colony Leader', skillMods: { social: 4 }, workSpeed: 0.1, incap: [], disabledWorkTagsExact: [], description: 'Inspired leadership. +4 Social, +10% work speed. No work restrictions.' },
+  { id: 'guide', label: 'Moral Guide', skillMods: { social: 6 }, workSpeed: 0, incap: [], disabledWorkTagsExact: [], description: 'Spiritual focus. +6 Social. No work restrictions.' },
+  { id: 'production', label: 'Production Specialist', skillMods: { craft: 6, construct: 6 }, workSpeed: 0.5, incap: ['dumb_labor', 'animals', 'cooking', 'plantwork', 'mining'], disabledWorkTagsExact: ['ManualDumb', 'Animals', 'Cooking', 'PlantWork', 'Mining'], description: 'Focus on efficiency. +6 Craft/Build, +50% work speed. Refuses dumb labour, animals, cooking, plant work and mining.' },
+  { id: 'shooting', label: 'Shooting Specialist', skillMods: { shoot: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'mining', 'skilled_labor'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Mining', 'Constructing'], description: 'Combat elite. +4 Shooting, Aiming speed bonus. Refuses crafting, cooking, plant work, mining and construction.' },
+  { id: 'melee', label: 'Melee Specialist', skillMods: { melee: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'mining', 'skilled_labor', 'hunting'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Mining', 'Constructing', 'Hunting', 'Shooting'], description: 'CQC Expert. +4 Melee. Refuses crafting, cooking, plant work, mining, construction and hunting.' },
+  { id: 'medical', label: 'Medical Specialist', skillMods: { medicine: 4 }, workSpeed: 0, incap: ['violence'], disabledWorkTagsExact: ['Violent'], description: 'Master healer. +4 Medicine, +50% tend speed. Refuses all violence.' },
+  { id: 'mining', label: 'Mining Specialist', skillMods: { mine: 4 }, workSpeed: 0.5, incap: ['animals', 'crafting', 'cooking', 'plantwork', 'skilled_labor'], disabledWorkTagsExact: ['Animals', 'Crafting', 'Cooking', 'PlantWork', 'Constructing'], description: 'Deep driller. +4 Mining, +50% mining speed. Refuses animals, crafting, cooking, plant work and construction.' },
+  { id: 'plants', label: 'Plants Specialist', skillMods: { plant: 4 }, workSpeed: 0.5, incap: ['animals', 'crafting', 'cooking', 'skilled_labor', 'mining'], disabledWorkTagsExact: ['Animals', 'Crafting', 'Cooking', 'Constructing', 'Mining'], description: 'Green thumb. +4 Plants, +50% harvest yield/speed. Refuses animals, crafting, cooking, construction and mining.' },
+  { id: 'animal', label: 'Animal Specialist', skillMods: { animal: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'skilled_labor', 'mining'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Constructing', 'Mining'], description: 'Beast master. +4 Animals, +50% tame/train chance. Refuses crafting, cooking, plant work, construction and mining.' },
+  { id: 'research', label: 'Research Specialist', skillMods: { intel: 4 }, workSpeed: 0.5, incap: ['dumb_labor', 'animals', 'cooking', 'plantwork', 'mining'], disabledWorkTagsExact: ['ManualDumb', 'Animals', 'Cooking', 'PlantWork', 'Mining'], description: 'Great thinker. +4 Intellectual, +50% research speed. Refuses dumb labour, animals, cooking, plant work and mining.' },
 ];
 
 const INCAP_OPTIONS = [
@@ -1568,6 +1637,31 @@ const WORKTAG_TO_INCAP = {
   'Intellectual': 'research', 'intellectual': 'research',
   'Hunting': 'hunting', 'hunting': 'hunting'
 };
+
+// Exact Verse.WorkTags values from RimWorld 1.6.4871. Canonical C2/C4 code uses
+// this closed vocabulary; the legacy map above remains a C1 projection only.
+const RIMWORLD_WORK_TAG_VALUES = Object.freeze({
+  ManualDumb: 2,
+  ManualSkilled: 4,
+  Violent: 8,
+  Caring: 16,
+  Social: 32,
+  Commoner: 64,
+  Intellectual: 128,
+  Animals: 256,
+  Artistic: 512,
+  Crafting: 1024,
+  Cooking: 2048,
+  Firefighting: 4096,
+  Cleaning: 8192,
+  Hauling: 16384,
+  PlantWork: 32768,
+  Mining: 65536,
+  Hunting: 131072,
+  Constructing: 262144,
+  Shooting: 524288,
+  AllWork: 1048576,
+});
 
 const DEFAULT_PRECEPTS = [
   { id: 'research_speed', label: 'Research Speed', value: 1.0, type: 'multiplier', description: 'Global research output multiplier.' },
@@ -2076,9 +2170,9 @@ const GENES = [
   { id: 'gene_no_sleep',  label: 'Sleepless',   category: 'Needs', description: 'Does not need sleep.' },
   { id: 'gene_no_food',   label: 'Non-Eating',  category: 'Needs', description: 'Does not need food.' },
   // ── Incapable Genes ──
-  { id: 'gene_incap_violence',  label: 'Incapable of Violence',  category: 'Incapable', description: 'Cannot do violence.', incapable: ['violence'] },
-  { id: 'gene_incap_cooking',   label: 'Incapable of Cooking',   category: 'Incapable', description: 'Cannot cook.', incapable: ['cooking'] },
-  { id: 'gene_incap_caring',    label: 'Incapable of Caring',    category: 'Incapable', description: 'Cannot do caring work.', incapable: ['caring'] },
+  { id: 'gene_incap_violence',  label: 'Incapable of Violence',  category: 'Incapable', description: 'Cannot do violence.', incapable: ['violence'], disabledWorkTagsExact: ['Violent'] },
+  { id: 'gene_incap_cooking',   label: 'Incapable of Cooking',   category: 'Incapable', description: 'Cannot cook.', incapable: ['cooking'], disabledWorkTagsExact: ['Cooking'] },
+  { id: 'gene_incap_caring',    label: 'Incapable of Caring',    category: 'Incapable', description: 'Cannot do caring work.', incapable: ['caring'], disabledWorkTagsExact: ['Caring'] },
   // ── Appearance (cosmetic, no gameplay effect) ──
   { id: 'gene_fur',       label: 'Fur',         category: 'Cosmetic', description: 'Has fur.' },
   { id: 'gene_horns',     label: 'Horns',       category: 'Cosmetic', description: 'Has horns.' },
@@ -3652,5 +3746,13 @@ function resolveBackstory(id) {
     if (appId) skills[appId] = val;
   }
   const incapable = bs.workDisables.map(tag => WORKTAG_TO_INCAP[tag]).filter(Boolean);
-  return { id: bs.id, slot: bs.slot, title: bs.title, titleShort: bs.titleShort, skills, incapable };
+  return {
+    id: bs.id,
+    slot: bs.slot,
+    title: bs.title,
+    titleShort: bs.titleShort,
+    skills,
+    incapable,
+    disabledWorkTagsExact: bs.workDisables.slice(),
+  };
 }

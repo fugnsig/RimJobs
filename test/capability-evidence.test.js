@@ -7,6 +7,7 @@
  */
 const { loadScripts } = require('./_harness');
 const vm = require('vm');
+const { DOMParserShim } = require('./_xml-dom-shim');
 
 module.exports = function run() {
   const App = {
@@ -32,8 +33,9 @@ module.exports = function run() {
     _passionValue() { return 0; },
   };
 
-  const ctx = loadScripts(['data.js', 'engine.js', 'app-pawns.js', 'capability-evidence.js'], {
+  const ctx = loadScripts(['data.js', 'engine.js', 'app-pawns.js', 'app-save.js', 'capability-evidence.js'], {
     App,
+    DOMParser: DOMParserShim,
     document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] },
     window: {},
     localStorage: { getItem: () => null, setItem: () => {} },
@@ -45,6 +47,10 @@ module.exports = function run() {
     'globalThis._DR = DEFAULT_ROLES',
     'globalThis._TR = TRAITS',
     'globalThis._CE = CapabilityEvidence',
+    'globalThis._parseC4Traits = parseTraitsFromXML',
+    'globalThis._parseC4Genes = parseGenesFromXML',
+    'globalThis._parseC4Backstories = parseBackstoriesFromXML',
+    'globalThis._parseC4Hediffs = parseHediffCatalogFromXML',
   ].join(';'), ctx);
 
   const DR = ctx._DR;
@@ -1966,6 +1972,128 @@ module.exports = function run() {
       'CE-AG-020 role effects unique (conservation)');
     ok(roleEffects.length >= 1, 'CE-AG-020 role effects present');
     App.getIdeoEffects = savedFn;
+  }
+
+  // ======================================================================
+  // C4 PERMISSION SOURCE PRESERVATION
+  // ======================================================================
+
+  {
+    const parsed = ctx._parseC4Traits('<Defs><TraitDef><defName>TypedTrait</defName>'
+      + '<label>typed</label><disabledWorkTypes><li>Doctor</li></disabledWorkTypes>'
+      + '<disabledWorkTags>Caring, Commoner</disabledWorkTags></TraitDef></Defs>');
+    const def = parsed.mod_trait_typedtrait;
+    const workType = def.permissionSources.find(source => source.targetKind === 'workType');
+    const workTag = def.permissionSources.find(source => source.targetKind === 'workTag');
+    ok(workType.targets[0].canonicalTarget === 'Doctor',
+      'CE-C4P-001 TraitDef disabledWorkTypes preserved as WorkType target');
+    ok(workTag.targets.map(target => target.canonicalTarget).join(',') === 'Caring,Commoner',
+      'CE-C4P-002 TraitDef exact WorkTags preserved without legacy mapping');
+  }
+
+  {
+    const parsed = ctx._parseC4Genes('<Defs><GeneDef><defName>TypedGene</defName>'
+      + '<label>typed</label><disabledWorkTags>Violent, Caring</disabledWorkTags>'
+      + '</GeneDef></Defs>');
+    const source = parsed.mod_gene_typedgene.permissionSources[0];
+    ok(source.targets.length === 2 && source.targets[0].canonicalTarget === 'Violent'
+      && source.targets[1].canonicalTarget === 'Caring',
+    'CE-C4P-003 scalar GeneDef flags are parsed exactly');
+  }
+
+  {
+    const parsed = ctx._parseC4Backstories('<Defs><BackstoryDef><defName>TypedStory</defName>'
+      + '<slot>Adult</slot><title>typed</title><workDisables>ManualDumb, AllWork</workDisables>'
+      + '</BackstoryDef></Defs>');
+    const source = parsed.TypedStory.permissionSources[0];
+    ok(source.targets.map(target => target.canonicalTarget).join(',') === 'ManualDumb,AllWork',
+      'CE-C4P-004 Backstory exact flags preserve AllWork');
+  }
+
+  {
+    const parsed = ctx._parseC4Hediffs('<Defs><HediffDef><defName>TypedCondition</defName>'
+      + '<stages><li><minSeverity>0.4</minSeverity><disabledWorkTags>Commoner, Shooting</disabledWorkTags>'
+      + '</li></stages></HediffDef></Defs>');
+    const source = parsed[0].disabledWorkStages[0].permissionSources[0];
+    ok(source.targets.map(target => target.canonicalTarget).join(',') === 'Commoner,Shooting',
+      'CE-C4P-005 Hediff stage preserves tags absent from legacy incap vocabulary');
+  }
+
+  {
+    const role = DR.find(item => item.id === 'melee');
+    ok(role.disabledWorkTagsExact.includes('Shooting')
+      && role.disabledWorkTagsExact.includes('Constructing'),
+    'CE-C4P-006 curated role retains exact audited tags');
+  }
+
+  {
+    App.state.customTraits.typed_permission = {
+      label: 'Typed permission', skillMods: {}, incapable: [],
+      permissionSources: [
+        { sourceField: 'disabledWorkTypes', targetKind: 'workType', presence: 'present',
+          rawValue: 'Doctor', completeness: 'complete',
+          targets: [{ rawTarget: 'Doctor', canonicalTarget: 'Doctor' }] },
+        { sourceField: 'disabledWorkTags', targetKind: 'workTag', presence: 'present',
+          rawValue: 'AllWork', completeness: 'complete',
+          targets: [{ rawTarget: 'AllWork', canonicalTarget: 'AllWork' }] },
+      ],
+    };
+    const result = CE.fromTraits(mk('c4p7', { traits: ['typed_permission'] }));
+    ok(result.effects.some(effect => effect.type === 'disableWorkType' && effect.target === 'Doctor'),
+      'CE-C4P-007 C2 emits typed WorkType restriction without relabelling it as a job');
+    ok(result.effects.some(effect => effect.type === 'disableWorkTag' && effect.target === 'AllWork'),
+      'CE-C4P-008 C2 emits exact AllWork restriction');
+    delete App.state.customTraits.typed_permission;
+  }
+
+  {
+    const effects = [];
+    const unresolved = [];
+    CE._classifyIncap('firefight', effects, unresolved, {
+      evidenceId: 'legacy:firefight',
+      provenance: { sourceKind: 'fixture', sourceId: 'fixture' },
+      confidence: 'verified',
+    });
+    const candidates = unresolved[0].candidateTargets || [];
+    ok(candidates.some(candidate => candidate.kind === 'job' && candidate.target === 'firefight')
+      && candidates.some(candidate => candidate.kind === 'workTag' && candidate.target === 'Firefighting'),
+    'CE-C4P-009 legacy ambiguity preserves structured job and exact WorkTag candidates');
+  }
+
+  {
+    const source = ctx.App._parsePermissionSourceValue(
+      'Violent, Caring, SomeMod_CustomWork',
+      'disabledWorkTags'
+    );
+    ok(source.rawValue === 'Violent, Caring, SomeMod_CustomWork'
+      && source.completeness === 'partial',
+    'CE-C4P-010 save seam preserves raw permission source without claiming completeness');
+    ok(source.targets.some(item => item.canonicalTarget === 'Violent')
+      && source.targets.some(item => item.rawTarget === 'SomeMod_CustomWork'
+        && item.canonicalTarget === null),
+    'CE-C4P-011 save seam separates canonical and unresolved WorkTags');
+  }
+
+  {
+    const pawn = mk('c4p10', {
+      incapable: ['violence'],
+      permissionSources: [{
+        sourceField: 'disabledWorkTags', targetKind: 'workTag', presence: 'present',
+        rawValue: 'Violent, SomeMod_CustomWork', completeness: 'partial',
+        targets: [
+          { rawTarget: 'Violent', canonicalTarget: 'Violent' },
+          { rawTarget: 'SomeMod_CustomWork', canonicalTarget: null },
+        ],
+      }],
+    });
+    const result = CE.collectPawnEvidence(pawn);
+    ok(result.permissionEvidence.legacyIncapable.join(',') === 'violence'
+      && result.permissionEvidence.rawSources[0].rawValue === 'Violent, SomeMod_CustomWork',
+    'CE-C4P-012 pawn legacy and raw permission evidence are preserved separately');
+    ok(result.effects.some(effect => effect.type === 'disableWorkTag' && effect.target === 'Violent'),
+      'CE-C4P-013 known pawn raw WorkTag emits exact canonical evidence');
+    ok(result.unresolvedSources.some(source => source.rawTarget === 'SomeMod_CustomWork'),
+      'CE-C4P-014 unknown pawn raw WorkTag remains unresolved');
   }
 
   return { name: 'capability evidence (C2 adapters)', failures, total };
