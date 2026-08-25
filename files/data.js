@@ -1138,6 +1138,7 @@ function parseHediffCatalogFromXML(xmlString) {
         const capMods = [];
         let partEfficiencyOffset = null;
         let partIgnoreMissingHP = null;
+        let capacityFactorEffectMultiplier = null;
         // Only this stage's own direct children, not descendants of nested defs.
         _elementChildren(li).forEach(c => {
           if (!c.tagName) return;
@@ -1159,6 +1160,9 @@ function parseHediffCatalogFromXML(xmlString) {
             else if (/^false$/i.test(raw)) partIgnoreMissingHP = false;
             else completenessReasons.push('unparseableRelevantField');
           }
+          if (t === 'capacityfactoreffectmultiplier') {
+            capacityFactorEffectMultiplier = String(c.textContent || '').trim() || null;
+          }
           // C3: capMods - capacity modifier list per stage
           if (t === 'capmods') {
             _elementChildren(c).forEach(modLi => {
@@ -1179,10 +1183,17 @@ function parseHediffCatalogFromXML(xmlString) {
         });
         if (work.length) anyDisable = true;
         if (hidden) anyHidden = true;
-        if (capMods.length || partEfficiencyOffset != null || partIgnoreMissingHP != null) anyCapMod = true;
+        if (capMods.length || partEfficiencyOffset != null || partIgnoreMissingHP != null
+          || capacityFactorEffectMultiplier) anyCapMod = true;
         disabledWorkStages.push({ min, work });
         hiddenStages.push({ min, hidden });
-        capModStages.push({ minSeverity: min, capMods, partEfficiencyOffset, partIgnoreMissingHP });
+        capModStages.push({
+          minSeverity: min,
+          capMods,
+          partEfficiencyOffset,
+          partIgnoreMissingHP,
+          capacityFactorEffectMultiplier,
+        });
       });
     } else {
       // No <stages> block but a stray top-level disabledWorkTags: treat as always-on.
