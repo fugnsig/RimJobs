@@ -183,7 +183,10 @@ module.exports = function run() {
     },
   };
   const tags = {
-    NodeAlpha: ['ConsciousnessSource', 'Pelvis', 'Spine'],
+    NodeAlpha: [
+      'ConsciousnessSource', 'Pelvis', 'Spine', 'BloodPumpingSource',
+      'BreathingSource', 'BloodFiltrationSource',
+    ],
     NodeBeta: ['ManipulationLimbCore'],
     NodeGamma: ['ManipulationLimbSegment'],
     NodeDelta: ['ManipulationLimbDigit'],
@@ -493,6 +496,217 @@ module.exports = function run() {
   ok(graph.NotApplicableNode.state === 'notApplicable'
     && graph.NotApplicableDependent.reason === 'unresolvedDependency',
   'CR-B1-003 required notApplicable dependency cannot be used as a numeric value');
+
+  const snapshotPartition = resolver.classifyEvidenceForSnapshot([
+    { persistence: 'persistent', marker: 'p' },
+    { persistence: 'temporary', marker: 't' },
+    { persistence: 'unknown', marker: 'u' },
+  ]);
+  ok(snapshotPartition.structuralEvidence.map(item => item.marker).join('') === 'p',
+    'CR-C1-001 structural snapshot includes only proven persistent evidence');
+  ok(snapshotPartition.currentEvidence.map(item => item.marker).join('') === 'ptu',
+    'CR-C1-002 current snapshot includes every active observation');
+  ok(snapshotPartition.unresolvedPersistenceEvidence.map(item => item.marker).join('') === 'u',
+    'CR-C1-003 unknown persistence is retained separately for relevance checks');
+
+  const orchestratorCapacityDefs = {
+    Consciousness: { defName: 'Consciousness', workerClass: 'PawnCapacityWorker_Consciousness', minValue: 0 },
+    Manipulation: {
+      defName: 'Manipulation', workerClass: 'PawnCapacityWorker_Manipulation', minValue: 0,
+      zeroIfCannotBeAwake: true,
+    },
+    Moving: {
+      defName: 'Moving', workerClass: 'PawnCapacityWorker_Moving', minValue: 0,
+      zeroIfCannotBeAwake: true,
+    },
+    Sight: { defName: 'Sight', workerClass: 'PawnCapacityWorker_Sight', minValue: 0 },
+    Talking: {
+      defName: 'Talking', workerClass: 'PawnCapacityWorker_Talking', minValue: 0,
+      zeroIfCannotBeAwake: true,
+    },
+    Hearing: { defName: 'Hearing', workerClass: 'PawnCapacityWorker_Hearing', minValue: 0 },
+    BloodPumping: { defName: 'BloodPumping', workerClass: 'PawnCapacityWorker_BloodPumping', minValue: 0 },
+    Breathing: { defName: 'Breathing', workerClass: 'PawnCapacityWorker_Breathing', minValue: 0 },
+    BloodFiltration: {
+      defName: 'BloodFiltration', workerClass: 'PawnCapacityWorker_BloodFiltration', minValue: 0,
+    },
+    Mystery: { defName: 'Mystery', workerClass: 'Example.CustomWorker', minValue: 0 },
+  };
+  const orchestratorDefinitions = {
+    raceBodyMap: {
+      RaceDelta: { bodyDefName: 'FormDelta', _completeness: 'complete' },
+    },
+    bodyDefs: { FormDelta: workerBody },
+    bodyPartDefs: workerPartDefs,
+    capacityDefs: orchestratorCapacityDefs,
+    hediffCatalog: [],
+    prostheticEfficiency: {},
+    completeness: {},
+  };
+  const orchestratorPawn = {
+    pawnState: {
+      raceDefName: 'RaceDelta',
+      alwaysDowned: false,
+      currentStatus: { canBeAwake: true, painTotal: 0 },
+    },
+    bodyEvidence: [],
+  };
+  const fullHealthy = resolver.resolvePawnCapacities(orchestratorPawn, orchestratorDefinitions);
+  const publicCapacityKeys = ['consciousness', 'manipulation', 'moving', 'sight', 'talking', 'hearing'];
+  for (let i = 0; i < publicCapacityKeys.length; i++) {
+    const fact = fullHealthy.capacities[publicCapacityKeys[i]];
+    ok(fact.structural.state === 'resolved' && fact.structural.value === 1,
+      'CR-A1-00' + (i + 1) + ' synthetic non-human structural capacity resolves');
+    ok(fact.current.state === 'resolved' && fact.current.value === 1,
+      'CR-A1-01' + (i + 1) + ' synthetic non-human current capacity resolves');
+  }
+  ok(fullHealthy.capacities.mystery.structural.reason === 'unsupportedCapacityWorker'
+    && fullHealthy.capacities.sight.structural.state === 'resolved',
+  'CR-A2-003 unsupported capacity is isolated by the orchestrator');
+
+  const cannotBeAwake = resolver.resolvePawnCapacities(Object.assign({}, orchestratorPawn, {
+    pawnState: Object.assign({}, orchestratorPawn.pawnState, {
+      alwaysDowned: null,
+      currentStatus: { canBeAwake: false, painTotal: null },
+    }),
+  }), orchestratorDefinitions);
+  ok(cannotBeAwake.capacities.moving.current.state === 'resolved'
+    && cannotBeAwake.capacities.moving.current.value === 0,
+  'CR-E5-004 graph applies awake gate before worker life-stage inputs');
+  ok(cannotBeAwake.capacities.manipulation.current.value === 0
+    && cannotBeAwake.capacities.talking.current.value === 0,
+  'CR-E5-005 awake gate short-circuits worker dependencies');
+
+  const capModCatalog = [{
+    def: 'UncertainCondition',
+    _completeness: 'complete',
+    capModStages: [{
+      minSeverity: 0,
+      partEfficiencyOffset: null,
+      partIgnoreMissingHP: null,
+      capMods: [{ capacity: 'Sight', offset: -0.2, postFactor: null, setMax: null }],
+    }],
+  }];
+  const capModObservation = {
+    kind: 'hediff',
+    hediffDef: 'UncertainCondition',
+    severity: 1,
+    rawPartIndex: null,
+    bodyDefReference: 'unknown',
+    persistence: 'unknown',
+    sourceObservationIndex: 31,
+  };
+  const unknownCapMod = resolver.resolvePawnCapacities(
+    Object.assign({}, orchestratorPawn, { bodyEvidence: [capModObservation] }),
+    Object.assign({}, orchestratorDefinitions, { hediffCatalog: capModCatalog })
+  );
+  ok(unknownCapMod.capacities.sight.structural.reason === 'unresolvedPersistence',
+    'CR-A6-001 unknown-persistence direct capMod blocks structural Sight');
+  ok(unknownCapMod.capacities.sight.current.state === 'resolved'
+    && unknownCapMod.capacities.sight.current.value === 0.8,
+  'CR-A6-002 unknown-persistence direct capMod applies to current Sight');
+  ok(unknownCapMod.capacities.hearing.structural.state === 'resolved'
+    && unknownCapMod.capacities.hearing.structural.value === 1,
+  'CR-A6-003 direct Sight capMod does not poison unrelated Hearing');
+
+  const temporaryCapMod = resolver.resolvePawnCapacities(
+    Object.assign({}, orchestratorPawn, {
+      bodyEvidence: [Object.assign({}, capModObservation, { persistence: 'temporary' })],
+    }),
+    Object.assign({}, orchestratorDefinitions, { hediffCatalog: capModCatalog })
+  );
+  ok(temporaryCapMod.capacities.sight.structural.value === 1
+    && temporaryCapMod.capacities.sight.current.value === 0.8,
+  'CR-C2-001 explicitly temporary capMod affects current only');
+
+  const persistentCapMod = resolver.resolvePawnCapacities(
+    Object.assign({}, orchestratorPawn, {
+      bodyEvidence: [Object.assign({}, capModObservation, { persistence: 'persistent' })],
+    }),
+    Object.assign({}, orchestratorDefinitions, { hediffCatalog: capModCatalog })
+  );
+  ok(persistentCapMod.capacities.sight.structural.value === 0.8
+    && persistentCapMod.capacities.sight.current.value === 0.8,
+  'CR-C3-001 persistent capMod runs through the same worker pipeline in both snapshots');
+
+  const localCatalog = [{
+    def: 'LocalCondition',
+    category: 'condition',
+    _completeness: 'complete',
+    capModStages: [{
+      minSeverity: 0,
+      partEfficiencyOffset: -0.5,
+      partIgnoreMissingHP: false,
+      capMods: [],
+    }],
+  }];
+  const localObservation = {
+    kind: 'hediff',
+    hediffDef: 'LocalCondition',
+    severity: 1,
+    rawPartIndex: sightPartIndex,
+    bodyDefName: 'FormDelta',
+    bodyDefReference: 'explicit',
+    persistence: 'unknown',
+    sourceObservationIndex: 32,
+    provenance: { sourceKind: 'healthSnapshot', sourceId: 'LocalCondition' },
+  };
+  const relevantLocal = resolver.resolvePawnCapacities(
+    Object.assign({}, orchestratorPawn, { bodyEvidence: [localObservation] }),
+    Object.assign({}, orchestratorDefinitions, { hediffCatalog: localCatalog })
+  );
+  ok(relevantLocal.capacities.sight.structural.reason === 'unresolvedPersistence',
+    'CR-A6-004 unknown persistence on a consumed part blocks structural capacity');
+  ok(relevantLocal.capacities.sight.current.state === 'resolved'
+    && relevantLocal.capacities.sight.current.value === 0.88,
+  'CR-A6-005 current snapshot applies relevant local part efficiency evidence');
+  const partContribution = relevantLocal.capacities.sight.current.evidence
+    .find(item => item.kind === 'partContribution' && item.partIndex === sightPartIndex);
+  ok(partContribution && partContribution.sourceRef.sourceObservationIndex === 32
+    && partContribution.sourceRef.bodyDef === 'FormDelta',
+  'CR-A6-006 part provenance uses BodyDef, raw index and source observation');
+
+  const irrelevantLocal = resolver.resolvePawnCapacities(
+    Object.assign({}, orchestratorPawn, {
+      bodyEvidence: [Object.assign({}, localObservation, { rawPartIndex: hearingPartIndex })],
+    }),
+    Object.assign({}, orchestratorDefinitions, { hediffCatalog: localCatalog })
+  );
+  ok(irrelevantLocal.capacities.sight.structural.state === 'resolved'
+    && irrelevantLocal.capacities.sight.current.state === 'resolved'
+    && irrelevantLocal.capacities.sight.current.value === 1,
+  'CR-A6-007 unknown persistence on an irrelevant part does not poison Sight');
+
+  const replacementCatalog = [{
+    def: 'KnownReplacement', category: 'implant', _completeness: 'complete',
+  }];
+  const replacementObservation = {
+    kind: 'replacement',
+    replacementDef: 'KnownReplacement',
+    rawPartIndex: sightPartIndex,
+    bodyDefName: 'FormDelta',
+    bodyDefReference: 'explicit',
+    persistence: 'persistent',
+    sourceObservationIndex: 33,
+  };
+  const explicitProsthetic = resolver.resolvePawnCapacities(
+    Object.assign({}, orchestratorPawn, { bodyEvidence: [replacementObservation] }),
+    Object.assign({}, orchestratorDefinitions, {
+      hediffCatalog: replacementCatalog,
+      prostheticEfficiency: { KnownReplacement: { efficiency: 0.5 } },
+    })
+  );
+  ok(explicitProsthetic.capacities.sight.structural.value === 0.88
+    && explicitProsthetic.capacities.sight.current.value === 0.88,
+  'CR-C4-001 explicit prosthetic definitions flow through both snapshot calculations');
+
+  const bodyUnknownResult = resolver.resolvePawnCapacities({
+    pawnState: { raceDefName: 'AbsentRace', currentStatus: {} },
+    bodyEvidence: [],
+  }, orchestratorDefinitions);
+  ok(bodyUnknownResult.bodyIdentity.state === 'unknown'
+    && bodyUnknownResult.capacities.sight.structural.reason === 'bodyIdentityUnknown',
+  'CR-A8-004 missing body identity makes capacity facts explicitly unknown');
 
   const source = fs.readFileSync(path.join(__dirname, '..', 'files', 'capacity-resolver.js'), 'utf8');
   ok(!/raceDefName\s*={2,3}\s*['"]/.test(source), 'CR-F3-009 resolver has no race-name equality branch');
