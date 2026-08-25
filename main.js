@@ -545,7 +545,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   // next scan a file whose mtime+size still match is reused from the cache and its
   // bytes are never touched again. Bump CACHE_VERSION whenever the extraction
   // below changes, so stale fragments are discarded wholesale.
-  const CACHE_VERSION = 5; // v5: capacity definitions, provenance, and unapplied patch uncertainty
+  const CACHE_VERSION = 6; // v6: C4 work/race requirement fragments and scoped patch uncertainty
   let cacheFile = null;
   try { cacheFile = pathMod.join(app.getPath('userData'), 'scan-cache.json'); } catch (_) { cacheFile = null; }
   let oldFiles = {};
@@ -578,7 +578,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   const defSources = {}; // defName -> mod packageId (first writer wins)
   const addDefSources = (frag) => {
     if (!frag || !frag.pkg) return;
-    for (const part of [frag.tr, frag.ge, frag.bs, frag.re, frag.ah, frag.pa]) {
+    for (const part of [frag.tr, frag.ge, frag.bs, frag.re, frag.ah, frag.pa, frag.wt, frag.wg]) {
       if (!part) continue;
       for (const mm of part.matchAll(/<defName>([\w.\-]+)<\/defName>/g)) {
         if (!(mm[1] in defSources)) defSources[mm[1]] = frag.pkg;
@@ -591,6 +591,9 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     PawnCapacityDef: {},
     RaceThingDef: {},
     HediffDef: {},
+    WorkTypeDef: {},
+    WorkGiverDef: {},
+    RaceWorkSettings: {},
   };
   const definitionUncertainty = {
     byType: {
@@ -599,6 +602,9 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       PawnCapacityDef: {},
       RaceThingDef: {},
       HediffDef: {},
+      WorkTypeDef: {},
+      WorkGiverDef: {},
+      RaceWorkSettings: {},
     },
     dataset: {
       BodyDef: [],
@@ -606,7 +612,16 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       PawnCapacityDef: [],
       RaceThingDef: [],
       HediffDef: [],
+      WorkTypeDef: [],
+      WorkGiverDef: [],
+      RaceWorkSettings: [],
     },
+  };
+  const requirementUncertainty = {
+    workType: {},
+    workGiver: {},
+    raceWork: {},
+    dataset: { workTags: [], pathCatalogue: [], workType: [], requiredCapacities: [], raceWork: [] },
   };
   const C3_FRAGMENT_TYPES = {
     bd: 'BodyDef',
@@ -614,13 +629,15 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     cd: 'PawnCapacityDef',
     rd: 'RaceThingDef',
     ah: 'HediffDef',
+    wt: 'WorkTypeDef',
+    wg: 'WorkGiverDef',
   };
   const addReason = (list, reason) => { if (list.indexOf(reason) < 0) list.push(reason); };
   const addDefinitionMetadata = (frag, file, scanOrder) => {
     for (const [field, type] of Object.entries(C3_FRAGMENT_TYPES)) {
       const xml = frag[field];
       if (!xml) continue;
-      const tag = type === 'RaceThingDef' ? 'ThingDef' : type;
+      const tag = type === 'RaceThingDef' || type === 'RaceWorkSettings' ? 'ThingDef' : type;
       const blocks = xml.match(new RegExp('<' + tag + '[\\s>][\\s\\S]*?<\\/' + tag + '>', 'g')) || [];
       for (let i = 0; i < blocks.length; i++) {
         const mm = blocks[i].match(/<defName>\s*([^<]+?)\s*<\/defName>/i);
@@ -636,6 +653,20 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
         });
       }
     }
+    if (frag.rd) {
+      const blocks = frag.rd.match(/<ThingDef[\s>][\s\S]*?<\/ThingDef>/g) || [];
+      for (let i = 0; i < blocks.length; i++) {
+        if (!/\blifeStageWorkSettings\b/.test(blocks[i])) continue;
+        const mm = blocks[i].match(/<defName>\s*([^<]+?)\s*<\/defName>/i);
+        const named = blocks[i].match(/\bName\s*=\s*["']([^"']+)["']/i);
+        const sourceKey = mm ? mm[1].trim() : (named ? '@' + named[1].trim() : null);
+        if (!sourceKey) continue;
+        if (!definitionSources.RaceWorkSettings[sourceKey]) definitionSources.RaceWorkSettings[sourceKey] = [];
+        definitionSources.RaceWorkSettings[sourceKey].push({
+          modId: frag.pkg || null, file, scanOrder, sourceOrder: i,
+        });
+      }
+    }
     const patchInfo = frag.pu;
     if (!patchInfo) return;
     for (const [type, names] of Object.entries(patchInfo.byType || {})) {
@@ -647,6 +678,38 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     }
     for (const type of patchInfo.datasetTypes || []) {
       if (definitionUncertainty.dataset[type]) addReason(definitionUncertainty.dataset[type], 'relevantPatchNotApplied');
+    }
+    const c4 = patchInfo.c4 || {};
+    for (const [defName, dimensions] of Object.entries(c4.workType || {})) {
+      if (!requirementUncertainty.workType[defName]) requirementUncertainty.workType[defName] = {};
+      for (const [dimension, reasons] of Object.entries(dimensions)) {
+        requirementUncertainty.workType[defName][dimension] =
+          requirementUncertainty.workType[defName][dimension] || [];
+        for (const reason of reasons) addReason(requirementUncertainty.workType[defName][dimension], reason);
+      }
+    }
+    for (const [defName, dimensions] of Object.entries(c4.workGiver || {})) {
+      if (!requirementUncertainty.workGiver[defName]) requirementUncertainty.workGiver[defName] = {};
+      for (const [dimension, reasons] of Object.entries(dimensions)) {
+        requirementUncertainty.workGiver[defName][dimension] =
+          requirementUncertainty.workGiver[defName][dimension] || [];
+        for (const reason of reasons) addReason(requirementUncertainty.workGiver[defName][dimension], reason);
+      }
+    }
+    for (const [raceDefName, value] of Object.entries(c4.raceWork || {})) {
+      if (!requirementUncertainty.raceWork[raceDefName]) {
+        requirementUncertainty.raceWork[raceDefName] = { dataset: [], entries: {} };
+      }
+      for (const reason of value.dataset || []) addReason(requirementUncertainty.raceWork[raceDefName].dataset, reason);
+      for (const [workType, reasons] of Object.entries(value.entries || {})) {
+        const target = requirementUncertainty.raceWork[raceDefName].entries;
+        if (!target[workType]) target[workType] = [];
+        for (const reason of reasons) addReason(target[workType], reason);
+      }
+    }
+    for (const [dimension, reasons] of Object.entries(c4.dataset || {})) {
+      if (!requirementUncertainty.dataset[dimension]) continue;
+      for (const reason of reasons) addReason(requirementUncertainty.dataset[dimension], reason);
     }
   };
   if (cacheFile) {
@@ -661,7 +724,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   // Pull every supported def fragment out of one file's text. Must stay in sync
   // with CACHE_VERSION; the result is what gets cached per file.
   const extractDefs = (content) => {
-    const out = { tr: '', ge: '', bs: '', re: '', ah: '', hp: '', pa: '', me: '', pc: '', bd: '', bp: '', cd: '', rd: '', pu: null };
+    const out = { tr: '', ge: '', bs: '', re: '', ah: '', hp: '', pa: '', me: '', pc: '', bd: '', bp: '', cd: '', rd: '', wt: '', wg: '', pu: null };
     if (content.includes('<TraitDef')) { const m = content.match(/<TraitDef[\s>][\s\S]*?<\/TraitDef>/g); if (m) out.tr = m.join('\n'); }
     if (content.includes('<GeneDef')) { const m = content.match(/<GeneDef[\s>][\s\S]*?<\/GeneDef>/g); if (m) out.ge = m.join('\n'); }
     if (content.includes('<BackstoryDef')) { const m = content.match(/<BackstoryDef[\s>][\s\S]*?<\/BackstoryDef>/g); if (m) out.bs = m.join('\n'); }
@@ -690,6 +753,8 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     if (content.includes('<BodyDef')) { const m = content.match(/<BodyDef[\s>][\s\S]*?<\/BodyDef>/g); if (m) out.bd = m.join('\n'); }
     if (content.includes('<BodyPartDef')) { const m = content.match(/<BodyPartDef[\s>][\s\S]*?<\/BodyPartDef>/g); if (m) out.bp = m.join('\n'); }
     if (content.includes('<PawnCapacityDef')) { const m = content.match(/<PawnCapacityDef[\s>][\s\S]*?<\/PawnCapacityDef>/g); if (m) out.cd = m.join('\n'); }
+    if (content.includes('<WorkTypeDef')) { const m = content.match(/<WorkTypeDef[\s>][\s\S]*?<\/WorkTypeDef>/g); if (m) out.wt = m.join('\n'); }
+    if (content.includes('<WorkGiverDef')) { const m = content.match(/<WorkGiverDef[\s>][\s\S]*?<\/WorkGiverDef>/g); if (m) out.wg = m.join('\n'); }
     if (content.includes('<ThingDef')) {
       const m = content.match(/<ThingDef[\s>][\s\S]*?<\/ThingDef>/g);
       if (m) {
@@ -698,8 +763,24 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       }
     }
     if (/PatchOperation/i.test(content)) {
-      const byType = { BodyDef: [], BodyPartDef: [], PawnCapacityDef: [], RaceThingDef: [], HediffDef: [] };
+      const byType = { BodyDef: [], BodyPartDef: [], PawnCapacityDef: [], RaceThingDef: [], HediffDef: [], WorkTypeDef: [], WorkGiverDef: [], RaceWorkSettings: [] };
       const datasetTypes = [];
+      const c4 = {
+        workType: {}, workGiver: {}, raceWork: {},
+        dataset: { workTags: [], pathCatalogue: [], workType: [], requiredCapacities: [], raceWork: [] },
+      };
+      const markDimension = (root, defName, dimension) => {
+        if (!root[defName]) root[defName] = {};
+        if (!root[defName][dimension]) root[defName][dimension] = [];
+        if (root[defName][dimension].indexOf('relevantPatchNotApplied') < 0) {
+          root[defName][dimension].push('relevantPatchNotApplied');
+        }
+      };
+      const markDataset = dimension => {
+        if (c4.dataset[dimension].indexOf('relevantPatchNotApplied') < 0) {
+          c4.dataset[dimension].push('relevantPatchNotApplied');
+        }
+      };
       const xpathMatches = Array.from(content.matchAll(/<xpath(?:\s[^>]*)?>([\s\S]*?)<\/xpath>/gi));
       for (const match of xpathMatches) {
         const xpath = match[1].replace(/&quot;/gi, '"').replace(/&apos;/gi, "'").replace(/&gt;/gi, '>').replace(/&lt;/gi, '<').replace(/&amp;/gi, '&');
@@ -708,6 +789,8 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
         else if (/\bBodyDef\b/.test(xpath) && /\b(?:corePart|parts|def|coverage|depth|height)\b/i.test(xpath)) type = 'BodyDef';
         else if (/\bPawnCapacityDef\b/.test(xpath)) type = 'PawnCapacityDef';
         else if (/\bHediffDef\b/.test(xpath) && /\b(?:stages|capMods|partEfficiencyOffset|partIgnoreMissingHP|addedPartProps|partEfficiency)\b/i.test(xpath)) type = 'HediffDef';
+        else if (/\bWorkTypeDef\b/.test(xpath)) type = 'WorkTypeDef';
+        else if (/\bWorkGiverDef\b/.test(xpath)) type = 'WorkGiverDef';
         else if (/\bThingDef\b/.test(xpath) && /\b(?:race|body)\b/i.test(xpath)) type = 'RaceThingDef';
         if (!type) continue;
         const names = [];
@@ -721,13 +804,45 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
             if (name && names.indexOf(name) < 0) names.push(name);
           }
         }
+        if (/\bWorkTypeDef\b/.test(xpath) && /\bworkTags\b/i.test(xpath)) {
+          if (names.length) for (const name of names) markDimension(c4.workType, name, 'workTags');
+          else markDataset('workTags');
+        }
+        if (/\bWorkGiverDef\b/.test(xpath)) {
+          const dimensions = [];
+          if (/\brequiredCapacities\b/i.test(xpath)) dimensions.push('requiredCapacities');
+          if (/\bworkType\b/i.test(xpath)) dimensions.push('workType');
+          if (!dimensions.length || /(?:Defs\/WorkGiverDef|WorkGiverDef\s*\[)/i.test(xpath)) {
+            dimensions.push('catalogueMembership');
+          }
+          for (const dimension of Array.from(new Set(dimensions))) {
+            if (names.length) for (const name of names) markDimension(c4.workGiver, name, dimension);
+            else markDataset(dimension === 'catalogueMembership' ? 'pathCatalogue' : dimension);
+          }
+        }
+        if (/\bThingDef\b/.test(xpath) && /\blifeStageWorkSettings\b/i.test(xpath)) {
+          const workTypeMatch = xpath.match(/lifeStageWorkSettings\s*\/\s*([A-Za-z_][\w.-]*)/i);
+          if (names.length) {
+            for (const raceDefName of names) {
+              if (!c4.raceWork[raceDefName]) c4.raceWork[raceDefName] = { dataset: [], entries: {} };
+              if (workTypeMatch) {
+                const entry = workTypeMatch[1];
+                c4.raceWork[raceDefName].entries[entry] = ['relevantPatchNotApplied'];
+              } else c4.raceWork[raceDefName].dataset = ['relevantPatchNotApplied'];
+            }
+          } else markDataset('raceWork');
+        }
         if (names.length) {
           for (const name of names) if (byType[type].indexOf(name) < 0) byType[type].push(name);
         } else if (datasetTypes.indexOf(type) < 0) {
           datasetTypes.push(type);
         }
       }
-      if (datasetTypes.length || Object.values(byType).some(names => names.length)) out.pu = { byType, datasetTypes };
+      const hasC4 = Object.keys(c4.workType).length || Object.keys(c4.workGiver).length
+        || Object.keys(c4.raceWork).length || Object.values(c4.dataset).some(reasons => reasons.length);
+      if (datasetTypes.length || Object.values(byType).some(names => names.length) || hasC4) {
+        out.pu = { byType, datasetTypes, c4 };
+      }
     }
     return out;
   };
@@ -771,6 +886,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   // ── Phase 2: stat + (cache-or-read) + extract, in async batches ──
   let traits = '<Defs>\n', genes = '<Defs>\n', backstories = '<Defs>\n', hediffs = '<Defs>\n', allHediffs = '<Defs>\n', relationDefs = '<Defs>\n', passionDefs = '<Defs>\n', memeDefs = '<Defs>\n', ritualPreceptDefs = '<Defs>\n';
   let bodyDefs = '<Defs>\n', bodyPartDefs = '<Defs>\n', capacityDefs = '<Defs>\n', raceThingDefs = '<Defs>\n';
+  let workTypeDefs = '<Defs>\n', workGiverDefs = '<Defs>\n';
   let traitFiles = 0, geneFiles = 0, backstoryFiles = 0, hediffFiles = 0;
   const total = xmlFiles.length;
   const BATCH = 60;
@@ -788,9 +904,9 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
         const content = await fsp.readFile(key, 'utf-8');
         const ex = extractDefs(content);
         // Only resolve the mod packageId for files that actually yielded a def we track.
-        const hasDef = ex.tr || ex.ge || ex.bs || ex.re || ex.ah || ex.pa || ex.me || ex.pc || ex.bd || ex.bp || ex.cd || ex.rd || ex.pu;
+        const hasDef = ex.tr || ex.ge || ex.bs || ex.re || ex.ah || ex.pa || ex.me || ex.pc || ex.bd || ex.bp || ex.cd || ex.rd || ex.wt || ex.wg || ex.pu;
         const pkg = hasDef ? await findPackageId(pathMod.dirname(key)) : '';
-        frag = { m: st.mtimeMs, s: st.size, tr: ex.tr, ge: ex.ge, bs: ex.bs, re: ex.re, ah: ex.ah, hp: ex.hp, pa: ex.pa, me: ex.me, pc: ex.pc, bd: ex.bd, bp: ex.bp, cd: ex.cd, rd: ex.rd, pu: ex.pu, pkg };
+        frag = { m: st.mtimeMs, s: st.size, tr: ex.tr, ge: ex.ge, bs: ex.bs, re: ex.re, ah: ex.ah, hp: ex.hp, pa: ex.pa, me: ex.me, pc: ex.pc, bd: ex.bd, bp: ex.bp, cd: ex.cd, rd: ex.rd, wt: ex.wt, wg: ex.wg, pu: ex.pu, pkg };
         readCount++;
       }
       newFiles[key] = frag;
@@ -809,6 +925,8 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       if (frag.bp) { bodyPartDefs += frag.bp + '\n'; }
       if (frag.cd) { capacityDefs += frag.cd + '\n'; }
       if (frag.rd) { raceThingDefs += frag.rd + '\n'; }
+      if (frag.wt) { workTypeDefs += frag.wt + '\n'; }
+      if (frag.wg) { workGiverDefs += frag.wg + '\n'; }
     } catch (_) { /* skip unreadable/vanished files - and drop them from the cache */ }
     if ((i % BATCH) === 0) { sendProgress('reading', i, total); await yieldToMain(); }
   }
@@ -823,7 +941,8 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
 
   traits += '</Defs>'; genes += '</Defs>'; backstories += '</Defs>'; hediffs += '</Defs>'; allHediffs += '</Defs>'; relationDefs += '</Defs>'; passionDefs += '</Defs>'; memeDefs += '</Defs>'; ritualPreceptDefs += '</Defs>';
   bodyDefs += '</Defs>'; bodyPartDefs += '</Defs>'; capacityDefs += '</Defs>'; raceThingDefs += '</Defs>';
-  return { traitsXml: traits, genesXml: genes, backstoriesXml: backstories, hediffsXml: hediffs, allHediffsXml: allHediffs, relationDefsXml: relationDefs, passionDefsXml: passionDefs, memesXml: memeDefs, ritualPreceptsXml: ritualPreceptDefs, bodyDefsXml: bodyDefs, bodyPartDefsXml: bodyPartDefs, capacityDefsXml: capacityDefs, raceThingDefsXml: raceThingDefs, defSources, definitionSources, definitionUncertainty, traitFiles, geneFiles, backstoryFiles, hediffFiles, totalScanned: total, reusedFromCache: reusedCount, freshlyRead: readCount };
+  workTypeDefs += '</Defs>'; workGiverDefs += '</Defs>';
+  return { traitsXml: traits, genesXml: genes, backstoriesXml: backstories, hediffsXml: hediffs, allHediffsXml: allHediffs, relationDefsXml: relationDefs, passionDefsXml: passionDefs, memesXml: memeDefs, ritualPreceptsXml: ritualPreceptDefs, bodyDefsXml: bodyDefs, bodyPartDefsXml: bodyPartDefs, capacityDefsXml: capacityDefs, raceThingDefsXml: raceThingDefs, workTypeDefsXml: workTypeDefs, workGiverDefsXml: workGiverDefs, defSources, definitionSources, definitionUncertainty, requirementUncertainty, scannerCacheVersion: CACHE_VERSION, traitFiles, geneFiles, backstoryFiles, hediffFiles, totalScanned: total, reusedFromCache: reusedCount, freshlyRead: readCount };
 });
 
 // Scan all Def XMLs under a RimWorld install and return a defName -> label map.

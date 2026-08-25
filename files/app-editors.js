@@ -471,6 +471,66 @@ Object.assign(App, {
           result.raceThingDefsXml,
           'RaceThingDef'
         );
+        const requirementUncertainty = result.requirementUncertainty || {
+          workType: {}, workGiver: {}, raceWork: {}, dataset: {},
+        };
+        const appendRequirementReasons = (entry, completenessField, reasonsField, reasons) => {
+          const merged = Array.from(new Set((entry[reasonsField] || []).concat(reasons || [])));
+          entry[reasonsField] = merged;
+          if (merged.length) entry[completenessField] = 'partial';
+        };
+        const workTypes = typeof parseWorkTypeDefsFromXML === 'function'
+          ? parseWorkTypeDefsFromXML(result.workTypeDefsXml, {
+              sourceMap: c3Sources.WorkTypeDef || {},
+            }) : {};
+        for (const [defName, entry] of Object.entries(workTypes)) {
+          const narrow = (requirementUncertainty.workType || {})[defName] || {};
+          appendRequirementReasons(entry, 'workTagsCompleteness', 'workTagsCompletenessReasons',
+            (narrow.workTags || []).concat(((requirementUncertainty.dataset || {}).workTags) || []));
+          appendRequirementReasons(entry, 'pathCatalogueCompleteness', 'pathCatalogueCompletenessReasons',
+            (narrow.pathCatalogue || []).concat(((requirementUncertainty.dataset || {}).pathCatalogue) || []));
+        }
+        const workGivers = typeof parseWorkGiverDefsFromXML === 'function'
+          ? parseWorkGiverDefsFromXML(result.workGiverDefsXml, {
+              sourceMap: c3Sources.WorkGiverDef || {},
+            }) : {};
+        for (const [defName, entry] of Object.entries(workGivers)) {
+          const narrow = (requirementUncertainty.workGiver || {})[defName] || {};
+          appendRequirementReasons(entry, 'workTypeCompleteness', 'workTypeCompletenessReasons',
+            (narrow.workType || []).concat(((requirementUncertainty.dataset || {}).workType) || []));
+          appendRequirementReasons(entry, 'requiredCapacitiesCompleteness',
+            'requiredCapacitiesCompletenessReasons',
+            (narrow.requiredCapacities || []).concat(
+              ((requirementUncertainty.dataset || {}).requiredCapacities) || []));
+          appendRequirementReasons(entry, 'catalogueMembershipCompleteness',
+            'catalogueMembershipCompletenessReasons',
+            (narrow.catalogueMembership || []).concat(
+              ((requirementUncertainty.dataset || {}).pathCatalogue) || []));
+        }
+        const racePolicies = typeof parseRaceWorkSettingsFromXML === 'function'
+          ? parseRaceWorkSettingsFromXML(result.raceThingDefsXml, {
+              sourceMap: c3Sources.RaceWorkSettings || c3Sources.RaceThingDef || {},
+            }) : {};
+        for (const [raceDefName, entry] of Object.entries(racePolicies)) {
+          const narrow = (requirementUncertainty.raceWork || {})[raceDefName]
+            || { dataset: [], entries: {} };
+          appendRequirementReasons(entry, 'catalogueCompleteness', 'catalogueCompletenessReasons',
+            (narrow.dataset || []).concat(((requirementUncertainty.dataset || {}).raceWork) || []));
+          for (const [workType, reasons] of Object.entries(narrow.entries || {})) {
+            entry.entryCompleteness[workType] = reasons.length ? 'partial'
+              : (entry.entryCompleteness[workType] || entry.catalogueCompleteness);
+            entry.entryCompletenessReasons[workType] = Array.from(new Set(
+              (entry.entryCompletenessReasons[workType] || []).concat(reasons)
+            ));
+          }
+        }
+        this.state.scannedWorkTypeDefs = workTypes;
+        this.state.scannedWorkGiverDefs = workGivers;
+        this.state.scannedRaceWorkPolicies = racePolicies;
+        this.state.requirementUncertainty = requirementUncertainty;
+        this.state.activePackageResolution = typeof resolveC4ActivePackageIds === 'function'
+          ? resolveC4ActivePackageIds(this.state.importMeta)
+          : { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['providerUnavailable'] };
         this.state.definitionSources = c3Sources;
         this.state.definitionUncertainty = c3Uncertainty;
       } catch (_) {
@@ -478,6 +538,9 @@ Object.assign(App, {
         this.state.scannedBodyPartDefs = this.state.scannedBodyPartDefs || {};
         this.state.scannedCapacityDefs = this.state.scannedCapacityDefs || {};
         this.state.scannedRaceBodyMap = this.state.scannedRaceBodyMap || {};
+        this.state.scannedWorkTypeDefs = this.state.scannedWorkTypeDefs || {};
+        this.state.scannedWorkGiverDefs = this.state.scannedWorkGiverDefs || {};
+        this.state.scannedRaceWorkPolicies = this.state.scannedRaceWorkPolicies || {};
       }
 
       // Build the full trait CATALOG (def + degree + conflicts) for the per-pawn trait

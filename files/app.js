@@ -113,6 +113,11 @@ const App = {
     backstoryStories: {},  // ID -> story text (baseDesc), scanned from the install for the picker
     backstoryStoriesByTitle: {}, // title(lowercase) -> story text, fallback match for legacy-id vanilla backstories
     prostheticEfficiency: {}, // hediff defName -> { label, efficiency } scanned for the health tooltip
+    scannedWorkTypeDefs: {},
+    scannedWorkGiverDefs: {},
+    scannedRaceWorkPolicies: {},
+    requirementUncertainty: { workType: {}, workGiver: {}, raceWork: {}, dataset: {} },
+    activePackageResolution: { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['missingTargetSaveModList'] },
     customMaterials: [], // NEW: User-defined materials
     customBiomes: [], // NEW: User-defined biomes
     deletedPresetBiomes: [], // Biomes from BIOMES that are hidden

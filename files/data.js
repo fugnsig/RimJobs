@@ -3615,6 +3615,243 @@ function parseRaceBodyMapFromXML(xmlString, options) {
   return result;
 }
 
+// ── C4 requirement-definition parsers ───────────────────────────────────────
+
+function _stringListField(el, tagName) {
+  const field = _directChild(el, tagName);
+  if (!field) return { present: false, inheritFalse: false, values: [] };
+  const items = _directChildren(field, 'li');
+  const raw = items.length
+    ? items.map(item => String(item.textContent || '').trim())
+    : String(field.textContent || '').split(',').map(value => value.trim());
+  return {
+    present: true,
+    inheritFalse: _boolAttribute(field, 'Inherit') === false,
+    values: raw.filter(Boolean),
+  };
+}
+
+function _mergeInheritedList(parent, child) {
+  if (!child.present) return parent;
+  if (child.inheritFalse) return child;
+  return {
+    present: true,
+    inheritFalse: false,
+    values: _uniqueStrings((parent.values || []).concat(child.values || [])),
+  };
+}
+
+function parseWorkTypeDefsFromXML(xmlString, options) {
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString);
+  if (!doc) return {};
+  const rawDefs = [];
+  let order = 0;
+  for (const el of doc.querySelectorAll('WorkTypeDef')) {
+    const defName = _textDirect(el, 'defName');
+    const abstractName = el.getAttribute('Name') || null;
+    const workTags = _stringListField(el, 'workTags');
+    rawDefs.push({
+      defName: defName || null,
+      abstractName,
+      parentName: el.getAttribute('ParentName') || null,
+      isAbstract: _boolAttribute(el, 'Abstract') === true,
+      rawFields: { workTags },
+      _completeness: 'complete',
+      _completenessReasons: [],
+      _provenance: _definitionProvenance(opts, order++, defName || (abstractName ? '@' + abstractName : null)),
+    });
+  }
+  const resolved = _resolveInheritance(rawDefs, (parent, child) => ({
+    // WorkTags is one enum-flags value, not a list field: an explicit child
+    // value replaces the inherited value even when it contains several flags.
+    workTags: child.workTags.present ? child.workTags : parent.workTags,
+  }));
+  const result = {};
+  for (const rd of resolved) {
+    const reasons = (rd._completenessReasons || []).slice();
+    const tags = (rd.workTags && rd.workTags.values) || [];
+    for (const tag of tags) {
+      if (!Object.prototype.hasOwnProperty.call(RIMWORLD_WORK_TAG_VALUES, tag)) {
+        reasons.push('unsupportedWorkTag:' + tag);
+      }
+    }
+    _storeDefinition(result, rd.defName, {
+      defName: rd.defName,
+      workTags: tags.slice(),
+      workTagsCompleteness: reasons.length ? 'partial' : rd._completeness,
+      workTagsCompletenessReasons: _uniqueStrings(reasons),
+      pathCatalogueCompleteness: 'complete',
+      pathCatalogueCompletenessReasons: [],
+      _completeness: reasons.length ? 'partial' : rd._completeness,
+      _completenessReasons: _uniqueStrings(reasons),
+      _provenance: rd._provenance,
+    });
+  }
+  return result;
+}
+
+function parseWorkGiverDefsFromXML(xmlString, options) {
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString);
+  if (!doc) return {};
+  const rawDefs = [];
+  let order = 0;
+  for (const el of doc.querySelectorAll('WorkGiverDef')) {
+    const defName = _textDirect(el, 'defName');
+    const abstractName = el.getAttribute('Name') || null;
+    const priority = _numberDirect(el, 'priorityInType');
+    const requiredCapacities = _stringListField(el, 'requiredCapacities');
+    const reasons = [];
+    if (_directChild(el, 'priorityInType') && priority == null) reasons.push('unparseablePriorityInType');
+    rawDefs.push({
+      defName: defName || null,
+      abstractName,
+      parentName: el.getAttribute('ParentName') || null,
+      isAbstract: _boolAttribute(el, 'Abstract') === true,
+      rawFields: {
+        workTypeDefName: _textDirect(el, 'workType') || null,
+        priorityInType: priority,
+        requiredCapacities,
+        giverClass: _textDirect(el, 'giverClass') || null,
+      },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: reasons,
+      _provenance: _definitionProvenance(opts, order++, defName || (abstractName ? '@' + abstractName : null)),
+    });
+  }
+  const resolved = _resolveInheritance(rawDefs, (parent, child) => ({
+    workTypeDefName: child.workTypeDefName != null ? child.workTypeDefName : parent.workTypeDefName,
+    priorityInType: child.priorityInType != null ? child.priorityInType : parent.priorityInType,
+    requiredCapacities: _mergeInheritedList(parent.requiredCapacities, child.requiredCapacities),
+    giverClass: child.giverClass != null ? child.giverClass : parent.giverClass,
+  }));
+  const result = {};
+  for (const rd of resolved) {
+    const workTypeReasons = [];
+    const capacityReasons = [];
+    if (!rd.workTypeDefName) workTypeReasons.push('missingWorkType');
+    for (const reason of rd._completenessReasons || []) {
+      workTypeReasons.push(reason);
+      capacityReasons.push(reason);
+    }
+    _storeDefinition(result, rd.defName, {
+      defName: rd.defName,
+      workTypeDefName: rd.workTypeDefName || null,
+      priorityInType: rd.priorityInType,
+      requiredCapacities: ((rd.requiredCapacities && rd.requiredCapacities.values) || []).slice(),
+      giverClass: rd.giverClass || null,
+      workTypeCompleteness: workTypeReasons.length ? 'partial' : 'complete',
+      workTypeCompletenessReasons: _uniqueStrings(workTypeReasons),
+      requiredCapacitiesCompleteness: capacityReasons.length ? 'partial' : 'complete',
+      requiredCapacitiesCompletenessReasons: _uniqueStrings(capacityReasons),
+      catalogueMembershipCompleteness: rd._completeness,
+      catalogueMembershipCompletenessReasons: (rd._completenessReasons || []).slice(),
+      _completeness: (workTypeReasons.length || capacityReasons.length) ? 'partial' : rd._completeness,
+      _completenessReasons: _uniqueStrings(workTypeReasons.concat(capacityReasons)),
+      _provenance: rd._provenance,
+    });
+  }
+  return result;
+}
+
+function parseRaceWorkSettingsFromXML(xmlString, options) {
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString);
+  if (!doc) return {};
+  const rawDefs = [];
+  let order = 0;
+  for (const el of doc.querySelectorAll('ThingDef')) {
+    const defName = _textDirect(el, 'defName');
+    const abstractName = el.getAttribute('Name') || null;
+    const race = _directChild(el, 'race');
+    const settings = race && _directChild(race, 'lifeStageWorkSettings');
+    if (!race && !el.getAttribute('ParentName') && _boolAttribute(el, 'Abstract') !== true) continue;
+    const entries = {};
+    const reasons = [];
+    if (settings) {
+      for (const child of _elementChildren(settings)) {
+        const rawAge = String(child.textContent || '').trim();
+        const minAge = /^-?\d+$/.test(rawAge) ? parseInt(rawAge, 10) : null;
+        entries[child.tagName] = minAge;
+        if (minAge == null) reasons.push('unparseableMinAge:' + child.tagName);
+      }
+    }
+    rawDefs.push({
+      defName: defName || null,
+      abstractName,
+      parentName: el.getAttribute('ParentName') || null,
+      isAbstract: _boolAttribute(el, 'Abstract') === true,
+      rawFields: {
+        hasRace: !!race,
+        raceInheritFalse: !!race && _boolAttribute(race, 'Inherit') === false,
+        settingsPresent: !!settings,
+        settingsInheritFalse: !!settings && _boolAttribute(settings, 'Inherit') === false,
+        entries,
+      },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: reasons,
+      _provenance: _definitionProvenance(opts, order++, defName || (abstractName ? '@' + abstractName : null)),
+    });
+  }
+  const resolved = _resolveInheritance(rawDefs, (parent, child) => {
+    if (child.raceInheritFalse) return child;
+    let entries = parent.entries || {};
+    if (child.settingsPresent) {
+      entries = child.settingsInheritFalse
+        ? Object.assign({}, child.entries)
+        : Object.assign({}, parent.entries || {}, child.entries || {});
+    }
+    return {
+      hasRace: child.hasRace || parent.hasRace,
+      raceInheritFalse: false,
+      settingsPresent: child.settingsPresent || parent.settingsPresent,
+      settingsInheritFalse: child.settingsInheritFalse,
+      entries,
+    };
+  });
+  const result = {};
+  for (const rd of resolved) {
+    if (!rd.hasRace) continue;
+    const entryCompleteness = {};
+    const entryCompletenessReasons = {};
+    for (const [workType, minAge] of Object.entries(rd.entries || {})) {
+      entryCompleteness[workType] = minAge == null ? 'partial' : rd._completeness;
+      entryCompletenessReasons[workType] = minAge == null
+        ? ['unparseableMinAge:' + workType] : (rd._completenessReasons || []).slice();
+    }
+    _storeDefinition(result, rd.defName, {
+      raceDefName: rd.defName,
+      entries: Object.assign({}, rd.entries || {}),
+      entryCompleteness,
+      entryCompletenessReasons,
+      catalogueCompleteness: rd._completeness,
+      catalogueCompletenessReasons: (rd._completenessReasons || []).slice(),
+      _completeness: rd._completeness,
+      _completenessReasons: (rd._completenessReasons || []).slice(),
+      _provenance: rd._provenance,
+    });
+  }
+  return result;
+}
+
+function resolveC4ActivePackageIds(importMeta) {
+  if (!importMeta || !Array.isArray(importMeta.modIds)) {
+    return { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['missingTargetSaveModList'] };
+  }
+  const ids = [];
+  const add = value => {
+    const id = String(value || '').trim().toLowerCase();
+    if (id && ids.indexOf(id) < 0) ids.push(id);
+  };
+  add('ludeon.rimworld');
+  if (importMeta.royalty) add('ludeon.rimworld.royalty');
+  if (importMeta.ideology) add('ludeon.rimworld.ideology');
+  if (importMeta.biotech) add('ludeon.rimworld.biotech');
+  for (const modId of importMeta.modIds) add(modId);
+  return { ids, completeness: 'complete', reasons: [] };
+}
+
 // Parent index for each body part (depth-first tree). -1 = root (torso).
 // Used to detect redundant "missing" entries (e.g. right hand missing → skip right fingers).
 const HUMAN_BODY_PARENT = [
