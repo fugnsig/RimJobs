@@ -32,6 +32,78 @@ Object.assign(App, {
     return source;
   },
 
+  // Parse only status facts that the 1.6.4871 audit proved from save XML. This
+  // deliberately preserves uncertainty instead of applying JavaScript defaults.
+  _parseCurrentStatusSources(pawnXml) {
+    const xml = String(pawnXml || '');
+    const fact = (statusId, state, value, sourceField, kind) => ({
+      statusId,
+      state,
+      value,
+      evidence: sourceField ? [{ kind: kind || 'saveField', sourceField }] : [],
+    });
+    const unknown = statusId => fact(statusId, 'unknown', null, null, null);
+    const facts = {
+      downed: unknown('downed'),
+      inMentalState: unknown('inMentalState'),
+      mentalBreak: unknown('mentalBreak'),
+      deactivated: unknown('deactivated'),
+      unconscious: unknown('unconscious'),
+      canBeAwake: unknown('canBeAwake'),
+    };
+
+    const health = xml.match(/<healthTracker\b[^>]*>([\s\S]*?)<\/healthTracker>/i);
+    if (health) {
+      const state = (health[1].match(/<healthState>([^<]+)<\/healthState>/i) || [])[1];
+      if (state === 'Down') facts.downed = fact('downed', 'known', true, 'healthTracker/healthState');
+      else if (!state || state === 'Mobile') {
+        facts.downed = fact('downed', 'known', false, 'healthTracker/healthState',
+          state ? 'saveField' : 'scribeDefault');
+      }
+    }
+
+    const mind = xml.match(/<mindState\b[^>]*>([\s\S]*?)<\/mindState>/i);
+    if (mind) {
+      const body = mind[1];
+      const nullHandler = /<mentalStateHandler\b[^>]*IsNull="True"[^>]*\/>/i.test(body);
+      const handler = body.match(/<mentalStateHandler\b[^>]*>([\s\S]*?)<\/mentalStateHandler>/i);
+      const handlerBody = handler ? handler[1] : '';
+      const nullState = nullHandler
+        || /<curState\b[^>]*IsNull="True"[^>]*\/>/i.test(handlerBody);
+      const presentState = /<curState\b(?![^>]*IsNull="True")[^>]*>/i.test(handlerBody);
+      if (nullState) {
+        facts.inMentalState = fact('inMentalState', 'known', false,
+          'mindState/mentalStateHandler/curState');
+        facts.mentalBreak = fact('mentalBreak', 'known', false,
+          'mindState/mentalStateHandler/curState');
+      } else if (presentState) {
+        facts.inMentalState = fact('inMentalState', 'known', true,
+          'mindState/mentalStateHandler/curState');
+        if (/<causedByMood>\s*true\s*<\/causedByMood>/i.test(handlerBody)) {
+          facts.mentalBreak = fact('mentalBreak', 'known', true,
+            'mindState/mentalStateHandler/curState/causedByMood');
+        }
+        // A false or omitted causedByMood value is not enough to prove that the
+        // active state is not a runtime mental break; retain unknown.
+      }
+    }
+
+    const deactivated = xml.match(/<deactivated>\s*(true|false)\s*<\/deactivated>/i);
+    if (deactivated && /^true$/i.test(deactivated[1])) {
+      facts.deactivated = fact('deactivated', 'known', true, 'comps/deactivated');
+    }
+    // Local false is insufficient: Pawn.IsDeactivated() also reads faction state.
+
+    return {
+      completeness: {
+        healthTracker: !!health,
+        mindState: !!mind,
+        deactivationContext: facts.deactivated.state === 'known',
+      },
+      facts,
+    };
+  },
+
   _showRefreshBtn() {
     const btn = document.getElementById('refreshSaveBtn');
     if (btn) btn.style.display = this._lastSaveFilePath ? '' : 'none';
@@ -1275,6 +1347,7 @@ Object.assign(App, {
         traits,
         incapable,
         permissionSources: [rawPermissionSource],
+        currentStatusSources: this._parseCurrentStatusSources(shortBlock),
         childhood,
         adulthood,
         xenotype,
@@ -1815,6 +1888,7 @@ Object.assign(App, {
       // Downed in the save (incapacitated in bed): blocks every job assignment until
       // a later import shows them recovered, or the user clears the flag by hand.
       if (p.downed) pawn.downed = true;
+      pawn.currentStatusSources = p.currentStatusSources || null;
 
       // Store gene def IDs for romance/orientation estimation
       if (p.geneDefIds && p.geneDefIds.length) pawn.geneDefIds = p.geneDefIds;
@@ -2494,6 +2568,7 @@ Object.assign(App, {
         // Refresh incapable from save
         if (incoming.incapable) match.incapable = incoming.incapable;
         if (incoming.permissionSources) match.permissionSources = incoming.permissionSources;
+        match.currentStatusSources = incoming.currentStatusSources || null;
         // Refresh downed status (Down in this save = no jobs assignable; recovered = cleared)
         match.downed = incoming.downed === true;
         // Refresh xenotype if save has one
@@ -2744,6 +2819,8 @@ Object.assign(App, {
     });
     p.incapable = Array.isArray(p.incapable) ? p.incapable : [];
     p.permissionSources = Array.isArray(p.permissionSources) ? p.permissionSources : [];
+    p.currentStatusSources = p.currentStatusSources && typeof p.currentStatusSources === 'object'
+      ? p.currentStatusSources : null;
     p.downed = p.downed === true;
     p.traits = Array.isArray(p.traits) ? p.traits : [];
     p.childhood = typeof p.childhood === 'string' ? p.childhood : '';

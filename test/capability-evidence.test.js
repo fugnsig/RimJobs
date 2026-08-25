@@ -2096,5 +2096,87 @@ module.exports = function run() {
       'CE-C4P-014 unknown pawn raw WorkTag remains unresolved');
   }
 
+  // ======================================================================
+  // C4 TRI-STATE CURRENT STATUS PRESERVATION
+  // ======================================================================
+
+  {
+    const parsed = ctx.App._parseCurrentStatusSources(
+      '<thing><healthTracker><healthState>Down</healthState></healthTracker></thing>');
+    ok(parsed.facts.downed.state === 'known' && parsed.facts.downed.value === true,
+      'CE-C4S-001 explicit Down is known true');
+  }
+
+  {
+    const explicit = ctx.App._parseCurrentStatusSources(
+      '<thing><healthTracker><healthState>Mobile</healthState></healthTracker></thing>');
+    const omittedDefault = ctx.App._parseCurrentStatusSources(
+      '<thing><healthTracker><hediffSet /></healthTracker></thing>');
+    const missing = ctx.App._parseCurrentStatusSources('<thing><name>Missing tracker</name></thing>');
+    const truncated = ctx.App._parseCurrentStatusSources('<thing><healthTracker><healthState>Mobile</healthState>');
+    ok(explicit.facts.downed.state === 'known' && explicit.facts.downed.value === false,
+      'CE-C4S-002 explicit Mobile is known false');
+    ok(omittedDefault.facts.downed.state === 'known' && omittedDefault.facts.downed.value === false,
+      'CE-C4S-003 omitted health state uses default only in complete tracker');
+    ok(missing.facts.downed.state === 'unknown' && truncated.facts.downed.state === 'unknown',
+      'CE-C4S-004 missing or truncated tracker stays unknown');
+  }
+
+  {
+    const nullState = ctx.App._parseCurrentStatusSources(
+      '<thing><mindState><mentalStateHandler><curState IsNull="True" /></mentalStateHandler></mindState></thing>');
+    const moodBreak = ctx.App._parseCurrentStatusSources(
+      '<thing><mindState><mentalStateHandler><curState Class="MentalState_Berserk">'
+      + '<causedByMood>true</causedByMood></curState></mentalStateHandler></mindState></thing>');
+    const nonMood = ctx.App._parseCurrentStatusSources(
+      '<thing><mindState><mentalStateHandler><curState Class="MentalState_Wander">'
+      + '<causedByMood>false</causedByMood></curState></mentalStateHandler></mindState></thing>');
+    ok(nullState.facts.inMentalState.value === false && nullState.facts.mentalBreak.value === false,
+      'CE-C4S-005 explicit null mental state proves both facts false');
+    ok(moodBreak.facts.inMentalState.value === true && moodBreak.facts.mentalBreak.value === true,
+      'CE-C4S-006 mood-caused active state proves mental break true');
+    ok(nonMood.facts.inMentalState.value === true
+      && nonMood.facts.mentalBreak.state === 'unknown',
+    'CE-C4S-007 causedByMood false does not silently prove mental break false');
+  }
+
+  {
+    const active = ctx.App._parseCurrentStatusSources(
+      '<thing><comps><li Class="CompMechanoid"><deactivated>true</deactivated></li></comps></thing>');
+    const localFalse = ctx.App._parseCurrentStatusSources(
+      '<thing><comps><li Class="CompMechanoid"><deactivated>false</deactivated></li></comps></thing>');
+    ok(active.facts.deactivated.state === 'known' && active.facts.deactivated.value === true,
+      'CE-C4S-008 explicit local deactivation proves true');
+    ok(localFalse.facts.deactivated.state === 'unknown',
+      'CE-C4S-009 local false without faction context remains unknown');
+  }
+
+  {
+    const source = ctx.App._parseCurrentStatusSources(
+      '<thing><healthTracker><healthState>Mobile</healthState></healthTracker>'
+      + '<mindState><mentalStateHandler><curState IsNull="True" /></mentalStateHandler></mindState></thing>');
+    const result = CE.collectPawnEvidence(mk('c4s10', {
+      downed: false,
+      currentStatusSources: source,
+    }));
+    ok(result.pawnState.currentStatusFacts.downed.value === false
+      && result.pawnState.currentStatusFacts.inMentalState.value === false,
+    'CE-C4S-010 C2 exposes known parser facts');
+    ok(result.pawnState.currentStatusFacts.unconscious.state === 'unknown'
+      && result.pawnState.currentStatusFacts.canBeAwake.state === 'unknown',
+    'CE-C4S-011 no direct awake fields remain unknown at C2');
+    source.facts.downed.value = true;
+    ok(result.pawnState.currentStatusFacts.downed.value === false,
+      'CE-C4S-012 C2 status facts are defensively copied');
+  }
+
+  {
+    const result = CE.collectPawnEvidence(mk('c4s13', { downed: false }));
+    ok(result.pawnState.currentStatus.downed === false,
+      'CE-C4S-013 legacy downed boolean remains unchanged');
+    ok(result.pawnState.currentStatusFacts.downed.state === 'unknown',
+      'CE-C4S-014 missing parser source does not become canonical false');
+  }
+
   return { name: 'capability evidence (C2 adapters)', failures, total };
 };

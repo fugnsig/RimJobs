@@ -17,7 +17,7 @@
     {
       "id": 3,
       "subject": "Task 2: Add C2 tri-state current-status evidence",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1],
       "description": "**Goal:** Preserve audited current-status facts as known true, known false, or unknown without coercing missing parser scope to false.\n\n**Files:**\n- Modify: `files/app-save.js`\n- Modify: `files/capability-evidence.js`\n- Modify: `test/save-parser.fuzz.test.js`\n- Modify: `test/capability-evidence.test.js`\n\n**Acceptance Criteria:**\n- [ ] Downed, inMentalState, mentalBreak, and deactivated have tri-state source fidelity\n- [ ] Unconscious and canBeAwake remain unknown until audited inputs prove them\n- [ ] Missing/truncated tracker or mental-state scope is unknown\n- [ ] No status is inferred from another without audited semantics\n- [ ] Existing C1 and C3 behaviour is unchanged\n\n**Verify:** `node --check files/app-save.js && node --check files/capability-evidence.js && node test/run-tests.js`\n\n```json:metadata\n{\"files\":[\"files/app-save.js\",\"files/capability-evidence.js\",\"test/save-parser.fuzz.test.js\",\"test/capability-evidence.test.js\"],\"verifyCommand\":\"node --check files/app-save.js && node --check files/capability-evidence.js && node test/run-tests.js\",\"acceptanceCriteria\":[\"status tri-state\",\"absence not false\",\"unconscious and canBeAwake conservative\",\"no cross-status guesses\",\"C1/C3 unchanged\"],\"modelTier\":\"standard\"}\n```"
     },
@@ -64,5 +64,5 @@
       "description": "**Goal:** Complete the required C4 test matrix, run syntax and full regression gates, prove no consumer/race/legacy/cache leakage, and document only executable architecture.\n\n**Files:**\n- Modify C4 tests only where matrix coverage is missing\n- Modify: `docs/architecture/CODE-MAP.md`\n- Modify: `docs/architecture/INVARIANTS.md`\n\n**Acceptance Criteria:**\n- [ ] Every required test-matrix row has a named executable assertion\n- [ ] C1, C2, C3 and C4 suites pass\n- [ ] All modified JavaScript parses and HTML script order is correct\n- [ ] Static gates prove no planning/UI migration, legacy leakage, raw pawn read, race-name branch or long-lived cache\n- [ ] Code map and invariants document target runtime, peer outputs and unresolved limitations\n- [ ] Final status is shown and only task files are staged\n\n**Verify:** Run the complete Task 8 verification block in the plan.\n\n```json:metadata\n{\"files\":[\"test/c4-audit-contract.test.js\",\"test/requirement-scanner.test.js\",\"test/requirement-registry.test.js\",\"test/permission-resolver.test.js\",\"test/availability-resolver.test.js\",\"test/c4-compatibility.test.js\",\"docs/architecture/CODE-MAP.md\",\"docs/architecture/INVARIANTS.md\"],\"verifyCommand\":\"node test/run-tests.js\",\"acceptanceCriteria\":[\"complete executable matrix\",\"C1-C4 green\",\"syntax and script order\",\"static architecture gates\",\"architecture docs\",\"clean task staging\"],\"modelTier\":\"standard\"}\n```"
     }
   ],
-  "lastUpdated": "2026-08-26T02:00:00Z"
+  "lastUpdated": "2026-08-26T03:00:00Z"
 }

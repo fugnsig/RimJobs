@@ -1210,7 +1210,7 @@ const CapabilityEvidence = {
         effects: [],
         bodyEvidence: [],
         permissionEvidence: { rawSources: [], legacyIncapable: [] },
-        pawnState: { raceDefName: null, age: null, lifeStage: null, currentStatus: {}, baseSkills: {}, basePassions: {} },
+        pawnState: { raceDefName: null, age: null, lifeStage: null, currentStatus: {}, currentStatusFacts: {}, baseSkills: {}, basePassions: {} },
         unresolvedSources: [],
       };
     }
@@ -1250,6 +1250,23 @@ const CapabilityEvidence = {
     const basePassions = {};
     for (const k of Object.keys(passions)) basePassions[k] = passions[k];
 
+    const statusIds = ['downed', 'inMentalState', 'mentalBreak', 'deactivated',
+      'unconscious', 'canBeAwake'];
+    const parsedStatusFacts = pawn.currentStatusSources && pawn.currentStatusSources.facts;
+    const currentStatusFacts = {};
+    for (const statusId of statusIds) {
+      const source = parsedStatusFacts && parsedStatusFacts[statusId];
+      currentStatusFacts[statusId] = source && (source.state === 'known' || source.state === 'unknown')
+        ? {
+            statusId,
+            state: source.state,
+            value: source.state === 'known' ? source.value === true : null,
+            evidence: Array.isArray(source.evidence)
+              ? source.evidence.map(item => Object.assign({}, item)) : [],
+          }
+        : { statusId, state: 'unknown', value: null, evidence: [] };
+    }
+
     return {
       effects: allNormalised,
       bodyEvidence,
@@ -1269,6 +1286,7 @@ const CapabilityEvidence = {
         currentStatus: {
           downed: !!pawn.downed,
         },
+        currentStatusFacts,
         baseSkills,
         basePassions,
       },
