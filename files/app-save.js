@@ -86,6 +86,46 @@ Object.assign(App, {
     return out;
   },
 
+  // Return a direct child element's text without allowing nested elements with
+  // the same tag name to win. This is used for pawn identity fields where a
+  // descendant <def> may describe equipment, a hediff, or another pawn.
+  _directChildText(xml, tagName) {
+    const text = String(xml || '');
+    const re = /<\/?([A-Za-z_][\w.:-]*)\b[^>]*>/g;
+    let depth = -1;
+    let rootSeen = false;
+    let targetStart = -1;
+    let targetDepth = -1;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const token = m[0];
+      const name = m[1];
+      const closing = token[1] === '/';
+      const selfClosing = !closing && /\/\s*>$/.test(token);
+      if (!rootSeen) {
+        if (closing) continue;
+        rootSeen = true;
+        depth = selfClosing ? -1 : 0;
+        continue;
+      }
+      if (closing) {
+        if (targetStart >= 0 && depth === targetDepth && name === tagName) {
+          return text.slice(targetStart, m.index).trim();
+        }
+        depth--;
+        if (depth < 0) break;
+        continue;
+      }
+      if (depth === 0 && name === tagName) {
+        if (selfClosing) return '';
+        targetStart = re.lastIndex;
+        targetDepth = depth + 1;
+      }
+      if (!selfClosing) depth++;
+    }
+    return null;
+  },
+
   // Set skill levels + passions inside a pawn block. We DIFF against each skill's own
   // values in the file and only change what actually differs, leaving everything else
   // byte-for-byte. This is what keeps modded content safe: a passion the app doesn't
@@ -847,6 +887,7 @@ Object.assign(App, {
     // guestStatus, selected). `loadID` is supplied by the caller.
     const parsePawnFields = (block, shortBlock, loadID) => {
       const kindDef = _tag(block, 'kindDef');
+      const raceDefName = this._directChildText(shortBlock, 'def') || null;
 
       // Parse name (from short block - appears before any nested pawns)
       const nick = _tag(shortBlock, 'nick');
@@ -1058,9 +1099,11 @@ Object.assign(App, {
       const allHediffBlocks = [...block.matchAll(/<hediffs>([\s\S]*?)<\/hediffs>/g)];
       const hediffData = allHediffBlocks.length > 0 ? allHediffBlocks[hasNestedPawn ? allHediffBlocks.length - 1 : 0][1] : '';
       if (hediffData) {
-        // Split on <li to get individual hediff entries (handles both <li> and <li Class="...">)
-        const hediffItems = hediffData.split(/<li\b/);
-        for (const hi of hediffItems) {
+        // Use only top-level hediff entries so nested comp list items cannot
+        // disturb the source observation index shared with the save writer.
+        const hediffItems = this._topLevelLis(hediffData);
+        for (let sourceObservationIndex = 0; sourceObservationIndex < hediffItems.length; sourceObservationIndex++) {
+          const hi = hediffItems[sourceObservationIndex];
           if (!hi.trim()) continue;
           const hDef = _tag(hi, 'def');
           if (!hDef) continue;
@@ -1072,13 +1115,18 @@ Object.assign(App, {
           const partBlock = _tag(hi, 'part');
           let hPart = '';
           let hPartIdx = -1;
+          let rawPartIndex = null;
+          let hBody = '';
+          let bodyDefReference = 'unknown';
           if (partBlock) {
             const bodyMatch = partBlock.match(/<body>([^<]+)<\/body>/);
-            const hBody = bodyMatch ? bodyMatch[1].trim() : '';
+            hBody = bodyMatch ? bodyMatch[1].trim() : '';
+            bodyDefReference = hBody ? 'explicit' : 'unknown';
             if (hBody && hBody !== 'Human' && !pawnBodyDef) pawnBodyDef = hBody;
             const idxMatch = partBlock.match(/<index>(\d+)<\/index>/);
             if (idxMatch) {
               hPartIdx = parseInt(idxMatch[1], 10);
+              rawPartIndex = hPartIdx;
               // Only trust the human part-name table for the standard Human body; a
               // modded race reuses these indices for different parts, so show the raw index.
               hPart = (!hBody || hBody === 'Human')
@@ -1089,9 +1137,13 @@ Object.assign(App, {
               hPart = partBlock.replace(/<[^>]+>/g, '').trim();
             }
           }
-          const hSeverity = parseFloat(_tag(hi, 'severity')) || 0;
-          // Permanent injuries are scars (healed, not bleeding); fresh ones bleed.
-          const hPermanent = /<isPermanent>\s*true\s*<\/isPermanent>/i.test(hi) || /<permanent>\s*true\s*<\/permanent>/i.test(hi);
+          const severityRaw = _tag(hi, 'severity');
+          const parsedSeverity = severityRaw === '' ? NaN : parseFloat(severityRaw);
+          const hSeverity = Number.isFinite(parsedSeverity) ? parsedSeverity : null;
+          // Field absence is not false. Scribe normally omits false defaults, so
+          // only an explicit true/false marker establishes persistence state.
+          const permanentMatch = hi.match(/<(?:isPermanent|permanent)>\s*(true|false)\s*<\/(?:isPermanent|permanent)>/i);
+          const hPermanent = permanentMatch ? /^true$/i.test(permanentMatch[1]) : null;
           // Categorise: missing, replaced, implant, injury, or condition
           let hType = 'condition';
           if (hClass === 'Hediff_MissingPart' || hDef === 'MissingBodyPart') hType = 'missing';
@@ -1103,7 +1155,19 @@ Object.assign(App, {
           if (hType === 'injury' && !hPermanent && hSeverity > 0 && hSeverity < 0.5) continue;
           // Skip some always-present non-interesting hediffs
           if (hDef === 'Pregnant' || hDef === 'PregnantHuman') continue;
-          hediffs.push({ def: hDef, part: hPart, partIdx: hPartIdx, type: hType, severity: hSeverity, hediffClass: hClass, permanent: hPermanent });
+          hediffs.push({
+            def: hDef,
+            part: hPart,
+            partIdx: hPartIdx,
+            rawPartIndex,
+            bodyDefName: hBody || null,
+            bodyDefReference,
+            sourceObservationIndex,
+            type: hType,
+            severity: hSeverity,
+            hediffClass: hClass,
+            permanent: hPermanent,
+          });
         }
       }
 
@@ -1116,18 +1180,42 @@ Object.assign(App, {
         const cls = cm ? cm[1] : '';
         const pBlock = _tag(li, 'part');
         let partIdx = -1, partName = '';
+        let rawPartIndex = null, bodyDefName = null, bodyDefReference = 'unknown';
         if (pBlock) {
+          const bm = pBlock.match(/<body>([^<]+)<\/body>/);
+          bodyDefName = bm ? bm[1].trim() : null;
+          bodyDefReference = bodyDefName ? 'explicit' : 'unknown';
           const im = pBlock.match(/<index>(\d+)<\/index>/);
-          if (im) { partIdx = parseInt(im[1], 10); partName = (typeof HUMAN_BODY_INDEX !== 'undefined' && HUMAN_BODY_INDEX[partIdx]) || ('part #' + partIdx); }
+          if (im) {
+            partIdx = parseInt(im[1], 10);
+            rawPartIndex = partIdx;
+            partName = (typeof HUMAN_BODY_INDEX !== 'undefined' && HUMAN_BODY_INDEX[partIdx]) || ('part #' + partIdx);
+          }
           else partName = pBlock.replace(/<[^>]+>/g, '').trim();
         }
-        const permanent = /<isPermanent>\s*true\s*<\/isPermanent>/i.test(li) || /<permanent>\s*true\s*<\/permanent>/i.test(li);
+        const permanentMatch = li.match(/<(?:isPermanent|permanent)>\s*(true|false)\s*<\/(?:isPermanent|permanent)>/i);
+        const permanent = permanentMatch ? /^true$/i.test(permanentMatch[1]) : null;
+        const severityRaw = _tag(li, 'severity');
+        const parsedSeverity = severityRaw === '' ? NaN : parseFloat(severityRaw);
         let type = 'condition';
         if (cls === 'Hediff_MissingPart' || def === 'MissingBodyPart') type = 'missing';
         else if (cls === 'Hediff_AddedPart') type = 'replaced';
         else if (cls === 'Hediff_Implant') type = 'implant';
         else if (cls === 'Hediff_Injury' || ['Cut', 'Bruise', 'Scratch', 'Bite', 'Gunshot', 'Stab', 'Burn', 'Shredded', 'Crush', 'Crack'].includes(def)) type = 'injury';
-        return { index: i, def, hediffClass: cls, partIdx, partName, severity: parseFloat(_tag(li, 'severity')) || 0, type, permanent };
+        return {
+          index: i,
+          sourceObservationIndex: i,
+          def,
+          hediffClass: cls,
+          partIdx,
+          rawPartIndex,
+          partName,
+          bodyDefName,
+          bodyDefReference,
+          severity: Number.isFinite(parsedSeverity) ? parsedSeverity : null,
+          type,
+          permanent,
+        };
       }).filter(h => h.def);
 
       // Parse direct relations (Spouse, Lover, Parent, Child, etc.)
@@ -1152,6 +1240,7 @@ Object.assign(App, {
         firstName: first || '',
         lastName: last || '',
         kindDef,
+        raceDefName,
         gender,
         skills,
         passions,
@@ -1771,6 +1860,7 @@ Object.assign(App, {
       // Store age
       if (p.bioAge != null) pawn.bioAge = p.bioAge;
       if (p.chronoAge != null) pawn.chronoAge = p.chronoAge;
+      pawn.raceDefName = p.raceDefName || null;
 
       // Store current faction and ideology (extracted from the save)
       if (p.factionName) pawn.factionName = p.factionName;
@@ -2371,6 +2461,7 @@ Object.assign(App, {
         // Refresh loadID and geneDefIds from save
         if (incoming.loadID) match.loadID = incoming.loadID;
         if (incoming.geneDefIds) match.geneDefIds = incoming.geneDefIds;
+        match.raceDefName = incoming.raceDefName || null;
         // Refresh incapable from save
         if (incoming.incapable) match.incapable = incoming.incapable;
         // Refresh downed status (Down in this save = no jobs assignable; recovered = cleared)
@@ -2612,6 +2703,7 @@ Object.assign(App, {
     // Body def for the health editor; default Human (unknown races read as Human, the
     // safe default - only a non-Human value flips the editor into race-agnostic mode).
     p.bodyDef = (typeof p.bodyDef === 'string' && p.bodyDef) ? p.bodyDef : 'Human';
+    p.raceDefName = (typeof p.raceDefName === 'string' && p.raceDefName) ? p.raceDefName : null;
     // Raw passion string per skill (lossless modded-passion round-trip). Backfill
     // from the buckets for any skill missing one, so the field is always complete.
     p.passionDefs = (p.passionDefs && typeof p.passionDefs === 'object') ? p.passionDefs : {};
