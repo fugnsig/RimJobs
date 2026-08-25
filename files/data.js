@@ -726,16 +726,21 @@ function _uniqueStrings(values) {
   return Array.from(new Set((values || []).filter(Boolean)));
 }
 
-function _definitionProvenance(options, sourceOrder) {
+function _definitionProvenance(options, sourceOrder, sourceKey) {
   const opts = options || {};
-  const sources = Array.isArray(opts.sources) ? opts.sources.slice() : [];
-  sources.push({
-    modId: opts.modId || null,
-    file: opts.file || null,
-    scanOrder: opts.scanOrder != null ? opts.scanOrder : null,
-    sourceOrder: sourceOrder,
-  });
-  return { modId: opts.modId || null, sources: sources };
+  const mapped = sourceKey && opts.sourceMap && Array.isArray(opts.sourceMap[sourceKey])
+    ? opts.sourceMap[sourceKey] : null;
+  const sources = mapped ? mapped.slice() : (Array.isArray(opts.sources) ? opts.sources.slice() : []);
+  if (!mapped) {
+    sources.push({
+      modId: opts.modId || null,
+      file: opts.file || null,
+      scanOrder: opts.scanOrder != null ? opts.scanOrder : null,
+      sourceOrder: sourceOrder,
+    });
+  }
+  const modIds = Array.from(new Set(sources.map(source => source.modId).filter(Boolean)));
+  return { modId: modIds.length === 1 ? modIds[0] : (opts.modId || null), sources: sources };
 }
 
 function _mergeProvenance() {
@@ -3137,7 +3142,7 @@ function parseBodyDefsFromXML(xmlString, options) {
       rawFields: { corePart: corePart },
       _completeness: reasons.length ? 'partial' : 'complete',
       _completenessReasons: reasons,
-      _provenance: _definitionProvenance(opts, order - 1),
+      _provenance: _definitionProvenance(opts, order - 1, defName || (abstractName ? '@' + abstractName : null)),
     });
   }
 
@@ -3314,7 +3319,7 @@ function parseBodyPartDefsFromXML(xmlString, options) {
       },
       _completeness: reasons.length ? 'partial' : 'complete',
       _completenessReasons: reasons,
-      _provenance: _definitionProvenance(opts, order - 1),
+      _provenance: _definitionProvenance(opts, order - 1, defName || (abstractName ? '@' + abstractName : null)),
     });
   }
 
@@ -3395,7 +3400,7 @@ function parsePawnCapacityDefsFromXML(xmlString, options) {
       },
       _completeness: reasons.length ? 'partial' : 'complete',
       _completenessReasons: reasons,
-      _provenance: _definitionProvenance(opts, order - 1),
+      _provenance: _definitionProvenance(opts, order - 1, defName || (abstractName ? '@' + abstractName : null)),
     });
   }
 
@@ -3468,7 +3473,7 @@ function parseRaceBodyMapFromXML(xmlString, options) {
       },
       _completeness: reasons.length ? 'partial' : 'complete',
       _completenessReasons: reasons,
-      _provenance: _definitionProvenance(opts, order - 1),
+      _provenance: _definitionProvenance(opts, order - 1, defName || (abstractName ? '@' + abstractName : null)),
     });
   }
 

@@ -545,7 +545,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   // next scan a file whose mtime+size still match is reused from the cache and its
   // bytes are never touched again. Bump CACHE_VERSION whenever the extraction
   // below changes, so stale fragments are discarded wholesale.
-  const CACHE_VERSION = 4; // v4: also extracts MemeDef (me) + ritual PreceptDef (pc) fragments for the Ideology planner
+  const CACHE_VERSION = 5; // v5: capacity definitions, provenance, and unapplied patch uncertainty
   let cacheFile = null;
   try { cacheFile = pathMod.join(app.getPath('userData'), 'scan-cache.json'); } catch (_) { cacheFile = null; }
   let oldFiles = {};
@@ -585,6 +585,70 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       }
     }
   };
+  const definitionSources = {
+    BodyDef: {},
+    BodyPartDef: {},
+    PawnCapacityDef: {},
+    RaceThingDef: {},
+    HediffDef: {},
+  };
+  const definitionUncertainty = {
+    byType: {
+      BodyDef: {},
+      BodyPartDef: {},
+      PawnCapacityDef: {},
+      RaceThingDef: {},
+      HediffDef: {},
+    },
+    dataset: {
+      BodyDef: [],
+      BodyPartDef: [],
+      PawnCapacityDef: [],
+      RaceThingDef: [],
+      HediffDef: [],
+    },
+  };
+  const C3_FRAGMENT_TYPES = {
+    bd: 'BodyDef',
+    bp: 'BodyPartDef',
+    cd: 'PawnCapacityDef',
+    rd: 'RaceThingDef',
+    ah: 'HediffDef',
+  };
+  const addReason = (list, reason) => { if (list.indexOf(reason) < 0) list.push(reason); };
+  const addDefinitionMetadata = (frag, file, scanOrder) => {
+    for (const [field, type] of Object.entries(C3_FRAGMENT_TYPES)) {
+      const xml = frag[field];
+      if (!xml) continue;
+      const tag = type === 'RaceThingDef' ? 'ThingDef' : type;
+      const blocks = xml.match(new RegExp('<' + tag + '[\\s>][\\s\\S]*?<\\/' + tag + '>', 'g')) || [];
+      for (let i = 0; i < blocks.length; i++) {
+        const mm = blocks[i].match(/<defName>\s*([^<]+?)\s*<\/defName>/i);
+        const named = blocks[i].match(/\bName\s*=\s*["']([^"']+)["']/i);
+        const sourceKey = mm ? mm[1].trim() : (named ? '@' + named[1].trim() : null);
+        if (!sourceKey) continue;
+        if (!definitionSources[type][sourceKey]) definitionSources[type][sourceKey] = [];
+        definitionSources[type][sourceKey].push({
+          modId: frag.pkg || null,
+          file: file,
+          scanOrder: scanOrder,
+          sourceOrder: i,
+        });
+      }
+    }
+    const patchInfo = frag.pu;
+    if (!patchInfo) return;
+    for (const [type, names] of Object.entries(patchInfo.byType || {})) {
+      if (!definitionUncertainty.byType[type]) continue;
+      for (const defName of names) {
+        if (!definitionUncertainty.byType[type][defName]) definitionUncertainty.byType[type][defName] = [];
+        addReason(definitionUncertainty.byType[type][defName], 'relevantPatchNotApplied');
+      }
+    }
+    for (const type of patchInfo.datasetTypes || []) {
+      if (definitionUncertainty.dataset[type]) addReason(definitionUncertainty.dataset[type], 'relevantPatchNotApplied');
+    }
+  };
   if (cacheFile) {
     try {
       const raw = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
@@ -597,7 +661,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   // Pull every supported def fragment out of one file's text. Must stay in sync
   // with CACHE_VERSION; the result is what gets cached per file.
   const extractDefs = (content) => {
-    const out = { tr: '', ge: '', bs: '', re: '', ah: '', hp: '', pa: '', me: '', pc: '' };
+    const out = { tr: '', ge: '', bs: '', re: '', ah: '', hp: '', pa: '', me: '', pc: '', bd: '', bp: '', cd: '', rd: '', pu: null };
     if (content.includes('<TraitDef')) { const m = content.match(/<TraitDef[\s>][\s\S]*?<\/TraitDef>/g); if (m) out.tr = m.join('\n'); }
     if (content.includes('<GeneDef')) { const m = content.match(/<GeneDef[\s>][\s\S]*?<\/GeneDef>/g); if (m) out.ge = m.join('\n'); }
     if (content.includes('<BackstoryDef')) { const m = content.match(/<BackstoryDef[\s>][\s\S]*?<\/BackstoryDef>/g); if (m) out.bs = m.join('\n'); }
@@ -622,6 +686,48 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
         const withParts = m.filter(b => b.includes('addedPartProps'));
         if (withParts.length) out.hp = withParts.join('\n');
       }
+    }
+    if (content.includes('<BodyDef')) { const m = content.match(/<BodyDef[\s>][\s\S]*?<\/BodyDef>/g); if (m) out.bd = m.join('\n'); }
+    if (content.includes('<BodyPartDef')) { const m = content.match(/<BodyPartDef[\s>][\s\S]*?<\/BodyPartDef>/g); if (m) out.bp = m.join('\n'); }
+    if (content.includes('<PawnCapacityDef')) { const m = content.match(/<PawnCapacityDef[\s>][\s\S]*?<\/PawnCapacityDef>/g); if (m) out.cd = m.join('\n'); }
+    if (content.includes('<ThingDef')) {
+      const m = content.match(/<ThingDef[\s>][\s\S]*?<\/ThingDef>/g);
+      if (m) {
+        const raceRelevant = m.filter(block => /<race(?:\s[^>]*)?>/i.test(block) || /\b(?:Name|ParentName)\s*=/.test(block));
+        if (raceRelevant.length) out.rd = raceRelevant.join('\n');
+      }
+    }
+    if (/PatchOperation/i.test(content)) {
+      const byType = { BodyDef: [], BodyPartDef: [], PawnCapacityDef: [], RaceThingDef: [], HediffDef: [] };
+      const datasetTypes = [];
+      const xpathMatches = Array.from(content.matchAll(/<xpath(?:\s[^>]*)?>([\s\S]*?)<\/xpath>/gi));
+      for (const match of xpathMatches) {
+        const xpath = match[1].replace(/&quot;/gi, '"').replace(/&apos;/gi, "'").replace(/&gt;/gi, '>').replace(/&lt;/gi, '<').replace(/&amp;/gi, '&');
+        let type = null;
+        if (/\bBodyPartDef\b/.test(xpath) && /\b(?:tags|hitPoints)\b/i.test(xpath)) type = 'BodyPartDef';
+        else if (/\bBodyDef\b/.test(xpath) && /\b(?:corePart|parts|def|coverage|depth|height)\b/i.test(xpath)) type = 'BodyDef';
+        else if (/\bPawnCapacityDef\b/.test(xpath)) type = 'PawnCapacityDef';
+        else if (/\bHediffDef\b/.test(xpath) && /\b(?:stages|capMods|partEfficiencyOffset|partIgnoreMissingHP|addedPartProps|partEfficiency)\b/i.test(xpath)) type = 'HediffDef';
+        else if (/\bThingDef\b/.test(xpath) && /\b(?:race|body)\b/i.test(xpath)) type = 'RaceThingDef';
+        if (!type) continue;
+        const names = [];
+        const namePatterns = [
+          /defName\s*=\s*["']([^"']+)["']/gi,
+          /defName\s*\[\s*(?:text\(\)\s*=\s*)?["']([^"']+)["']\s*\]/gi,
+        ];
+        for (const pattern of namePatterns) {
+          for (const nameMatch of xpath.matchAll(pattern)) {
+            const name = nameMatch[1].trim();
+            if (name && names.indexOf(name) < 0) names.push(name);
+          }
+        }
+        if (names.length) {
+          for (const name of names) if (byType[type].indexOf(name) < 0) byType[type].push(name);
+        } else if (datasetTypes.indexOf(type) < 0) {
+          datasetTypes.push(type);
+        }
+      }
+      if (datasetTypes.length || Object.values(byType).some(names => names.length)) out.pu = { byType, datasetTypes };
     }
     return out;
   };
@@ -664,6 +770,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
 
   // ── Phase 2: stat + (cache-or-read) + extract, in async batches ──
   let traits = '<Defs>\n', genes = '<Defs>\n', backstories = '<Defs>\n', hediffs = '<Defs>\n', allHediffs = '<Defs>\n', relationDefs = '<Defs>\n', passionDefs = '<Defs>\n', memeDefs = '<Defs>\n', ritualPreceptDefs = '<Defs>\n';
+  let bodyDefs = '<Defs>\n', bodyPartDefs = '<Defs>\n', capacityDefs = '<Defs>\n', raceThingDefs = '<Defs>\n';
   let traitFiles = 0, geneFiles = 0, backstoryFiles = 0, hediffFiles = 0;
   const total = xmlFiles.length;
   const BATCH = 60;
@@ -681,13 +788,14 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
         const content = await fsp.readFile(key, 'utf-8');
         const ex = extractDefs(content);
         // Only resolve the mod packageId for files that actually yielded a def we track.
-        const hasDef = ex.tr || ex.ge || ex.bs || ex.re || ex.ah || ex.pa || ex.me || ex.pc;
+        const hasDef = ex.tr || ex.ge || ex.bs || ex.re || ex.ah || ex.pa || ex.me || ex.pc || ex.bd || ex.bp || ex.cd || ex.rd || ex.pu;
         const pkg = hasDef ? await findPackageId(pathMod.dirname(key)) : '';
-        frag = { m: st.mtimeMs, s: st.size, tr: ex.tr, ge: ex.ge, bs: ex.bs, re: ex.re, ah: ex.ah, hp: ex.hp, pa: ex.pa, me: ex.me, pc: ex.pc, pkg };
+        frag = { m: st.mtimeMs, s: st.size, tr: ex.tr, ge: ex.ge, bs: ex.bs, re: ex.re, ah: ex.ah, hp: ex.hp, pa: ex.pa, me: ex.me, pc: ex.pc, bd: ex.bd, bp: ex.bp, cd: ex.cd, rd: ex.rd, pu: ex.pu, pkg };
         readCount++;
       }
       newFiles[key] = frag;
       addDefSources(frag);
+      addDefinitionMetadata(frag, key, i);
       if (frag.tr) { traits += frag.tr + '\n'; traitFiles++; }
       if (frag.ge) { genes += frag.ge + '\n'; geneFiles++; }
       if (frag.bs) { backstories += frag.bs + '\n'; backstoryFiles++; }
@@ -697,6 +805,10 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       if (frag.pa) { passionDefs += frag.pa + '\n'; }
       if (frag.me) { memeDefs += frag.me + '\n'; }
       if (frag.pc) { ritualPreceptDefs += frag.pc + '\n'; }
+      if (frag.bd) { bodyDefs += frag.bd + '\n'; }
+      if (frag.bp) { bodyPartDefs += frag.bp + '\n'; }
+      if (frag.cd) { capacityDefs += frag.cd + '\n'; }
+      if (frag.rd) { raceThingDefs += frag.rd + '\n'; }
     } catch (_) { /* skip unreadable/vanished files - and drop them from the cache */ }
     if ((i % BATCH) === 0) { sendProgress('reading', i, total); await yieldToMain(); }
   }
@@ -710,7 +822,8 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   }
 
   traits += '</Defs>'; genes += '</Defs>'; backstories += '</Defs>'; hediffs += '</Defs>'; allHediffs += '</Defs>'; relationDefs += '</Defs>'; passionDefs += '</Defs>'; memeDefs += '</Defs>'; ritualPreceptDefs += '</Defs>';
-  return { traitsXml: traits, genesXml: genes, backstoriesXml: backstories, hediffsXml: hediffs, allHediffsXml: allHediffs, relationDefsXml: relationDefs, passionDefsXml: passionDefs, memesXml: memeDefs, ritualPreceptsXml: ritualPreceptDefs, defSources, traitFiles, geneFiles, backstoryFiles, hediffFiles, totalScanned: total, reusedFromCache: reusedCount, freshlyRead: readCount };
+  bodyDefs += '</Defs>'; bodyPartDefs += '</Defs>'; capacityDefs += '</Defs>'; raceThingDefs += '</Defs>';
+  return { traitsXml: traits, genesXml: genes, backstoriesXml: backstories, hediffsXml: hediffs, allHediffsXml: allHediffs, relationDefsXml: relationDefs, passionDefsXml: passionDefs, memesXml: memeDefs, ritualPreceptsXml: ritualPreceptDefs, bodyDefsXml: bodyDefs, bodyPartDefsXml: bodyPartDefs, capacityDefsXml: capacityDefs, raceThingDefsXml: raceThingDefs, defSources, definitionSources, definitionUncertainty, traitFiles, geneFiles, backstoryFiles, hediffFiles, totalScanned: total, reusedFromCache: reusedCount, freshlyRead: readCount };
 });
 
 // Scan all Def XMLs under a RimWorld install and return a defName -> label map.
