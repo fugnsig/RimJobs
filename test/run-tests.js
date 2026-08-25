@@ -26,6 +26,7 @@ const tests = [
   './logo-date.test.js',
   './capability-corpus.test.js',
   './capability-evidence.test.js',
+  './capacity-resolver.test.js',
 ];
 
 (async () => {
