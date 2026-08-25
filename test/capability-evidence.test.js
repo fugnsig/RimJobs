@@ -1422,6 +1422,74 @@ module.exports = function run() {
     App.state.defSources = {};
   }
 
+  // CE-C3-001: Modded raw part identity survives without human semantics
+  {
+    const pawn = mk('c3raw', { bodyDef: 'AlienBody', raceDefName: 'AlienRace', health: [
+      {
+        def: 'AlienScar',
+        partIdx: 25,
+        rawPartIndex: 25,
+        bodyDefName: 'AlienBody',
+        bodyDefReference: 'explicit',
+        sourceObservationIndex: 7,
+        type: 'injury',
+        severity: null,
+        hediffClass: 'Hediff_Injury',
+        part: 'part #25',
+        permanent: null,
+      },
+    ] });
+    const result = CE.collectPawnEvidence(pawn);
+    const obs = result.bodyEvidence[0];
+    ok(result.pawnState.raceDefName === 'AlienRace', 'CE-C3-001 raceDefName preserved');
+    ok(obs.rawPartIndex === 25, 'CE-C3-001 raw modded part index preserved');
+    ok(obs.partDef === null, 'CE-C3-001 no human semantic part required');
+    ok(obs.bodyDefName === 'AlienBody' && obs.bodyDefReference === 'explicit', 'CE-C3-001 explicit BodyDef preserved');
+    ok(obs.sourceObservationIndex === 7, 'CE-C3-001 source observation index preserved');
+    ok(obs.persistence === 'unknown', 'CE-C3-001 absent persistence marker remains unknown');
+    ok(obs.severity === null, 'CE-C3-001 missing severity remains null');
+    ok(obs.hediffDef === 'AlienScar' && obs.extra === undefined, 'CE-C3-001 body evidence schema remains flat');
+  }
+
+  // CE-C3-002: Persistence classification uses positive evidence only
+  {
+    const pawn = mk('c3persist', { health: [
+      { def: 'Scar', partIdx: 0, type: 'injury', severity: 1, permanent: true },
+      { def: 'FreshCut', partIdx: 0, type: 'injury', severity: 1, permanent: false },
+      { def: 'UnknownCondition', partIdx: -1, type: 'condition', severity: 0.2, permanent: null },
+      { def: 'MissingBodyPart', partIdx: 25, type: 'missing', severity: null, permanent: false },
+      { def: 'BionicArm', partIdx: 25, type: 'replaced', severity: null, permanent: null },
+      { def: 'PsychicAmplifier', partIdx: 15, type: 'implant', severity: null, permanent: null },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body[0].persistence === 'persistent', 'CE-C3-002 explicit permanent true is persistent');
+    ok(body[1].persistence === 'temporary', 'CE-C3-002 explicit permanent false is temporary');
+    ok(body[2].persistence === 'unknown', 'CE-C3-002 absent persistence metadata is unknown');
+    ok(body[3].persistence === 'persistent', 'CE-C3-002 missing part is persistent');
+    ok(body[4].persistence === 'persistent', 'CE-C3-002 replacement is persistent');
+    ok(body[5].persistence === 'persistent', 'CE-C3-002 implant is persistent');
+  }
+
+  // CE-C3-003: BodyDef omission remains explicitly unknown in this save version
+  {
+    const pawn = mk('c3bodyunknown', { health: [
+      { def: 'Cut', rawPartIndex: 3, partIdx: 3, bodyDefName: null, bodyDefReference: 'unknown', type: 'injury', severity: 1, permanent: false },
+    ] });
+    const obs = CE.bodyEvidenceFromPawnHealth(pawn)[0];
+    ok(obs.bodyDefName === null, 'CE-C3-003 omitted BodyDef remains null');
+    ok(obs.bodyDefReference === 'unknown', 'CE-C3-003 omitted BodyDef reference remains unknown');
+  }
+
+  // CE-C3-004: Fallback observation indexes remain stable across source entries
+  {
+    const pawn = mk('c3sourceindex', { health: [
+      { def: 'FirstCondition', partIdx: -1, type: 'condition', severity: null, permanent: null },
+      { def: 'SecondCondition', partIdx: -1, type: 'condition', severity: null, permanent: null },
+    ] });
+    const body = CE.bodyEvidenceFromPawnHealth(pawn);
+    ok(body[0].sourceObservationIndex === 0 && body[1].sourceObservationIndex === 1, 'CE-C3-004 fallback source indexes are stable');
+  }
+
   // ======================================================================
   // HEDIFF DEFINITION TESTS: CE-HD-001 through CE-HD-010
   // ======================================================================

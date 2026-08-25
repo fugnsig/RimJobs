@@ -64,6 +64,11 @@ function _makeBodyEvidence(kind, opts) {
     partDef: o.partDef || null,
     side: o.side || null,
     parentPartDef: o.parentPartDef || null,
+    rawPartIndex: o.rawPartIndex == null ? null : o.rawPartIndex,
+    bodyDefName: o.bodyDefName || null,
+    bodyDefReference: o.bodyDefReference || 'unknown',
+    persistence: o.persistence || 'unknown',
+    sourceObservationIndex: o.sourceObservationIndex == null ? null : o.sourceObservationIndex,
     provenance: o.provenance || null,
   }, o.extra || {});
 }
@@ -939,9 +944,10 @@ const CapabilityEvidence = {
   bodyEvidenceFromPawnHealth(pawn) {
     if (!pawn || !Array.isArray(pawn.health) || !pawn.health.length) return [];
     const results = [];
-    for (const hi of pawn.health) {
+    for (let observationIndex = 0; observationIndex < pawn.health.length; observationIndex++) {
+      const hi = pawn.health[observationIndex];
       if (!hi || !hi.def) continue;
-      const rawIdx = hi.partIdx;
+      const rawIdx = hi.rawPartIndex != null ? hi.rawPartIndex : hi.partIdx;
       const hasPartRef = rawIdx != null && rawIdx >= 0;
       const resolved = hasPartRef ? _resolveBodyPart(pawn, rawIdx) : null;
       const pId = resolved ? resolved.partId : null;
@@ -951,35 +957,41 @@ const CapabilityEvidence = {
       const modId = (typeof App !== 'undefined' && App.state && App.state.defSources)
         ? (App.state.defSources[hi.def] || null) : null;
       const prov = { sourceKind: 'healthSnapshot', sourceId: hi.def, modId };
+      const persistence = (hi.type === 'missing' || hi.type === 'replaced' || hi.type === 'implant' || hi.permanent === true)
+        ? 'persistent'
+        : (hi.permanent === false ? 'temporary' : 'unknown');
+      const common = {
+        partId: pId,
+        partDef: pDef,
+        side: pSide,
+        parentPartDef: pParent,
+        rawPartIndex: hasPartRef ? rawIdx : null,
+        bodyDefName: hi.bodyDefName || null,
+        bodyDefReference: hi.bodyDefReference || 'unknown',
+        persistence,
+        sourceObservationIndex: hi.sourceObservationIndex == null ? observationIndex : hi.sourceObservationIndex,
+        provenance: prov,
+      };
 
       if (hi.type === 'missing') {
         if (!hasPartRef) continue;
-        results.push(_makeBodyEvidence('missing', {
-          partId: pId, partDef: pDef, side: pSide, parentPartDef: pParent,
-          provenance: prov,
-        }));
+        results.push(_makeBodyEvidence('missing', common));
       } else if (hi.type === 'replaced') {
-        results.push(_makeBodyEvidence('replacement', {
-          partId: pId, partDef: pDef, side: pSide, parentPartDef: pParent,
-          provenance: prov,
+        results.push(_makeBodyEvidence('replacement', Object.assign({}, common, {
           extra: { replacementDef: hi.def },
-        }));
+        })));
       } else if (hi.type === 'implant') {
-        results.push(_makeBodyEvidence('implant', {
-          partId: pId, partDef: pDef, side: pSide, parentPartDef: pParent,
-          provenance: prov,
+        results.push(_makeBodyEvidence('implant', Object.assign({}, common, {
           extra: { implantDef: hi.def },
-        }));
+        })));
       } else {
-        results.push(_makeBodyEvidence('hediff', {
-          partId: pId, partDef: pDef, side: pSide,
-          provenance: prov,
+        results.push(_makeBodyEvidence('hediff', Object.assign({}, common, {
           extra: {
             hediffDef: hi.def,
-            severity: hi.severity != null ? hi.severity : 0,
+            severity: hi.severity != null ? hi.severity : null,
             stage: null,
           },
-        }));
+        })));
       }
     }
     return results;
@@ -1064,7 +1076,7 @@ const CapabilityEvidence = {
       return {
         effects: [],
         bodyEvidence: [],
-        pawnState: { age: null, lifeStage: null, currentStatus: {}, baseSkills: {}, basePassions: {} },
+        pawnState: { raceDefName: null, age: null, lifeStage: null, currentStatus: {}, baseSkills: {}, basePassions: {} },
         unresolvedSources: [],
       };
     }
@@ -1101,6 +1113,7 @@ const CapabilityEvidence = {
       effects: normalised,
       bodyEvidence,
       pawnState: {
+        raceDefName: pawn.raceDefName || null,
         age: pawn.bioAge == null ? null : pawn.bioAge,
         lifeStage: pawn.lifeStage == null ? null : pawn.lifeStage,
         currentStatus: {
