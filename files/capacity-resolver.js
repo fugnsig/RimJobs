@@ -663,6 +663,240 @@ const CapacityResolver = {
     return worker.resolve(context);
   },
 
+  _roundHundredth(value) {
+    const scaled = value * 100;
+    const lower = Math.floor(scaled);
+    const fraction = scaled - lower;
+    let rounded;
+    if (Math.abs(fraction - 0.5) < 1e-10) rounded = lower % 2 === 0 ? lower : lower + 1;
+    else rounded = Math.round(scaled);
+    return rounded / 100;
+  },
+
+  applyCapMods(workerResult, capacityDef, capMods, options) {
+    // Target 1.6 audit: the awake gate returns immediately. Modifiers run only
+    // when the worker result is positive. All offsets accumulate first while
+    // post-factors are multiplied and the lowest setMax is retained. The
+    // combined factor then applies, followed by setMax, minValue and
+    // GenMath.RoundedHundredth. There is no invented non-negative clamp.
+    const opts = options || {};
+    if (capacityDef && capacityDef.zeroIfCannotBeAwake && opts.snapshotType !== 'structural') {
+      if (opts.canBeAwake == null) return this._unknown('unknownAwakeState');
+      if (opts.canBeAwake === false) return this._resolved(0, [{ kind: 'awakeGate' }], []);
+    }
+    if (!workerResult || workerResult.state !== 'resolved') return workerResult;
+
+    let value = workerResult.value;
+    const appliedEvidence = (workerResult.evidence || []).slice();
+    if (value > 0) {
+      let postFactor = 1;
+      let setMax = Infinity;
+      const modifiers = Array.isArray(capMods) ? capMods : [];
+      for (let i = 0; i < modifiers.length; i++) {
+        const item = modifiers[i];
+        const mod = item.mod || item;
+        if (Number.isFinite(mod.offset)) value += mod.offset;
+        if (Number.isFinite(mod.postFactor)) postFactor *= mod.postFactor;
+        if (Number.isFinite(mod.setMax)) setMax = Math.min(setMax, mod.setMax);
+        if (Array.isArray(item.evidence)) appliedEvidence.push.apply(appliedEvidence, item.evidence);
+      }
+      value *= postFactor;
+      value = Math.min(value, setMax);
+    }
+    const minValue = capacityDef && Number.isFinite(capacityDef.minValue)
+      ? capacityDef.minValue
+      : 0;
+    value = Math.max(value, minValue);
+    return this._resolved(this._roundHundredth(value), appliedEvidence, workerResult.derivedFrom || []);
+  },
+
+  gatherCapMods(capacityName, evidenceSnapshot, hediffCatalog) {
+    const catalog = this._catalogIndex(hediffCatalog);
+    const observations = Array.isArray(evidenceSnapshot) ? evidenceSnapshot : [];
+    const modifiers = [];
+    for (let i = 0; i < observations.length; i++) {
+      const observation = observations[i] || {};
+      const hediffDef = observation.hediffDef || observation.replacementDef || observation.implantDef;
+      if (!hediffDef) continue;
+      const definition = catalog[hediffDef];
+      if (!definition || definition._completeness !== 'complete') {
+        return this._unknown('unknownHediffDefinition', [{ kind: 'hediffDefinition', hediffDef: hediffDef }]);
+      }
+      const stages = Array.isArray(definition.capModStages) ? definition.capModStages : [];
+      const hasRelevantStage = stages.some(stage => (stage.capMods || [])
+        .some(mod => mod.capacity === capacityName));
+      if (!hasRelevantStage) continue;
+      const active = this._activeStage(definition, observation.severity);
+      if (active.state !== 'resolved') {
+        return this._unknown('unknownHediffSeverity', [{
+          kind: 'hediffSeverity',
+          hediffDef: hediffDef,
+          sourceObservationIndex: observation.sourceObservationIndex,
+        }]);
+      }
+      if (!active.stage) continue;
+      const stageMods = (active.stage.capMods || []).filter(mod => mod.capacity === capacityName);
+      if (active.stage.capacityFactorEffectMultiplier
+        && stageMods.some(mod => Number.isFinite(mod.postFactor))) {
+        return this._unknown('unknownCapacityFactorMultiplier', [{
+          kind: 'capacityFactorEffectMultiplier',
+          hediffDef: hediffDef,
+          sourceObservationIndex: observation.sourceObservationIndex,
+          stage: active.stageIndex,
+          statDef: active.stage.capacityFactorEffectMultiplier,
+        }]);
+      }
+      for (let j = 0; j < stageMods.length; j++) {
+        const mod = stageMods[j];
+        const evidence = [];
+        if (Number.isFinite(mod.offset)) evidence.push({
+          kind: 'capMod',
+          hediffDef: hediffDef,
+          sourceObservationIndex: observation.sourceObservationIndex,
+          stage: active.stageIndex,
+          modType: 'offset',
+          modValue: mod.offset,
+        });
+        if (Number.isFinite(mod.postFactor)) evidence.push({
+          kind: 'capMod',
+          hediffDef: hediffDef,
+          sourceObservationIndex: observation.sourceObservationIndex,
+          stage: active.stageIndex,
+          modType: 'postFactor',
+          modValue: mod.postFactor,
+        });
+        if (Number.isFinite(mod.setMax)) evidence.push({
+          kind: 'capMod',
+          hediffDef: hediffDef,
+          sourceObservationIndex: observation.sourceObservationIndex,
+          stage: active.stageIndex,
+          modType: 'setMax',
+          modValue: mod.setMax,
+        });
+        modifiers.push({ mod: mod, evidence: evidence });
+      }
+    }
+    return { state: 'resolved', modifiers: modifiers };
+  },
+
+  _capacityDefIndex(capacityDefs) {
+    if (!capacityDefs) return {};
+    if (!Array.isArray(capacityDefs)) return capacityDefs;
+    const result = {};
+    for (let i = 0; i < capacityDefs.length; i++) {
+      const definition = capacityDefs[i];
+      if (definition && definition.defName) result[definition.defName] = definition;
+    }
+    return result;
+  },
+
+  resolveCapacityGraph(capacityDefs, baseContext, options) {
+    const definitions = this._capacityDefIndex(capacityDefs);
+    const opts = options || {};
+    const registry = opts.workerRegistry || this.workers;
+    const states = {};
+    const cache = {};
+    const stack = [];
+    const resolver = this;
+
+    function markCycle(name) {
+      const start = stack.indexOf(name);
+      const cycle = start >= 0 ? stack.slice(start) : [name];
+      for (let i = 0; i < cycle.length; i++) {
+        states[cycle[i]] = 'resolved';
+        cache[cycle[i]] = resolver._unknown('cyclicDependency', [], cycle.slice());
+      }
+    }
+
+    function resolveOne(name) {
+      if (states[name] === 'resolved') return cache[name];
+      if (states[name] === 'resolving') {
+        markCycle(name);
+        return cache[name];
+      }
+      const capacityDef = definitions[name];
+      if (!capacityDef) {
+        states[name] = 'resolved';
+        cache[name] = resolver._unknown('missingCapacityDef', [{ kind: 'capacityDef', capacity: name }]);
+        return cache[name];
+      }
+      states[name] = 'resolving';
+      stack.push(name);
+
+      const worker = registry[capacityDef.workerClass];
+      if (!worker) {
+        cache[name] = resolver._unknown('unsupportedCapacityWorker', [{
+          kind: 'workerClass',
+          workerClass: capacityDef.workerClass || null,
+        }]);
+      } else {
+        const dependencies = Array.isArray(worker.dependencies) ? worker.dependencies : [];
+        const resolvedDeps = {};
+        let unresolvedDependency = null;
+        for (let i = 0; i < dependencies.length; i++) {
+          const dependency = resolveOne(dependencies[i]);
+          resolvedDeps[dependencies[i]] = dependency;
+          if (cache[name] && cache[name].reason === 'cyclicDependency') break;
+          if (!dependency || dependency.state !== 'resolved') {
+            unresolvedDependency = dependencies[i];
+            break;
+          }
+        }
+
+        if (!(cache[name] && cache[name].reason === 'cyclicDependency')) {
+          if (unresolvedDependency) {
+            cache[name] = resolver._unknown('unresolvedDependency', [], [unresolvedDependency]);
+          } else {
+            const context = Object.assign({}, baseContext || {}, {
+              resolvedDeps: resolvedDeps,
+              capacityDef: capacityDef,
+              resolver: resolver,
+            });
+            let workerResult;
+            if (registry === resolver.workers) {
+              workerResult = resolver.resolveCapacityWorker(capacityDef, context);
+            } else if (typeof worker.assessApplicability === 'function') {
+              const applicability = worker.assessApplicability(context);
+              if (applicability.state === 'notApplicable') {
+                workerResult = {
+                  state: 'notApplicable', value: null, reason: applicability.reason,
+                  confidence: 'verified', evidence: [], derivedFrom: [],
+                };
+              } else if (applicability.state !== 'applies') {
+                workerResult = resolver._unknown(applicability.reason || 'insufficientCapacityMetadata');
+              } else workerResult = worker.resolve(context);
+            } else {
+              workerResult = worker.resolve(context);
+            }
+
+            if (workerResult && workerResult.state === 'resolved') {
+              const gathered = resolver.gatherCapMods(
+                name,
+                context.joinedEvidence || [],
+                context.hediffCatalog
+              );
+              cache[name] = gathered.state === 'resolved'
+                ? resolver.applyCapMods(workerResult, capacityDef, gathered.modifiers, {
+                  snapshotType: opts.snapshotType,
+                  canBeAwake: opts.canBeAwake,
+                })
+                : gathered;
+            } else cache[name] = workerResult;
+          }
+        }
+      }
+
+      const stackIndex = stack.lastIndexOf(name);
+      if (stackIndex >= 0) stack.splice(stackIndex, 1);
+      if (states[name] !== 'resolved') states[name] = 'resolved';
+      return cache[name];
+    }
+
+    const names = Object.keys(definitions).sort();
+    for (let i = 0; i < names.length; i++) resolveOne(names[i]);
+    return cache;
+  },
+
   resolvePawnCapacities(pawnEvidence, definitions) {
     const bodyIdentity = this.resolveBodyIdentity(pawnEvidence, definitions);
     const partIndex = bodyIdentity.state === 'resolved'

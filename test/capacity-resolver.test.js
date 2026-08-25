@@ -350,6 +350,150 @@ module.exports = function run() {
   ok(missingLifeStage.state === 'unknown' && missingLifeStage.reason === 'unknownLifeStageState',
     'CR-A3-003 Moving does not infer life-stage alwaysDowned from current status');
 
+  const baseWorkerResult = resolver._resolved(1, [], []);
+  const offsetBeforeFactor = resolver.applyCapMods(baseWorkerResult, { minValue: -1 }, [{
+    mod: { offset: -1.2, postFactor: 0.5, setMax: null },
+    evidence: [],
+  }], {});
+  ok(offsetBeforeFactor.state === 'resolved' && Math.abs(offsetBeforeFactor.value - (-0.1)) < 1e-9,
+    'CR-E1-001 offsets are accumulated before the combined post-factor without an invented clamp');
+
+  const setMaxAfterFactor = resolver.applyCapMods(resolver._resolved(2, [], []), { minValue: 0 }, [{
+    mod: { offset: 1, postFactor: 2, setMax: 2.5 },
+    evidence: [],
+  }], {});
+  ok(setMaxAfterFactor.value === 2.5, 'CR-E2-001 setMax applies after offsets and factors');
+
+  const zeroSkipsMods = resolver.applyCapMods(resolver._resolved(0, [], []), { minValue: 0 }, [{
+    mod: { offset: 5, postFactor: 3, setMax: 9 },
+    evidence: [],
+  }], {});
+  ok(zeroSkipsMods.value === 0, 'CR-E3-001 modifiers do not apply to a non-positive worker result');
+
+  const floorThenRound = resolver.applyCapMods(
+    resolver._resolved(0.1, [], []), { minValue: 0.126 }, [], {});
+  ok(floorThenRound.value === 0.13, 'CR-E4-001 minValue floor applies before hundredth rounding');
+  ok(resolver._roundHundredth(1.125) === 1.12,
+    'CR-E4-002 hundredth rounding follows target midpoint-to-even behaviour');
+
+  const awakeCapacity = { minValue: 0.5, zeroIfCannotBeAwake: true };
+  const awakeGate = resolver.applyCapMods(baseWorkerResult, awakeCapacity, [], {
+    snapshotType: 'current', canBeAwake: false,
+  });
+  ok(awakeGate.value === 0, 'CR-E5-001 awake gate returns zero before minValue');
+  const unknownAwake = resolver.applyCapMods(baseWorkerResult, awakeCapacity, [], {
+    snapshotType: 'current', canBeAwake: null,
+  });
+  ok(unknownAwake.state === 'unknown' && unknownAwake.reason === 'unknownAwakeState',
+    'CR-E5-002 missing CanBeAwake fact is unknown');
+  const structuralAwake = resolver.applyCapMods(baseWorkerResult, awakeCapacity, [], {
+    snapshotType: 'structural', canBeAwake: false,
+  });
+  ok(structuralAwake.value === 1, 'CR-E5-003 structural snapshot ignores temporary awake gate');
+
+  const stagedCatalog = [{
+    def: 'StagedCondition',
+    _completeness: 'complete',
+    capModStages: [
+      { minSeverity: 0, capMods: [{ capacity: 'Sight', offset: -0.1, postFactor: null, setMax: null }] },
+      { minSeverity: 0.5, capMods: [{ capacity: 'Sight', offset: -0.4, postFactor: null, setMax: null }] },
+    ],
+  }];
+  const stagedEvidence = [{
+    kind: 'hediff',
+    hediffDef: 'StagedCondition',
+    severity: 0.7,
+    sourceObservationIndex: 17,
+  }];
+  const gatheredStage = resolver.gatherCapMods('Sight', stagedEvidence, stagedCatalog);
+  ok(gatheredStage.state === 'resolved' && gatheredStage.modifiers.length === 1
+    && gatheredStage.modifiers[0].mod.offset === -0.4,
+  'CR-E2-002 highest stage threshold not exceeding severity is active');
+  const stageEvidence = gatheredStage.modifiers[0].evidence[0];
+  ok(stageEvidence.hediffDef === 'StagedCondition' && stageEvidence.sourceObservationIndex === 17
+    && stageEvidence.stage === 1 && stageEvidence.modType === 'offset',
+  'CR-E2-003 applied capMod retains stage and observation provenance');
+  const unknownStage = resolver.gatherCapMods('Sight', [Object.assign({}, stagedEvidence[0], {
+    severity: null,
+  })], stagedCatalog);
+  ok(unknownStage.state === 'unknown' && unknownStage.reason === 'unknownHediffSeverity',
+    'CR-E2-004 unknown severity is not replaced with a guessed default');
+  const scaledFactorCatalog = [{
+    def: 'ScaledFactorCondition',
+    _completeness: 'complete',
+    capModStages: [{
+      minSeverity: 0,
+      capacityFactorEffectMultiplier: 'SyntheticStat',
+      capMods: [{ capacity: 'Sight', offset: null, postFactor: 0.5, setMax: null }],
+    }],
+  }];
+  const scaledFactor = resolver.gatherCapMods('Sight', [{
+    hediffDef: 'ScaledFactorCondition', severity: 1, sourceObservationIndex: 18,
+  }], scaledFactorCatalog);
+  ok(scaledFactor.state === 'unknown' && scaledFactor.reason === 'unknownCapacityFactorMultiplier',
+    'CR-E2-005 stat-scaled post-factor is unknown without the required live stat');
+
+  const graphWorker = (dependencies, value) => ({
+    dependencies,
+    resolve(context) { return context.resolver._resolved(value, [], dependencies); },
+  });
+  const graphRegistry = {
+    WorkerA: graphWorker(['B'], 1),
+    WorkerB: graphWorker(['A'], 1),
+    WorkerC: graphWorker(['A'], 1),
+    WorkerD: graphWorker(['E'], 1),
+    WorkerE: graphWorker(['F'], 1),
+    WorkerF: graphWorker(['D'], 1),
+    WorkerIndependent: graphWorker([], 0.8),
+    WorkerUnsupportedDependent: graphWorker(['UnsupportedNode'], 1),
+    WorkerMissingDependent: graphWorker(['AbsentNode'], 1),
+    WorkerNotApplicableDependent: graphWorker(['NotApplicableNode'], 1),
+    WorkerNotApplicable: {
+      dependencies: [],
+      resolve() {
+        return {
+          state: 'notApplicable', value: null, reason: 'fixtureNotApplicable',
+          confidence: 'verified', evidence: [], derivedFrom: [],
+        };
+      },
+    },
+  };
+  const graphDefs = {
+    A: { defName: 'A', workerClass: 'WorkerA' },
+    B: { defName: 'B', workerClass: 'WorkerB' },
+    C: { defName: 'C', workerClass: 'WorkerC' },
+    D: { defName: 'D', workerClass: 'WorkerD' },
+    E: { defName: 'E', workerClass: 'WorkerE' },
+    F: { defName: 'F', workerClass: 'WorkerF' },
+    Independent: { defName: 'Independent', workerClass: 'WorkerIndependent' },
+    UnsupportedDependent: { defName: 'UnsupportedDependent', workerClass: 'WorkerUnsupportedDependent' },
+    UnsupportedNode: { defName: 'UnsupportedNode', workerClass: 'WorkerNotRegistered' },
+    MissingDependent: { defName: 'MissingDependent', workerClass: 'WorkerMissingDependent' },
+    NotApplicableDependent: { defName: 'NotApplicableDependent', workerClass: 'WorkerNotApplicableDependent' },
+    NotApplicableNode: { defName: 'NotApplicableNode', workerClass: 'WorkerNotApplicable' },
+  };
+  const graph = resolver.resolveCapacityGraph(graphDefs, { joinedEvidence: [], hediffCatalog: [] }, {
+    workerRegistry: graphRegistry,
+    snapshotType: 'structural',
+  });
+  ok(graph.A.reason === 'cyclicDependency' && graph.B.reason === 'cyclicDependency',
+    'CR-B3-001 every participant in a two-node cycle is cyclic');
+  ok(graph.D.reason === 'cyclicDependency' && graph.E.reason === 'cyclicDependency'
+    && graph.F.reason === 'cyclicDependency',
+  'CR-B3-002 every participant in a three-node cycle is cyclic');
+  ok(graph.C.reason === 'unresolvedDependency',
+    'CR-B3-003 external dependant of cycle is unresolved, not cyclic');
+  ok(graph.Independent.state === 'resolved' && graph.Independent.value === 0.8,
+    'CR-B4-001 independent capacity is unaffected by cycles');
+  ok(graph.UnsupportedNode.reason === 'unsupportedCapacityWorker'
+    && graph.UnsupportedDependent.reason === 'unresolvedDependency',
+  'CR-B1-001 unsupported required worker propagates only through its dependency chain');
+  ok(graph.MissingDependent.reason === 'unresolvedDependency',
+    'CR-B1-002 missing required capacity definition propagates unknown');
+  ok(graph.NotApplicableNode.state === 'notApplicable'
+    && graph.NotApplicableDependent.reason === 'unresolvedDependency',
+  'CR-B1-003 required notApplicable dependency cannot be used as a numeric value');
+
   const source = fs.readFileSync(path.join(__dirname, '..', 'files', 'capacity-resolver.js'), 'utf8');
   ok(!/raceDefName\s*={2,3}\s*['"]/.test(source), 'CR-F3-009 resolver has no race-name equality branch');
   ok(!/bodyDefName\s*={2,3}\s*['"]/.test(source), 'CR-F3-010 resolver has no body-name equality branch');
