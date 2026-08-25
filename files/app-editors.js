@@ -406,6 +406,80 @@ Object.assign(App, {
         this.state.customTraits[id] = t; traitsAdded++;
       }
 
+      // C3 definition metadata is separate from the legacy single-value
+      // defSources map. A definition is only complete when parser, provenance,
+      // duplicate, and known unapplied-patch evidence all permit certainty.
+      const c3Sources = result.definitionSources && typeof result.definitionSources === 'object'
+        ? result.definitionSources : {};
+      const c3Uncertainty = result.definitionUncertainty && typeof result.definitionUncertainty === 'object'
+        ? result.definitionUncertainty : { byType: {}, dataset: {} };
+      const finaliseC3Definition = (type, defName, entry) => {
+        if (!entry) return entry;
+        const sources = ((c3Sources[type] || {})[defName] || []).slice();
+        const inheritedSources = entry._provenance && Array.isArray(entry._provenance.sources)
+          ? entry._provenance.sources : [];
+        const effectiveSources = [];
+        const sourceKeys = new Set();
+        for (const source of inheritedSources.concat(sources)) {
+          const key = [source.modId, source.file, source.scanOrder, source.sourceOrder].join('|');
+          if (sourceKeys.has(key)) continue;
+          sourceKeys.add(key);
+          effectiveSources.push(source);
+        }
+        const modIds = Array.from(new Set(effectiveSources.map(source => source.modId).filter(Boolean)));
+        const reasons = Array.from(new Set((entry._completenessReasons || [])
+          .concat(((c3Uncertainty.byType || {})[type] || {})[defName] || [])
+          .concat(((c3Uncertainty.dataset || {})[type]) || [])));
+        if (sources.length > 1) {
+          if (reasons.indexOf('duplicateDefinitionConflict') < 0) reasons.push('duplicateDefinitionConflict');
+          if (reasons.indexOf('sourceOrderingUncertain') < 0) reasons.push('sourceOrderingUncertain');
+        }
+        entry._provenance = effectiveSources.length
+          ? { modId: modIds.length === 1 ? modIds[0] : null, sources: effectiveSources }
+          : (entry._provenance || { modId: null, sources: [] });
+        entry._completenessReasons = reasons;
+        if (reasons.length) entry._completeness = 'partial';
+        else if (!entry._completeness) entry._completeness = 'unknown';
+        return entry;
+      };
+
+      const parseC3Catalog = (parser, xml, type) => {
+        if (typeof parser !== 'function' || !xml) return {};
+        const catalog = parser(xml, { sourceMap: c3Sources[type] || {} }) || {};
+        for (const [defName, entry] of Object.entries(catalog)) finaliseC3Definition(type, defName, entry);
+        return catalog;
+      };
+
+      try {
+        this.state.scannedBodyDefs = parseC3Catalog(
+          typeof parseBodyDefsFromXML === 'function' ? parseBodyDefsFromXML : null,
+          result.bodyDefsXml,
+          'BodyDef'
+        );
+        this.state.scannedBodyPartDefs = parseC3Catalog(
+          typeof parseBodyPartDefsFromXML === 'function' ? parseBodyPartDefsFromXML : null,
+          result.bodyPartDefsXml,
+          'BodyPartDef'
+        );
+        this.state.scannedCapacityDefs = parseC3Catalog(
+          typeof parsePawnCapacityDefsFromXML === 'function' ? parsePawnCapacityDefsFromXML : null,
+          result.capacityDefsXml,
+          'PawnCapacityDef'
+        );
+        this.state.scannedRaceBodyMap = parseC3Catalog(
+          typeof parseRaceBodyMapFromXML === 'function' ? parseRaceBodyMapFromXML : null,
+          result.raceThingDefsXml,
+          'RaceThingDef'
+        );
+        this.state.definitionSources = c3Sources;
+        this.state.definitionUncertainty = c3Uncertainty;
+      } catch (_) {
+        this.state.scannedBodyDefs = this.state.scannedBodyDefs || {};
+        this.state.scannedBodyPartDefs = this.state.scannedBodyPartDefs || {};
+        this.state.scannedCapacityDefs = this.state.scannedCapacityDefs || {};
+        this.state.scannedRaceBodyMap = this.state.scannedRaceBodyMap || {};
+      }
+
       // Build the full trait CATALOG (def + degree + conflicts) for the per-pawn trait
       // editor / .rws export. Keeps every trait incl. vanilla, deduped by def|degree.
       if (typeof parseTraitCatalogFromXML === 'function') {
@@ -424,7 +498,12 @@ Object.assign(App, {
           const hcat = parseHediffCatalogFromXML(result.allHediffsXml);
           const seen = new Set();
           const merged = [];
-          for (const e of hcat) { if (seen.has(e.def)) continue; seen.add(e.def); merged.push(e); }
+          for (const e of hcat) {
+            finaliseC3Definition('HediffDef', e.def, e);
+            if (seen.has(e.def)) continue;
+            seen.add(e.def);
+            merged.push(e);
+          }
           if (merged.length) this.state.hediffCatalog = merged;
         } catch (_) { /* leave existing catalog */ }
       }
