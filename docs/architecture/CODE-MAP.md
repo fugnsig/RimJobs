@@ -205,7 +205,7 @@ Lookup table mapping features to files, entry points, state and tests.
 - Must never depend on `engine.js`.
 
 **Tests:**
-- `test/capability-evidence.test.js` - 404 checks
+- `test/capability-evidence.test.js` - 421 checks
 
 **Invariants:**
 - EVID-001
@@ -215,6 +215,43 @@ Lookup table mapping features to files, entry points, state and tests.
 - BODY-EVID-001
 - COND-001 through COND-005
 - C2-MOD-001 through C2-MOD-003
+
+---
+
+## Body and Capacity Resolution (C3)
+
+**Primary files:**
+- `files/capacity-resolver.js` - race to BodyDef identity, audited DFS part indexes, raw save observation joins, part efficiency, exact worker registry, hediff stage/capMod composition, dependency graph, and structural/current `CapacityFact` snapshots.
+- `files/data.js` - inheritance-aware BodyDef, BodyPartDef, PawnCapacityDef, race ThingDef and HediffDef capacity metadata parsers with provenance and completeness markers.
+- `main.js` and `files/app-editors.js` - installed definition extraction, cache/finalisation, source provenance and patch uncertainty.
+- `files/app-save.js` and `files/capability-evidence.js` - lossless race, BodyDef, raw part index, persistence and observation identity passthrough.
+
+**Dependency:**
+- Loaded after `capability-evidence.js` and before `engine.js`.
+- Consumes canonical C2 pawn evidence plus an explicit definitions bundle.
+- Does not depend on `engine.js`, and no planning, priority or scheduling consumer uses C3 yet.
+
+**Supported target semantics:**
+- Public workers: Consciousness, Manipulation, Moving, Sight, Talking and Hearing.
+- Internal audited dependencies: BloodPumping, Breathing and BloodFiltration.
+- Worker audit target: RimWorld `1.6.4871 rev590`, installed `Assembly-CSharp.dll`.
+- Capacity utility order: awake gate, worker, offsets, combined post-factors, minimum setMax, minValue floor, hundredth rounding. Modifiers run only for a positive worker result.
+
+**Tests and verification:**
+- `test/capacity-resolver.test.js` - 122 checks across architecture groups A-F, dependency cycles, snapshot partitioning, Human parity and composition order.
+- Installed Core scanner smoke: 20 BodyDefs, 91 BodyPartDefs, 11 PawnCapacityDefs, 944 inheritance-relevant ThingDef fragments and 194 HediffDefs.
+- Automated renderer-parser fixtures cover inheritance, provenance, duplicate conflict handling, malformed XML safety and stat-scaled capacity-factor preservation.
+- The Human parity fixture was generated from the installed Core `Bodies_Humanlike.xml` and `BodyParts_*.xml`, with 32 referenced BodyPartDefs complete.
+- A synthetic mod scanner fixture verified package provenance, a targeted BodyPart patch signal and dataset-level PawnCapacity patch uncertainty.
+
+**Known conservative unknowns:**
+- Unsupported and custom worker classes, including Eating and Metabolism, remain `unsupportedCapacityWorker` unless they are audited and registered.
+- Injury part efficiency remains unknown when the save evidence lacks exact rounded remaining-part-health and preservation inputs.
+- Current awake gating remains unknown unless an exact `CanBeAwake` fact is supplied. It is never inferred from `downed`.
+- Moving remains unknown when life-stage `alwaysDowned` is unavailable.
+- Consciousness remains unknown when active hediff pain exists but exact `PainTotal` is unavailable.
+- Stat-scaled hediff post-factors remain unknown when their required live stat value is unavailable.
+- Relevant unapplied XML patches make affected definitions partial rather than being guessed.
 
 ---
 
@@ -241,6 +278,7 @@ Lookup table mapping features to files, entry points, state and tests.
 | 4D stress | `test/stress-4d.fuzz.test.js` | 36 | Blueprints |
 | Logo date line | `test/logo-date.test.js` | 12 | UI |
 | Capability corpus (C1 freeze) | `test/capability-corpus.test.js` | 140 | Capability evaluation, skill calc, work speed, scheduling, temporal coverage/resilience - frozen regression fixtures for all capability-related production functions |
-| Capability evidence (C2) | `test/capability-evidence.test.js` | 404 | Canonical evidence adapters, body evidence, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
+| Capability evidence (C2) | `test/capability-evidence.test.js` | 421 | Canonical evidence adapters, body evidence, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
+| Capacity resolver (C3) | `test/capacity-resolver.test.js` | 122 | Body identity, raw-index joins, audited workers, capMods, dependency graph, dual snapshots, Human parity and XML parser fixtures |
 
-All tests run in a vm sandbox (`test/_harness.js`) with stubbed globals and no DOM.
+The suite currently runs 21 suites and 34,199 checks. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.

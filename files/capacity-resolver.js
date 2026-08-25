@@ -901,9 +901,17 @@ const CapacityResolver = {
 
       const awakeGateApplies = capacityDef.zeroIfCannotBeAwake
         && opts.snapshotType !== 'structural';
+      const datasetCapacityCompleteness = baseContext && baseContext.completeness
+        ? baseContext.completeness.capacityDefs
+        : null;
+      const capacityMetadataIncomplete = capacityDef._completeness === 'partial'
+        || capacityDef._completeness === 'unknown'
+        || datasetCapacityCompleteness && datasetCapacityCompleteness !== 'complete';
       const forcedReason = opts.forcedUnknown && opts.forcedUnknown[name];
       const worker = registry[capacityDef.workerClass];
-      if (awakeGateApplies && opts.canBeAwake == null) {
+      if (capacityMetadataIncomplete) {
+        cache[name] = resolver._unknown('insufficientCapacityMetadata');
+      } else if (awakeGateApplies && opts.canBeAwake == null) {
         cache[name] = resolver._unknown('unknownAwakeState');
       } else if (awakeGateApplies && opts.canBeAwake === false) {
         cache[name] = resolver._resolved(0, [{ kind: 'awakeGate' }], []);
@@ -1152,7 +1160,7 @@ const CapacityResolver = {
     };
     const structuralContext = Object.assign({}, sharedContext, {
       joinedEvidence: classified.structuralEvidence,
-      painTotal: 0,
+      painTotal: pawnState.structuralPainTotal,
     });
     const currentContext = Object.assign({}, sharedContext, {
       joinedEvidence: classified.currentEvidence,
