@@ -83,6 +83,7 @@ function _makeUnresolved(sourceKind, sourceId, reason, opts) {
     rawTarget: o.rawTarget == null ? null : o.rawTarget,
     rawData: o.rawData == null ? null : o.rawData,
     derivedContext: o.derivedContext == null ? null : o.derivedContext,
+    candidateTargets: Array.isArray(o.candidateTargets) ? o.candidateTargets : undefined,
   };
 }
 
@@ -102,6 +103,89 @@ function _modIdOf(def) {
 
 const _KNOWN_JOB_IDS = new Set(typeof JOBS !== 'undefined' ? JOBS.map(j => j.id) : []);
 const _KNOWN_INCAP_IDS = new Set(typeof INCAP_OPTIONS !== 'undefined' ? INCAP_OPTIONS.map(o => o.id) : []);
+const _CANONICAL_WORK_TAGS = new Set(typeof RIMWORLD_WORK_TAG_VALUES !== 'undefined'
+  ? Object.keys(RIMWORLD_WORK_TAG_VALUES) : []);
+const _LEGACY_INCAP_WORK_TAG_CANDIDATES = (() => {
+  const result = {};
+  if (typeof WORKTAG_TO_INCAP === 'undefined') return result;
+  for (const [tag, incap] of Object.entries(WORKTAG_TO_INCAP)) {
+    if (!_CANONICAL_WORK_TAGS.has(tag)) continue;
+    if (!result[incap]) result[incap] = [];
+    if (result[incap].indexOf(tag) < 0) result[incap].push(tag);
+  }
+  return result;
+})();
+
+function _emitTypedPermissionSources(sources, effects, unresolved, args) {
+  const records = Array.isArray(sources) ? sources : [];
+  for (let i = 0; i < records.length; i++) {
+    const source = records[i];
+    if (!source || source.presence !== 'present') continue;
+    const targets = Array.isArray(source.targets) ? source.targets : [];
+    for (let j = 0; j < targets.length; j++) {
+      const target = targets[j] || {};
+      const canonical = target.canonicalTarget || null;
+      const kind = source.targetKind;
+      const valid = kind === 'workTag'
+        ? _CANONICAL_WORK_TAGS.has(canonical)
+        : kind === 'workType' && typeof canonical === 'string' && canonical.length > 0;
+      if (!valid) {
+        unresolved.push(_makeUnresolved(
+          args.provenance.sourceKind,
+          args.provenance.sourceId,
+          'Unresolved typed permission target from ' + source.sourceField,
+          {
+            rawTarget: target.rawTarget || null,
+            rawData: source,
+            modId: args.provenance.modId,
+            candidateTargets: [],
+          }
+        ));
+        continue;
+      }
+      const type = kind === 'workTag' ? 'disableWorkTag' : 'disableWorkType';
+      const evidenceId = args.evidencePrefix + ':' + source.sourceField + ':' + canonical;
+      effects.push(_makeEvidence(
+        evidenceId,
+        type,
+        canonical,
+        null,
+        args.provenance,
+        args.confidence,
+        {
+          fields: {
+            permissionTargetKind: kind,
+            sourceField: source.sourceField,
+            sourceCompleteness: source.completeness || 'unknown',
+            rawTarget: target.rawTarget || canonical,
+          },
+        }
+      ));
+    }
+  }
+}
+
+function _permissionSourcesForDefinition(def) {
+  if (!def) return [];
+  const result = Array.isArray(def.permissionSources) ? def.permissionSources.slice() : [];
+  const addExact = (field, kind, values) => {
+    if (!Array.isArray(values)) return;
+    result.push({
+      sourceField: field,
+      targetKind: kind,
+      presence: values.length ? 'present' : 'absent',
+      rawValue: values.join(', '),
+      targets: values.map(target => ({
+        rawTarget: target,
+        canonicalTarget: kind === 'workTag' && !_CANONICAL_WORK_TAGS.has(target) ? null : target,
+      })),
+      completeness: 'complete',
+    });
+  };
+  addExact('disabledWorkTypes', 'workType', def.disabledWorkTypesExact);
+  addExact('disabledWorkTags', 'workTag', def.disabledWorkTagsExact);
+  return result;
+}
 
 // ─── Strict source resolution helpers ──────────────────────────────────────────
 // Existing getters (App.getXeno, App.getRole) silently return defaults for
@@ -170,7 +254,14 @@ function _classifyIncap(incapId, effects, unresolved, args) {
       args.provenance.sourceKind,
       args.provenance.sourceId,
       'Ambiguous permission identifier: ' + incapId,
-      { rawTarget: incapId, modId: args.provenance.modId }
+      {
+        rawTarget: incapId,
+        modId: args.provenance.modId,
+        candidateTargets: [{ kind: 'job', target: incapId }].concat(
+          (_LEGACY_INCAP_WORK_TAG_CANDIDATES[incapId] || [])
+            .map(target => ({ kind: 'workTag', target }))
+        ),
+      }
     ));
     return;
   }
@@ -448,6 +539,12 @@ const CapabilityEvidence = {
       const provenance = { sourceKind: 'trait', sourceId: traitId, modId };
       const confidence = modId ? 'inferred' : 'verified';
 
+      _emitTypedPermissionSources(_permissionSourcesForDefinition(def), effects, unresolved, {
+        evidencePrefix: 'trait:' + traitId,
+        provenance,
+        confidence,
+      });
+
       // Skill modifiers
       if (def.skillMods) {
         const entries = Object.entries(def.skillMods);
@@ -549,6 +646,12 @@ const CapabilityEvidence = {
         ? { xenotypeId: ref.xenotypeId, origin: 'xenotypeTemplate' }
         : null;
       const baseOpts = derivedCtx ? { derivedContext: derivedCtx } : {};
+
+      _emitTypedPermissionSources(_permissionSourcesForDefinition(def), effects, unresolved, {
+        evidencePrefix: 'gene:' + gId,
+        provenance,
+        confidence,
+      });
 
       // Skill modifiers
       if (def.skillMods) {
@@ -820,6 +923,12 @@ const CapabilityEvidence = {
       const modId = _modIdOf(resolved);
       const provenance = { sourceKind: 'backstory', sourceId: bsId, modId };
       const confidence = modId ? 'inferred' : 'verified';
+
+      _emitTypedPermissionSources(_permissionSourcesForDefinition(resolved), effects, unresolved, {
+        evidencePrefix: 'backstory:' + bsId + ':' + slot,
+        provenance,
+        confidence,
+      });
       // Skill modifiers
       if (resolved.skills) {
         const skillEntries = Object.entries(resolved.skills);
@@ -864,6 +973,25 @@ const CapabilityEvidence = {
     const modId = _modIdOf(roleDef);
     const provenance = { sourceKind: 'role', sourceId: roleId, modId };
     const confidence = modId ? 'inferred' : 'verified';
+
+    const rolePermissionSources = Array.isArray(roleDef.disabledWorkTagsExact)
+      ? [{
+          sourceField: 'roleDisabledWorkTags',
+          targetKind: 'workTag',
+          presence: roleDef.disabledWorkTagsExact.length ? 'present' : 'absent',
+          rawValue: roleDef.disabledWorkTagsExact.join(', '),
+          targets: roleDef.disabledWorkTagsExact.map(target => ({
+            rawTarget: target,
+            canonicalTarget: _CANONICAL_WORK_TAGS.has(target) ? target : null,
+          })),
+          completeness: 'complete',
+        }]
+      : [];
+    _emitTypedPermissionSources(rolePermissionSources, effects, unresolved, {
+      evidencePrefix: 'role:' + roleId,
+      provenance,
+      confidence,
+    });
     // Skill modifiers
     if (roleDef.skillMods) {
       const skillEntries = Object.entries(roleDef.skillMods);
@@ -1035,6 +1163,11 @@ const CapabilityEvidence = {
           max: nextStage ? nextStage.min : null,
           maxExclusive: true,
         };
+        _emitTypedPermissionSources(stage.permissionSources, effects, unresolved, {
+          evidencePrefix: 'hediff:' + hi.def + ':s' + si,
+          provenance,
+          confidence,
+        });
         for (const incapId of stage.work) {
           const eid = 'hediff:' + hi.def + ':' + incapId + ':s' + si;
           _classifyIncap(incapId, effects, unresolved, {
@@ -1076,6 +1209,7 @@ const CapabilityEvidence = {
       return {
         effects: [],
         bodyEvidence: [],
+        permissionEvidence: { rawSources: [], legacyIncapable: [] },
         pawnState: { raceDefName: null, age: null, lifeStage: null, currentStatus: {}, baseSkills: {}, basePassions: {} },
         unresolvedSources: [],
       };
@@ -1100,6 +1234,13 @@ const CapabilityEvidence = {
 
     const normalised = _normaliseEffects(allEffects, allUnresolved);
     const bodyEvidence = this.bodyEvidenceFromPawnHealth(pawn);
+    const pawnPermissionEffects = [];
+    _emitTypedPermissionSources(pawn.permissionSources, pawnPermissionEffects, allUnresolved, {
+      evidencePrefix: 'pawn:' + (pawn.id || 'unknown'),
+      provenance: { sourceKind: 'pawnPermission', sourceId: pawn.id || null, modId: null },
+      confidence: 'verified',
+    });
+    const allNormalised = _normaliseEffects(normalised.concat(pawnPermissionEffects), allUnresolved);
 
     const skills = pawn.skills || {};
     const baseSkills = {};
@@ -1110,8 +1251,17 @@ const CapabilityEvidence = {
     for (const k of Object.keys(passions)) basePassions[k] = passions[k];
 
     return {
-      effects: normalised,
+      effects: allNormalised,
       bodyEvidence,
+      permissionEvidence: {
+        rawSources: Array.isArray(pawn.permissionSources)
+          ? pawn.permissionSources.map(source => Object.assign({}, source, {
+              targets: Array.isArray(source.targets)
+                ? source.targets.map(target => Object.assign({}, target)) : [],
+            }))
+          : [],
+        legacyIncapable: Array.isArray(pawn.incapable) ? pawn.incapable.slice() : [],
+      },
       pawnState: {
         raceDefName: pawn.raceDefName || null,
         age: pawn.bioAge == null ? null : pawn.bioAge,
@@ -1132,6 +1282,8 @@ const CapabilityEvidence = {
   _resolveRoleStrict: _resolveRoleStrict,
   _geneRefsForPawn: _geneRefsForPawn,
   _classifyIncap: _classifyIncap,
+  _emitTypedPermissionSources: _emitTypedPermissionSources,
+  _permissionSourcesForDefinition: _permissionSourcesForDefinition,
   _resolveBodyPart: _resolveBodyPart,
   _makeEvidence: _makeEvidence,
   _makeBodyEvidence: _makeBodyEvidence,
@@ -1140,4 +1292,5 @@ const CapabilityEvidence = {
   _resolveTraitStrict: _resolveTraitStrict,
   _KNOWN_JOB_IDS: _KNOWN_JOB_IDS,
   _KNOWN_INCAP_IDS: _KNOWN_INCAP_IDS,
+  _CANONICAL_WORK_TAGS: _CANONICAL_WORK_TAGS,
 };

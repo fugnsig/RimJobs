@@ -10,6 +10,28 @@ Object.assign(App, {
   _saveImportData: null, // Temp storage for parsed save data during import flow
   _lastSaveFilePath: null, // Path to last imported .rws file (for refresh)
 
+  _parsePermissionSourceValue(rawValue, sourceField) {
+    const present = rawValue != null;
+    const raw = present ? String(rawValue).trim() : null;
+    const source = {
+      sourceField: sourceField || 'disabledWorkTags',
+      targetKind: 'workTag',
+      presence: present ? 'present' : 'absent',
+      rawValue: raw,
+      targets: [],
+      // A save does not serialise authoritative CombinedDisabledWorkTags.
+      completeness: 'partial',
+    };
+    if (!raw || /^none$/i.test(raw)) return source;
+    source.targets = raw.split(',').map(value => value.trim()).filter(value => value && !/^none$/i.test(value))
+      .map(rawTarget => ({
+        rawTarget,
+        canonicalTarget: Object.prototype.hasOwnProperty.call(RIMWORLD_WORK_TAG_VALUES, rawTarget)
+          ? rawTarget : null,
+      }));
+    return source;
+  },
+
   _showRefreshBtn() {
     const btn = document.getElementById('refreshSaveBtn');
     if (btn) btn.style.display = this._lastSaveFilePath ? '' : 'none';
@@ -970,7 +992,12 @@ Object.assign(App, {
       // Saves use lowercase <disabledWorkTags> (e.g. "AllWork", "Violent, Caring");
       // older/other formats may use <DisabledWorkTags>. Check both.
       const incapable = [];
-      const dwt = _tag(block, 'disabledWorkTags') || _tag(block, 'DisabledWorkTags');
+      const dwtMatch = block.match(/<(disabledWorkTags|DisabledWorkTags)>([\s\S]*?)<\/\1>/);
+      const dwt = dwtMatch ? dwtMatch[2].trim() : '';
+      const rawPermissionSource = this._parsePermissionSourceValue(
+        dwtMatch ? dwt : null,
+        dwtMatch ? dwtMatch[1] : 'disabledWorkTags'
+      );
       if (dwt && dwt.toLowerCase() !== 'none') {
         dwt.split(',').forEach(t => {
           const tag = t.trim();
@@ -1247,6 +1274,7 @@ Object.assign(App, {
         passionDefs,
         traits,
         incapable,
+        permissionSources: [rawPermissionSource],
         childhood,
         adulthood,
         xenotype,
@@ -1979,6 +2007,7 @@ Object.assign(App, {
       if (p.incapable && p.incapable.length) {
         pawn.incapable = p.incapable;
       }
+      pawn.permissionSources = Array.isArray(p.permissionSources) ? p.permissionSources : [];
 
       // Apply ideology role detected from save file
       if (p.ideoRole) {
@@ -2464,6 +2493,7 @@ Object.assign(App, {
         match.raceDefName = incoming.raceDefName || null;
         // Refresh incapable from save
         if (incoming.incapable) match.incapable = incoming.incapable;
+        if (incoming.permissionSources) match.permissionSources = incoming.permissionSources;
         // Refresh downed status (Down in this save = no jobs assignable; recovered = cleared)
         match.downed = incoming.downed === true;
         // Refresh xenotype if save has one
@@ -2713,6 +2743,7 @@ Object.assign(App, {
       }
     });
     p.incapable = Array.isArray(p.incapable) ? p.incapable : [];
+    p.permissionSources = Array.isArray(p.permissionSources) ? p.permissionSources : [];
     p.downed = p.downed === true;
     p.traits = Array.isArray(p.traits) ? p.traits : [];
     p.childhood = typeof p.childhood === 'string' ? p.childhood : '';
