@@ -153,6 +153,7 @@ function _emitTypedPermissionSources(sources, effects, unresolved, args) {
         args.provenance,
         args.confidence,
         {
+          when: args.when == null ? null : args.when,
           fields: {
             permissionTargetKind: kind,
             sourceField: source.sourceField,
@@ -1167,6 +1168,7 @@ const CapabilityEvidence = {
           evidencePrefix: 'hediff:' + hi.def + ':s' + si,
           provenance,
           confidence,
+          when,
         });
         for (const incapId of stage.work) {
           const eid = 'hediff:' + hi.def + ':' + incapId + ':s' + si;

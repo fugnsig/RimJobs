@@ -2020,6 +2020,30 @@ module.exports = function run() {
   }
 
   {
+    App.state.hediffCatalog = [{
+      def: 'TypedConditionalHediff',
+      disabledWorkStages: [{
+        min: 0.4,
+        work: ['caring'],
+        permissionSources: [{
+          sourceField: 'disabledWorkTags', targetKind: 'workTag', presence: 'present',
+          rawValue: 'Caring', completeness: 'complete',
+          targets: [{ rawTarget: 'Caring', canonicalTarget: 'Caring' }],
+        }],
+      }],
+    }];
+    const result = CE.effectsFromHediffDefinitions(mk('c4p5b', {
+      health: [{ def: 'TypedConditionalHediff', severity: 0.5, permanent: true }],
+    }));
+    const typed = result.effects.find(effect => effect.type === 'disableWorkTag'
+      && effect.target === 'Caring');
+    ok(typed && typed.when && typed.when.kind === 'hediffSeverity'
+      && typed.when.min === 0.4,
+    'CE-C4P-005B typed hediff permission evidence preserves severity condition');
+    App.state.hediffCatalog = [];
+  }
+
+  {
     const role = DR.find(item => item.id === 'melee');
     ok(role.disabledWorkTagsExact.includes('Shooting')
       && role.disabledWorkTagsExact.includes('Constructing'),
