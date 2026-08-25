@@ -160,6 +160,196 @@ module.exports = function run() {
   const noPart = resolver.joinObservations([{ rawPartIndex: null }], healthy, index)[0];
   ok(noPart.joinState === 'noPartRef', 'CR-F3-008 observation without part reference remains body-wide');
 
+  // Task 4 fixture identifiers are deliberately arbitrary. Only audited tags
+  // and tree structure connect these parts to workers.
+  const workerBody = {
+    defName: 'FormDelta',
+    _completeness: 'complete',
+    corePart: {
+      def: 'NodeAlpha',
+      parts: [
+        { def: 'NodeBeta', parts: [{ def: 'NodeGamma', parts: [{ def: 'NodeDelta', parts: [] }] }] },
+        { def: 'NodeEpsilon', parts: [{ def: 'NodeZeta', parts: [{ def: 'NodeEta', parts: [] }] }] },
+        { def: 'NodeTheta', parts: [{ def: 'NodeIota', parts: [{ def: 'NodeKappa', parts: [] }] }] },
+        { def: 'NodeLambda', parts: [{ def: 'NodeMu', parts: [{ def: 'NodeNu', parts: [] }] }] },
+        { def: 'NodeXi', parts: [] },
+        { def: 'NodeOmicron', parts: [] },
+        { def: 'NodePi', parts: [] },
+        { def: 'NodeRho', parts: [] },
+        { def: 'NodeSigma', parts: [] },
+        { def: 'NodeTau', parts: [] },
+        { def: 'NodeUpsilon', parts: [] },
+      ],
+    },
+  };
+  const tags = {
+    NodeAlpha: ['ConsciousnessSource', 'Pelvis', 'Spine'],
+    NodeBeta: ['ManipulationLimbCore'],
+    NodeGamma: ['ManipulationLimbSegment'],
+    NodeDelta: ['ManipulationLimbDigit'],
+    NodeEpsilon: ['ManipulationLimbCore'],
+    NodeZeta: ['ManipulationLimbSegment'],
+    NodeEta: ['ManipulationLimbDigit'],
+    NodeTheta: ['MovingLimbCore'],
+    NodeIota: ['MovingLimbSegment'],
+    NodeKappa: ['MovingLimbDigit'],
+    NodeLambda: ['MovingLimbCore'],
+    NodeMu: ['MovingLimbSegment'],
+    NodeNu: ['MovingLimbDigit'],
+    NodeXi: ['SightSource'],
+    NodeOmicron: ['SightSource'],
+    NodePi: ['HearingSource'],
+    NodeRho: ['HearingSource'],
+    NodeSigma: ['TalkingSource'],
+    NodeTau: ['TalkingPathway'],
+    NodeUpsilon: ['Tongue'],
+  };
+  const workerPartDefs = {};
+  Object.keys(tags).forEach(defName => {
+    workerPartDefs[defName] = {
+      defName,
+      hitPoints: 20,
+      tags: tags[defName],
+      _completeness: 'complete',
+    };
+  });
+  const workerIndex = resolver.buildPartIndex(workerBody);
+  const baseContext = {
+    bodyDef: workerBody,
+    bodyPartDefs: workerPartDefs,
+    partIndex: workerIndex,
+    joinedEvidence: [],
+    hediffCatalog: {},
+    prostheticEfficiency: {},
+    resolvedDeps: {
+      Consciousness: 1,
+      BloodPumping: 1,
+      Breathing: 1,
+      BloodFiltration: 1,
+    },
+    painTotal: 0,
+    alwaysDowned: false,
+  };
+  const capacity = workerClass => ({ workerClass, _completeness: 'complete' });
+
+  const workerNames = Object.keys(resolver.workers);
+  ok(workerNames.length === 6, 'CR-D1-001 registry contains six audited workers');
+  ok(workerNames.includes('PawnCapacityWorker_Consciousness')
+    && workerNames.includes('PawnCapacityWorker_Manipulation')
+    && workerNames.includes('PawnCapacityWorker_Moving')
+    && workerNames.includes('PawnCapacityWorker_Sight')
+    && workerNames.includes('PawnCapacityWorker_Talking')
+    && workerNames.includes('PawnCapacityWorker_Hearing'),
+  'CR-D1-002 registry identities exactly cover supported workers');
+
+  for (let i = 0; i < workerNames.length; i++) {
+    const result = resolver.resolveCapacityWorker(capacity(workerNames[i]), baseContext);
+    ok(result.state === 'resolved', 'CR-D1-00' + (i + 3) + ' healthy supported worker resolves');
+    ok(Math.abs(result.value - 1) < 1e-9, 'CR-D1-01' + (i + 3) + ' healthy supported worker baseline is worker-derived 1');
+  }
+
+  const unsupported = resolver.resolveCapacityWorker(
+    capacity('Example.Namespace.CustomCapacityWorker'), baseContext);
+  ok(unsupported.state === 'unknown' && unsupported.reason === 'unsupportedCapacityWorker',
+    'CR-A2-001 unsupported exact worker is unknown');
+  ok(unsupported.evidence[0].workerClass === 'Example.Namespace.CustomCapacityWorker',
+    'CR-A2-002 unsupported worker identity is preserved');
+
+  const emptyBody = {
+    defName: 'FormEmpty',
+    _completeness: 'complete',
+    corePart: { def: 'NodeEmpty', parts: [] },
+  };
+  const emptyContext = Object.assign({}, baseContext, {
+    bodyDef: emptyBody,
+    bodyPartDefs: {
+      NodeEmpty: { defName: 'NodeEmpty', tags: [], hitPoints: 10, _completeness: 'complete' },
+    },
+    partIndex: resolver.buildPartIndex(emptyBody),
+  });
+  const notApplicable = resolver.resolveCapacityWorker(
+    capacity('PawnCapacityWorker_Sight'), emptyContext);
+  ok(notApplicable.state === 'notApplicable',
+    'CR-A7-001 complete positive metadata proves non-applicability');
+
+  const partialBodyContext = Object.assign({}, emptyContext, {
+    bodyDef: Object.assign({}, emptyBody, { _completeness: 'partial' }),
+  });
+  const partialNoTag = resolver.resolveCapacityWorker(
+    capacity('PawnCapacityWorker_Sight'), partialBodyContext);
+  ok(partialNoTag.state === 'unknown' && partialNoTag.reason === 'insufficientCapacityMetadata',
+    'CR-A3-001 partial metadata cannot prove non-applicability');
+
+  const partialPartDefs = Object.assign({}, workerPartDefs, {
+    NodeXi: Object.assign({}, workerPartDefs.NodeXi, { _completeness: 'partial' }),
+  });
+  const partialPositive = resolver.resolveCapacityWorker(capacity('PawnCapacityWorker_Sight'),
+    Object.assign({}, baseContext, { bodyPartDefs: partialPartDefs }));
+  ok(partialPositive.state === 'unknown' && partialPositive.reason === 'insufficientCapacityMetadata',
+    'CR-A3b-001 positive tag does not override incomplete relevant metadata');
+
+  const sightPartIndex = workerIndex.find(part => part.defName === 'NodeXi').index;
+  const hearingPartIndex = workerIndex.find(part => part.defName === 'NodePi').index;
+  const unknownReplacement = {
+    kind: 'replacement',
+    replacementDef: 'OpaqueReplacement',
+    joinState: 'resolved',
+    partIdentity: { bodyDef: 'FormDelta', partIndex: sightPartIndex },
+  };
+  const unknownReplacementContext = Object.assign({}, baseContext, {
+    joinedEvidence: [unknownReplacement],
+  });
+  const affectedSight = resolver.resolveCapacityWorker(
+    capacity('PawnCapacityWorker_Sight'), unknownReplacementContext);
+  ok(affectedSight.state === 'unknown' && affectedSight.reason === 'unknownPartEfficiency',
+    'CR-A4-001 relevant unknown prosthetic efficiency is unknown');
+  const unaffectedHearing = resolver.resolveCapacityWorker(
+    capacity('PawnCapacityWorker_Hearing'), unknownReplacementContext);
+  ok(unaffectedHearing.state === 'resolved' && unaffectedHearing.value === 1,
+    'CR-A5-001 irrelevant unknown prosthetic does not poison hearing');
+
+  const knownReplacementContext = Object.assign({}, baseContext, {
+    joinedEvidence: [unknownReplacement],
+    prostheticEfficiency: { OpaqueReplacement: { efficiency: 0.5 } },
+  });
+  const weightedSight = resolver.resolveCapacityWorker(
+    capacity('PawnCapacityWorker_Sight'), knownReplacementContext);
+  ok(weightedSight.state === 'resolved' && Math.abs(weightedSight.value - 0.875) < 1e-9,
+    'CR-A4-002 sight uses audited best-part weight for known replacement');
+
+  const missingHearing = {
+    kind: 'missing',
+    joinState: 'resolved',
+    partIdentity: { bodyDef: 'FormDelta', partIndex: hearingPartIndex },
+  };
+  const hearingWithLoss = resolver.resolveCapacityWorker(capacity('PawnCapacityWorker_Hearing'),
+    Object.assign({}, baseContext, { joinedEvidence: [missingHearing] }));
+  ok(hearingWithLoss.state === 'resolved' && Math.abs(hearingWithLoss.value - 0.75) < 1e-9,
+    'CR-D3-001 hearing uses audited best-part weight after one source is missing');
+
+  const injury = {
+    kind: 'hediff',
+    hediffDef: 'OpaqueInjury',
+    severity: 5,
+    joinState: 'resolved',
+    partIdentity: { bodyDef: 'FormDelta', partIndex: sightPartIndex },
+  };
+  const injuryContext = Object.assign({}, baseContext, {
+    joinedEvidence: [injury],
+    hediffCatalog: {
+      OpaqueInjury: { def: 'OpaqueInjury', category: 'injury', _completeness: 'complete' },
+    },
+  });
+  const injurySight = resolver.resolveCapacityWorker(
+    capacity('PawnCapacityWorker_Sight'), injuryContext);
+  ok(injurySight.state === 'unknown' && injurySight.reason === 'unknownPartEfficiency',
+    'CR-A3-002 injury is unknown when rounded remaining-part-health inputs are absent');
+
+  const missingLifeStage = resolver.resolveCapacityWorker(capacity('PawnCapacityWorker_Moving'),
+    Object.assign({}, baseContext, { alwaysDowned: null }));
+  ok(missingLifeStage.state === 'unknown' && missingLifeStage.reason === 'unknownLifeStageState',
+    'CR-A3-003 Moving does not infer life-stage alwaysDowned from current status');
+
   const source = fs.readFileSync(path.join(__dirname, '..', 'files', 'capacity-resolver.js'), 'utf8');
   ok(!/raceDefName\s*={2,3}\s*['"]/.test(source), 'CR-F3-009 resolver has no race-name equality branch');
   ok(!/bodyDefName\s*={2,3}\s*['"]/.test(source), 'CR-F3-010 resolver has no body-name equality branch');
