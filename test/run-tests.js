@@ -29,6 +29,7 @@ const tests = [
   './capacity-resolver.test.js',
   './c4-audit-contract.test.js',
   './requirement-scanner.test.js',
+  './requirement-registry.test.js',
 ];
 
 (async () => {
