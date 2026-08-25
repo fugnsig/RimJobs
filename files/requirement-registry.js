@@ -115,6 +115,7 @@ const RequirementRegistry = (() => {
       completeness: 'unknown',
       completenessReasons: [reason],
       workTypeDefName: null,
+      sourceWorkTypes: [],
       permission: {
         workTags: { completeness: 'unknown', values: [], provenance: provenance(null) },
         age: { state: 'unknown', provenance: provenance(null) },
@@ -166,6 +167,7 @@ const RequirementRegistry = (() => {
         ? 'complete' : 'partial',
       completenessReasons: Array.from(new Set(workTagReasons.concat(catalogueReasons))),
       workTypeDefName,
+      sourceWorkTypes: [workTypeDefName],
       permission: {
         workTags: {
           completeness: tagCompleteness,
