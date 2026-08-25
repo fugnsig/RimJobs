@@ -1,0 +1,1226 @@
+{
+  "audit": {
+    "version": "1.6.4871 rev590",
+    "source": "installed Core Bodies_Humanlike.xml and BodyParts_*.xml"
+  },
+  "body": {
+    "defName": "Human",
+    "corePart": {
+      "def": "Torso",
+      "customLabel": null,
+      "coverage": null,
+      "depth": "Outside",
+      "height": "Middle",
+      "parts": [
+        {
+          "def": "Ribcage",
+          "customLabel": null,
+          "coverage": 0.036,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Sternum",
+          "customLabel": null,
+          "coverage": 0.015,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Pelvis",
+          "customLabel": null,
+          "coverage": 0.025,
+          "depth": "Inside",
+          "height": "Bottom",
+          "parts": []
+        },
+        {
+          "def": "Spine",
+          "customLabel": null,
+          "coverage": 0.025,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Stomach",
+          "customLabel": null,
+          "coverage": 0.025,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Heart",
+          "customLabel": null,
+          "coverage": 0.02,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Lung",
+          "customLabel": "left lung",
+          "coverage": 0.025,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Lung",
+          "customLabel": "right lung",
+          "coverage": 0.025,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Kidney",
+          "customLabel": "left kidney",
+          "coverage": 0.017,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Kidney",
+          "customLabel": "right kidney",
+          "coverage": 0.017,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Liver",
+          "customLabel": null,
+          "coverage": 0.025,
+          "depth": "Inside",
+          "height": null,
+          "parts": []
+        },
+        {
+          "def": "Neck",
+          "customLabel": null,
+          "coverage": 0.075,
+          "depth": null,
+          "height": "Top",
+          "parts": [
+            {
+              "def": "Head",
+              "customLabel": null,
+              "coverage": 0.8,
+              "depth": null,
+              "height": null,
+              "parts": [
+                {
+                  "def": "Skull",
+                  "customLabel": null,
+                  "coverage": 0.18,
+                  "depth": "Inside",
+                  "height": null,
+                  "parts": [
+                    {
+                      "def": "Brain",
+                      "customLabel": null,
+                      "coverage": 0.8,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    }
+                  ]
+                },
+                {
+                  "def": "Eye",
+                  "customLabel": "left eye",
+                  "coverage": 0.07,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Eye",
+                  "customLabel": "right eye",
+                  "coverage": 0.07,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Ear",
+                  "customLabel": "left ear",
+                  "coverage": 0.07,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Ear",
+                  "customLabel": "right ear",
+                  "coverage": 0.07,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Nose",
+                  "customLabel": null,
+                  "coverage": 0.1,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Jaw",
+                  "customLabel": null,
+                  "coverage": 0.15,
+                  "depth": null,
+                  "height": null,
+                  "parts": [
+                    {
+                      "def": "Tongue",
+                      "customLabel": null,
+                      "coverage": 0.001,
+                      "depth": "Inside",
+                      "height": null,
+                      "parts": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "def": "Shoulder",
+          "customLabel": "left shoulder",
+          "coverage": 0.12,
+          "depth": null,
+          "height": null,
+          "parts": [
+            {
+              "def": "Clavicle",
+              "customLabel": "left clavicle",
+              "coverage": 0.09,
+              "depth": "Inside",
+              "height": "Top",
+              "parts": []
+            },
+            {
+              "def": "Arm",
+              "customLabel": "left arm",
+              "coverage": 0.77,
+              "depth": null,
+              "height": null,
+              "parts": [
+                {
+                  "def": "Humerus",
+                  "customLabel": "left humerus",
+                  "coverage": 0.1,
+                  "depth": "Inside",
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Radius",
+                  "customLabel": "left radius",
+                  "coverage": 0.1,
+                  "depth": "Inside",
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Hand",
+                  "customLabel": "left hand",
+                  "coverage": 0.14,
+                  "depth": null,
+                  "height": "Bottom",
+                  "parts": [
+                    {
+                      "def": "Finger",
+                      "customLabel": "left pinky",
+                      "coverage": 0.06,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    },
+                    {
+                      "def": "Finger",
+                      "customLabel": "left ring finger",
+                      "coverage": 0.07,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    },
+                    {
+                      "def": "Finger",
+                      "customLabel": "left middle finger",
+                      "coverage": 0.08,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    },
+                    {
+                      "def": "Finger",
+                      "customLabel": "left index finger",
+                      "coverage": 0.07,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    },
+                    {
+                      "def": "Finger",
+                      "customLabel": "left thumb",
+                      "coverage": 0.08,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "def": "Shoulder",
+          "customLabel": "right shoulder",
+          "coverage": 0.12,
+          "depth": null,
+          "height": null,
+          "parts": [
+            {
+              "def": "Clavicle",
+              "customLabel": "right clavicle",
+              "coverage": 0.09,
+              "depth": "Inside",
+              "height": "Top",
+              "parts": []
+            },
+            {
+              "def": "Arm",
+              "customLabel": "right arm",
+              "coverage": 0.77,
+              "depth": null,
+              "height": null,
+              "parts": [
+                {
+                  "def": "Humerus",
+                  "customLabel": "right humerus",
+                  "coverage": 0.1,
+                  "depth": "Inside",
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Radius",
+                  "customLabel": "right radius",
+                  "coverage": 0.1,
+                  "depth": "Inside",
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Hand",
+                  "customLabel": "right hand",
+                  "coverage": 0.14,
+                  "depth": null,
+                  "height": "Bottom",
+                  "parts": [
+                    {
+                      "def": "Finger",
+                      "customLabel": "right pinky",
+                      "coverage": 0.06,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    },
+                    {
+                      "def": "Finger",
+                      "customLabel": "right ring finger",
+                      "coverage": 0.07,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    },
+                    {
+                      "def": "Finger",
+                      "customLabel": "right middle finger",
+                      "coverage": 0.08,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    },
+                    {
+                      "def": "Finger",
+                      "customLabel": "right index finger",
+                      "coverage": 0.07,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    },
+                    {
+                      "def": "Finger",
+                      "customLabel": "right thumb",
+                      "coverage": 0.08,
+                      "depth": null,
+                      "height": null,
+                      "parts": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "def": "Waist",
+          "customLabel": null,
+          "coverage": 0,
+          "depth": null,
+          "height": "Bottom",
+          "parts": []
+        },
+        {
+          "def": "Leg",
+          "customLabel": "left leg",
+          "coverage": 0.14,
+          "depth": null,
+          "height": "Bottom",
+          "parts": [
+            {
+              "def": "Femur",
+              "customLabel": "left femur",
+              "coverage": 0.1,
+              "depth": "Inside",
+              "height": null,
+              "parts": []
+            },
+            {
+              "def": "Tibia",
+              "customLabel": "left tibia",
+              "coverage": 0.1,
+              "depth": "Inside",
+              "height": null,
+              "parts": []
+            },
+            {
+              "def": "Foot",
+              "customLabel": "left foot",
+              "coverage": 0.1,
+              "depth": null,
+              "height": null,
+              "parts": [
+                {
+                  "def": "Toe",
+                  "customLabel": "left little toe",
+                  "coverage": 0.06,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Toe",
+                  "customLabel": "left fourth toe",
+                  "coverage": 0.07,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Toe",
+                  "customLabel": "left middle toe",
+                  "coverage": 0.08,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Toe",
+                  "customLabel": "left second toe",
+                  "coverage": 0.09,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Toe",
+                  "customLabel": "left big toe",
+                  "coverage": 0.09,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "def": "Leg",
+          "customLabel": "right leg",
+          "coverage": 0.14,
+          "depth": null,
+          "height": "Bottom",
+          "parts": [
+            {
+              "def": "Femur",
+              "customLabel": "right femur",
+              "coverage": 0.1,
+              "depth": "Inside",
+              "height": null,
+              "parts": []
+            },
+            {
+              "def": "Tibia",
+              "customLabel": "right tibia",
+              "coverage": 0.1,
+              "depth": "Inside",
+              "height": null,
+              "parts": []
+            },
+            {
+              "def": "Foot",
+              "customLabel": "right foot",
+              "coverage": 0.1,
+              "depth": null,
+              "height": null,
+              "parts": [
+                {
+                  "def": "Toe",
+                  "customLabel": "right little toe",
+                  "coverage": 0.06,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Toe",
+                  "customLabel": "right fourth toe",
+                  "coverage": 0.07,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Toe",
+                  "customLabel": "right middle toe",
+                  "coverage": 0.08,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Toe",
+                  "customLabel": "right second toe",
+                  "coverage": 0.09,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                },
+                {
+                  "def": "Toe",
+                  "customLabel": "right big toe",
+                  "coverage": 0.09,
+                  "depth": null,
+                  "height": null,
+                  "parts": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "_completeness": "complete",
+    "_completenessReasons": [],
+    "_provenance": {
+      "modId": null,
+      "sources": [
+        {
+          "modId": null,
+          "file": null,
+          "scanOrder": null,
+          "sourceOrder": 0
+        }
+      ]
+    }
+  },
+  "bodyPartDefs": {
+    "Arm": {
+      "defName": "Arm",
+      "label": "arm",
+      "hitPoints": 30,
+      "tags": [
+        "ManipulationLimbCore",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 46
+          }
+        ]
+      }
+    },
+    "Brain": {
+      "defName": "Brain",
+      "label": "brain",
+      "hitPoints": 10,
+      "tags": [
+        "ConsciousnessSource"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 33
+          }
+        ]
+      }
+    },
+    "Clavicle": {
+      "defName": "Clavicle",
+      "label": "clavicle",
+      "hitPoints": 25,
+      "tags": [
+        "ManipulationLimbSegment",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 51
+          }
+        ]
+      }
+    },
+    "Ear": {
+      "defName": "Ear",
+      "label": "ear",
+      "hitPoints": 12,
+      "tags": [
+        "HearingSource"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 35
+          }
+        ]
+      }
+    },
+    "Eye": {
+      "defName": "Eye",
+      "label": "eye",
+      "hitPoints": 10,
+      "tags": [
+        "SightSource"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 34
+          }
+        ]
+      }
+    },
+    "Femur": {
+      "defName": "Femur",
+      "label": "femur",
+      "hitPoints": 25,
+      "tags": [
+        "MovingLimbSegment",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 56
+          }
+        ]
+      }
+    },
+    "Finger": {
+      "defName": "Finger",
+      "label": "finger",
+      "hitPoints": 8,
+      "tags": [
+        "ManipulationLimbDigit",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 48
+          }
+        ]
+      }
+    },
+    "Foot": {
+      "defName": "Foot",
+      "label": "foot",
+      "hitPoints": 25,
+      "tags": [
+        "MovingLimbSegment"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 42
+          }
+        ]
+      }
+    },
+    "Hand": {
+      "defName": "Hand",
+      "label": "hand",
+      "hitPoints": 20,
+      "tags": [
+        "ManipulationLimbSegment"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 47
+          }
+        ]
+      }
+    },
+    "Head": {
+      "defName": "Head",
+      "label": "head",
+      "hitPoints": 25,
+      "tags": [],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 31
+          }
+        ]
+      }
+    },
+    "Heart": {
+      "defName": "Heart",
+      "label": "heart",
+      "hitPoints": 15,
+      "tags": [
+        "BloodPumpingSource"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 82
+          }
+        ]
+      }
+    },
+    "Humerus": {
+      "defName": "Humerus",
+      "label": "humerus",
+      "hitPoints": 25,
+      "tags": [
+        "ManipulationLimbSegment",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 53
+          }
+        ]
+      }
+    },
+    "Jaw": {
+      "defName": "Jaw",
+      "label": "jaw",
+      "hitPoints": 20,
+      "tags": [
+        "EatingSource",
+        "TalkingSource"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 37
+          }
+        ]
+      }
+    },
+    "Kidney": {
+      "defName": "Kidney",
+      "label": "kidney",
+      "hitPoints": 15,
+      "tags": [
+        "BloodFiltrationKidney"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 84
+          }
+        ]
+      }
+    },
+    "Leg": {
+      "defName": "Leg",
+      "label": "leg",
+      "hitPoints": 30,
+      "tags": [
+        "MovingLimbCore"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 41
+          }
+        ]
+      }
+    },
+    "Liver": {
+      "defName": "Liver",
+      "label": "liver",
+      "hitPoints": 20,
+      "tags": [
+        "BloodFiltrationLiver",
+        "MetabolismSource"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 85
+          }
+        ]
+      }
+    },
+    "Lung": {
+      "defName": "Lung",
+      "label": "lung",
+      "hitPoints": 15,
+      "tags": [
+        "BreathingSource"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 83
+          }
+        ]
+      }
+    },
+    "Neck": {
+      "defName": "Neck",
+      "label": "neck",
+      "hitPoints": 25,
+      "tags": [
+        "BreathingPathway",
+        "EatingPathway",
+        "TalkingPathway"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 38
+          }
+        ]
+      }
+    },
+    "Nose": {
+      "defName": "Nose",
+      "label": "nose",
+      "hitPoints": 10,
+      "tags": [],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 36
+          }
+        ]
+      }
+    },
+    "Pelvis": {
+      "defName": "Pelvis",
+      "label": "pelvis",
+      "hitPoints": 25,
+      "tags": [
+        "Pelvis"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 55
+          }
+        ]
+      }
+    },
+    "Radius": {
+      "defName": "Radius",
+      "label": "radius",
+      "hitPoints": 20,
+      "tags": [
+        "ManipulationLimbSegment",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 54
+          }
+        ]
+      }
+    },
+    "Ribcage": {
+      "defName": "Ribcage",
+      "label": "ribcage",
+      "hitPoints": 30,
+      "tags": [
+        "BreathingSourceCage"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 39
+          }
+        ]
+      }
+    },
+    "Shoulder": {
+      "defName": "Shoulder",
+      "label": "shoulder",
+      "hitPoints": 30,
+      "tags": [
+        "ManipulationLimbSegment",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 45
+          }
+        ]
+      }
+    },
+    "Skull": {
+      "defName": "Skull",
+      "label": "skull",
+      "hitPoints": 25,
+      "tags": [],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 32
+          }
+        ]
+      }
+    },
+    "Spine": {
+      "defName": "Spine",
+      "label": "spine",
+      "hitPoints": 25,
+      "tags": [
+        "Spine"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 40
+          }
+        ]
+      }
+    },
+    "Sternum": {
+      "defName": "Sternum",
+      "label": "sternum",
+      "hitPoints": 20,
+      "tags": [
+        "BreathingSourceCage"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 52
+          }
+        ]
+      }
+    },
+    "Stomach": {
+      "defName": "Stomach",
+      "label": "stomach",
+      "hitPoints": 20,
+      "tags": [
+        "MetabolismSource"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 86
+          }
+        ]
+      }
+    },
+    "Tibia": {
+      "defName": "Tibia",
+      "label": "tibia",
+      "hitPoints": 25,
+      "tags": [
+        "MovingLimbSegment",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 57
+          }
+        ]
+      }
+    },
+    "Toe": {
+      "defName": "Toe",
+      "label": "toe",
+      "hitPoints": 8,
+      "tags": [
+        "MovingLimbDigit",
+        "Mirrored"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 50
+          }
+        ]
+      }
+    },
+    "Tongue": {
+      "defName": "Tongue",
+      "label": "tongue",
+      "hitPoints": 10,
+      "tags": [
+        "Tongue"
+      ],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 43
+          }
+        ]
+      }
+    },
+    "Torso": {
+      "defName": "Torso",
+      "label": "torso",
+      "hitPoints": 40,
+      "tags": [],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 44
+          }
+        ]
+      }
+    },
+    "Waist": {
+      "defName": "Waist",
+      "label": "utility slot",
+      "hitPoints": 10,
+      "tags": [],
+      "_completeness": "complete",
+      "_completenessReasons": [],
+      "_provenance": {
+        "modId": null,
+        "sources": [
+          {
+            "modId": null,
+            "file": null,
+            "scanOrder": null,
+            "sourceOrder": 49
+          }
+        ]
+      }
+    }
+  }
+}

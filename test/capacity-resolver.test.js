@@ -4,7 +4,10 @@
  */
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { loadScripts } = require('./_harness');
+const { DOMParserShim } = require('./_xml-dom-shim');
+const humanFixture = require('./fixtures/c3-human-capacity.json');
 
 module.exports = function run() {
   const { CapacityResolver: resolver } = loadScripts(['capacity-resolver.js'], {});
@@ -17,6 +20,58 @@ module.exports = function run() {
       console.log('  FAIL ' + label);
     }
   }
+
+  const parserContext = loadScripts(['data.js'], { DOMParser: DOMParserShim });
+  vm.runInContext([
+    'globalThis._parseC3Bodies = parseBodyDefsFromXML',
+    'globalThis._parseC3Parts = parseBodyPartDefsFromXML',
+    'globalThis._parseC3Capacities = parsePawnCapacityDefsFromXML',
+    'globalThis._parseC3Races = parseRaceBodyMapFromXML',
+    'globalThis._parseC3Hediffs = parseHediffCatalogFromXML',
+  ].join(';'), parserContext);
+  const parserFixture = [
+    '<Defs>',
+    '<BodyDef Name="BaseForm" Abstract="True"><corePart><def>FixtureRoot</def></corePart></BodyDef>',
+    '<BodyDef ParentName="BaseForm"><defName>FixtureBody</defName></BodyDef>',
+    '<BodyPartDef Name="BasePart" Abstract="True"><tags><li>SightSource</li></tags></BodyPartDef>',
+    '<BodyPartDef ParentName="BasePart"><defName>FixtureRoot</defName><hitPoints>17</hitPoints></BodyPartDef>',
+    '<PawnCapacityDef><defName>FixtureSight</defName><workerClass>PawnCapacityWorker_Sight</workerClass></PawnCapacityDef>',
+    '<ThingDef><defName>FixtureRace</defName><race><body>FixtureBody</body></race></ThingDef>',
+    '<HediffDef><defName>FixtureCondition</defName><stages><li><minSeverity>0.2</minSeverity>',
+    '<capacityFactorEffectMultiplier>FixtureStat</capacityFactorEffectMultiplier>',
+    '<capMods><li><capacity>FixtureSight</capacity><postFactor>0.5</postFactor></li></capMods>',
+    '</li></stages></HediffDef>',
+    '</Defs>',
+  ].join('');
+  const parsedBodies = parserContext._parseC3Bodies(parserFixture, { modId: 'fixture.mod' });
+  const parsedParts = parserContext._parseC3Parts(parserFixture, { modId: 'fixture.mod' });
+  const parsedCaps = parserContext._parseC3Capacities(parserFixture, { modId: 'fixture.mod' });
+  const parsedRaces = parserContext._parseC3Races(parserFixture, { modId: 'fixture.mod' });
+  const parsedHediffs = parserContext._parseC3Hediffs(parserFixture);
+  ok(parsedBodies.FixtureBody.corePart.def === 'FixtureRoot'
+    && parsedBodies.FixtureBody._completeness === 'complete',
+  'CR-F4-001 BodyDef abstract-parent inheritance parses in renderer seam');
+  ok(parsedParts.FixtureRoot.tags.includes('SightSource')
+    && parsedParts.FixtureRoot.hitPoints === 17,
+  'CR-F4-002 BodyPartDef tags and numeric fields inherit');
+  ok(parsedCaps.FixtureSight.workerClass === 'PawnCapacityWorker_Sight',
+    'CR-F4-003 exact capacity worker identity parses');
+  ok(parsedRaces.FixtureRace.bodyDefName === 'FixtureBody',
+    'CR-F4-004 race to BodyDef association parses');
+  ok(parsedHediffs[0].capModStages[0].capacityFactorEffectMultiplier === 'FixtureStat',
+    'CR-F4-005 stat-scaled capacity factor metadata parses losslessly');
+  ok(parsedBodies.FixtureBody._provenance.modId === 'fixture.mod',
+    'CR-F4-006 scanner parser preserves source provenance');
+  const duplicateBodies = parserContext._parseC3Bodies(
+    '<Defs><BodyDef><defName>Repeated</defName><corePart><def>A</def></corePart></BodyDef>'
+      + '<BodyDef><defName>Repeated</defName><corePart><def>B</def></corePart></BodyDef></Defs>'
+  );
+  ok(duplicateBodies.Repeated._completeness === 'partial'
+    && duplicateBodies.Repeated._completenessReasons.includes('duplicateDefinitionConflict'),
+  'CR-F4-007 duplicate definitions become partial instead of silently overwriting');
+  let malformedSafe = true;
+  try { parserContext._parseC3Bodies('<Defs><BodyDef><defName>Broken'); } catch (_) { malformedSafe = false; }
+  ok(malformedSafe, 'CR-F4-008 malformed XML is handled without throwing');
 
   const body = {
     defName: 'SyntheticBody',
@@ -707,6 +762,168 @@ module.exports = function run() {
   ok(bodyUnknownResult.bodyIdentity.state === 'unknown'
     && bodyUnknownResult.capacities.sight.structural.reason === 'bodyIdentityUnknown',
   'CR-A8-004 missing body identity makes capacity facts explicitly unknown');
+
+  ok(humanFixture.audit.version === '1.6.4871 rev590'
+    && humanFixture.body._completeness === 'complete'
+    && Object.keys(humanFixture.bodyPartDefs).length === 32,
+  'CR-D0-001 Human fixture records the installed audited source and complete definitions');
+  const humanIndex = resolver.buildPartIndex(humanFixture.body);
+  function findFixturePartIndex(predicate) {
+    const record = humanIndex.find(item => predicate(
+      item,
+      humanFixture.bodyPartDefs[item.defName] || {}
+    ));
+    return record ? record.index : null;
+  }
+  const humanCapacityDefs = {};
+  Object.keys(orchestratorCapacityDefs).forEach(name => {
+    if (name !== 'Mystery') humanCapacityDefs[name] = orchestratorCapacityDefs[name];
+  });
+  const humanDefinitions = {
+    raceBodyMap: {
+      FixtureHumanRace: {
+        bodyDefName: humanFixture.body.defName,
+        _completeness: 'complete',
+      },
+    },
+    bodyDefs: { [humanFixture.body.defName]: humanFixture.body },
+    bodyPartDefs: humanFixture.bodyPartDefs,
+    capacityDefs: humanCapacityDefs,
+    hediffCatalog: [],
+    prostheticEfficiency: {},
+    completeness: {},
+  };
+  const humanPawn = {
+    pawnState: {
+      raceDefName: 'FixtureHumanRace',
+      alwaysDowned: false,
+      structuralPainTotal: 0,
+      currentStatus: { canBeAwake: true, painTotal: 0 },
+    },
+    bodyEvidence: [],
+  };
+  const healthyHuman = resolver.resolvePawnCapacities(humanPawn, humanDefinitions);
+  for (let i = 0; i < publicCapacityKeys.length; i++) {
+    const fact = healthyHuman.capacities[publicCapacityKeys[i]];
+    ok(fact.structural.state === 'resolved' && fact.structural.value === 1
+      && fact.current.value === 1,
+    'CR-D1-02' + i + ' audited healthy Human capacity equals target baseline');
+  }
+
+  const armIndex = findFixturePartIndex((record, definition) =>
+    definition.tags && definition.tags.includes('ManipulationLimbCore'));
+  const oneArmMissing = resolver.resolvePawnCapacities(Object.assign({}, humanPawn, {
+    bodyEvidence: [{
+      kind: 'missing',
+      rawPartIndex: armIndex,
+      bodyDefName: humanFixture.body.defName,
+      bodyDefReference: 'explicit',
+      persistence: 'persistent',
+      sourceObservationIndex: 40,
+    }],
+  }), humanDefinitions);
+  ok(oneArmMissing.capacities.manipulation.structural.value === 0.5,
+    'CR-D2-001 one audited manipulation limb removal yields target limb average');
+  ok(oneArmMissing.capacities.sight.structural.value === 1,
+    'CR-D2-002 manipulation limb removal leaves unrelated Sight unchanged');
+
+  const brainIndex = findFixturePartIndex((record, definition) =>
+    definition.tags && definition.tags.includes('ConsciousnessSource'));
+  const brainCatalog = [{
+    def: 'AuditedBrainEffect',
+    category: 'condition',
+    _completeness: 'complete',
+    capModStages: [{
+      minSeverity: 0,
+      partEfficiencyOffset: -0.5,
+      partIgnoreMissingHP: false,
+      capMods: [],
+    }],
+  }];
+  const brainEffect = resolver.resolvePawnCapacities(Object.assign({}, humanPawn, {
+    bodyEvidence: [{
+      kind: 'hediff',
+      hediffDef: 'AuditedBrainEffect',
+      severity: 1,
+      rawPartIndex: brainIndex,
+      bodyDefName: humanFixture.body.defName,
+      bodyDefReference: 'explicit',
+      persistence: 'persistent',
+      sourceObservationIndex: 41,
+    }],
+  }), Object.assign({}, humanDefinitions, { hediffCatalog: brainCatalog }));
+  ok(brainEffect.capacities.consciousness.structural.value === 0.5,
+    'CR-D3-001 audited brain-source efficiency changes Consciousness');
+  ok(brainEffect.capacities.manipulation.structural.value === 0.5
+    && brainEffect.capacities.talking.structural.value === 0.5,
+  'CR-B2-001 supported Consciousness dependency propagates to workers that consume it');
+  ok(brainEffect.capacities.hearing.structural.value === 1,
+    'CR-B2-002 supported dependency change leaves independent Hearing unchanged');
+
+  const humanReplacementCatalog = [{
+    def: 'AuditedArmReplacement', category: 'implant', _completeness: 'complete',
+  }];
+  const armReplacementEvidence = {
+    kind: 'replacement',
+    replacementDef: 'AuditedArmReplacement',
+    rawPartIndex: armIndex,
+    bodyDefName: humanFixture.body.defName,
+    bodyDefReference: 'explicit',
+    persistence: 'persistent',
+    sourceObservationIndex: 42,
+  };
+  const standardArmReplacement = resolver.resolvePawnCapacities(
+    Object.assign({}, humanPawn, { bodyEvidence: [armReplacementEvidence] }),
+    Object.assign({}, humanDefinitions, {
+      hediffCatalog: humanReplacementCatalog,
+      prostheticEfficiency: { AuditedArmReplacement: { efficiency: 0.8 } },
+    })
+  );
+  ok(standardArmReplacement.capacities.manipulation.structural.value === 0.9,
+    'CR-D4-001 known 0.8 replacement uses audited limb and ancestor-added-part semantics');
+
+  const enhancedArmReplacement = resolver.resolvePawnCapacities(
+    Object.assign({}, humanPawn, { bodyEvidence: [armReplacementEvidence] }),
+    Object.assign({}, humanDefinitions, {
+      hediffCatalog: humanReplacementCatalog,
+      prostheticEfficiency: { AuditedArmReplacement: { efficiency: 1.25 } },
+    })
+  );
+  ok(enhancedArmReplacement.capacities.manipulation.structural.value === 1.12,
+    'CR-D5-001 enhanced replacement result includes target midpoint rounding');
+  ok(enhancedArmReplacement.capacities.manipulation.structural.value
+    > standardArmReplacement.capacities.manipulation.structural.value,
+  'CR-D5-002 higher verified replacement efficiency produces a higher capacity');
+
+  const legIndex = findFixturePartIndex((record, definition) =>
+    definition.tags && definition.tags.includes('MovingLimbCore'));
+  const oneLegMissing = resolver.resolvePawnCapacities(Object.assign({}, humanPawn, {
+    bodyEvidence: [{
+      kind: 'missing',
+      rawPartIndex: legIndex,
+      bodyDefName: humanFixture.body.defName,
+      bodyDefReference: 'explicit',
+      persistence: 'persistent',
+      sourceObservationIndex: 43,
+    }],
+  }), humanDefinitions);
+  ok(oneLegMissing.capacities.moving.structural.value === 0.5,
+    'CR-D6-001 one missing movement limb retains the audited 0.4999 functional threshold');
+
+  const eyeIndex = findFixturePartIndex((record, definition) =>
+    definition.tags && definition.tags.includes('SightSource'));
+  const oneEyeMissing = resolver.resolvePawnCapacities(Object.assign({}, humanPawn, {
+    bodyEvidence: [{
+      kind: 'missing',
+      rawPartIndex: eyeIndex,
+      bodyDefName: humanFixture.body.defName,
+      bodyDefReference: 'explicit',
+      persistence: 'persistent',
+      sourceObservationIndex: 44,
+    }],
+  }), humanDefinitions);
+  ok(oneEyeMissing.capacities.sight.structural.value === 0.75,
+    'CR-D6-002 one missing eye matches audited best-source weighting');
 
   const source = fs.readFileSync(path.join(__dirname, '..', 'files', 'capacity-resolver.js'), 'utf8');
   ok(!/raceDefName\s*={2,3}\s*['"]/.test(source), 'CR-F3-009 resolver has no race-name equality branch');
