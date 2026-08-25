@@ -48,6 +48,60 @@ const _CAPACITY_WORKERS = Object.freeze({
   }),
 });
 
+// These audited workers are internal graph dependencies of the six public C3
+// capacities. They are resolved to support the verified Consciousness and
+// Moving algorithms but are not added to the public six-worker registry.
+const _CAPACITY_DEPENDENCY_WORKERS = Object.freeze({
+  PawnCapacityWorker_BloodPumping: Object.freeze({
+    primaryTag: 'BloodPumpingSource',
+    dependencies: [],
+    resolve(context) {
+      return context.resolver._resolveTagWorker(context, 'BloodPumpingSource', Infinity, -1);
+    },
+  }),
+  PawnCapacityWorker_Breathing: Object.freeze({
+    primaryTag: 'BreathingSource',
+    dependencies: [],
+    resolve(context) {
+      const source = context.resolver._calculateTagEfficiency(context, 'BreathingSource', Infinity, -1);
+      const pathway = context.resolver._calculateTagEfficiency(context, 'BreathingPathway', 1, -1);
+      const cage = context.resolver._calculateTagEfficiency(context, 'BreathingSourceCage', 1, -1);
+      if (source.state !== 'resolved') return source;
+      if (pathway.state !== 'resolved') return pathway;
+      if (cage.state !== 'resolved') return cage;
+      return context.resolver._resolved(source.value * pathway.value * cage.value,
+        source.evidence.concat(pathway.evidence, cage.evidence), []);
+    },
+  }),
+  PawnCapacityWorker_BloodFiltration: Object.freeze({
+    dependencies: [],
+    assessApplicability(context) {
+      const resolver = context.resolver;
+      if (!resolver._metadataComplete(context)) {
+        return { state: 'unknown', reason: 'insufficientCapacityMetadata' };
+      }
+      const hasKidney = resolver._partsWithTag(context, 'BloodFiltrationKidney').length > 0;
+      const hasLiver = resolver._partsWithTag(context, 'BloodFiltrationLiver').length > 0;
+      const hasSource = resolver._partsWithTag(context, 'BloodFiltrationSource').length > 0;
+      return hasKidney && hasLiver || hasSource
+        ? { state: 'applies', reason: null }
+        : { state: 'notApplicable', reason: 'bodyCannotHaveCapacity' };
+    },
+    resolve(context) {
+      const resolver = context.resolver;
+      const hasKidney = resolver._partsWithTag(context, 'BloodFiltrationKidney').length > 0;
+      if (!hasKidney) {
+        return resolver._calculateTagEfficiency(context, 'BloodFiltrationSource', Infinity, -1);
+      }
+      const kidney = resolver._calculateTagEfficiency(context, 'BloodFiltrationKidney', Infinity, -1);
+      const liver = resolver._calculateTagEfficiency(context, 'BloodFiltrationLiver', Infinity, -1);
+      if (kidney.state !== 'resolved') return kidney;
+      if (liver.state !== 'resolved') return liver;
+      return resolver._resolved(kidney.value * liver.value, kidney.evidence.concat(liver.evidence), []);
+    },
+  }),
+});
+
 const CapacityResolver = {
   workers: _CAPACITY_WORKERS,
 
@@ -454,14 +508,25 @@ const CapacityResolver = {
       if (efficiency.state !== 'resolved') return efficiency;
       sum += efficiency.value;
       best = Math.max(best, efficiency.value);
-      evidence.push({
+      const sourceObservation = this._evidenceOnPart(context, parts[i].index)[0] || null;
+      const contribution = {
         kind: 'partContribution',
         bodyDef: context.bodyDef && context.bodyDef.defName,
         partIndex: parts[i].index,
         partDef: parts[i].defName,
         tags: [tag],
         adjustedEfficiency: efficiency.value,
-      });
+      };
+      if (sourceObservation) contribution.sourceRef = {
+        sourceKind: 'bodyEvidence',
+        sourceId: sourceObservation.hediffDef || sourceObservation.replacementDef
+          || sourceObservation.implantDef || sourceObservation.kind,
+        bodyDef: context.bodyDef && context.bodyDef.defName,
+        partIndex: parts[i].index,
+        sourceObservationIndex: sourceObservation.sourceObservationIndex,
+        provenance: sourceObservation.provenance || null,
+      };
+      evidence.push(contribution);
     }
     const average = bestWeight >= 0 && parts.length >= 2
       ? best * bestWeight + ((sum - best) / (parts.length - 1)) * (1 - bestWeight)
@@ -525,14 +590,25 @@ const CapacityResolver = {
       }
       sum += value;
       if (value > 0) functional++;
-      allEvidence.push({
+      const sourceObservation = this._evidenceOnPart(context, core.index)[0] || null;
+      const contribution = {
         kind: 'partContribution',
         bodyDef: context.bodyDef && context.bodyDef.defName,
         partIndex: core.index,
         partDef: core.defName,
         tags: [coreTag],
         adjustedEfficiency: value,
-      });
+      };
+      if (sourceObservation) contribution.sourceRef = {
+        sourceKind: 'bodyEvidence',
+        sourceId: sourceObservation.hediffDef || sourceObservation.replacementDef
+          || sourceObservation.implantDef || sourceObservation.kind,
+        bodyDef: context.bodyDef && context.bodyDef.defName,
+        partIndex: core.index,
+        sourceObservationIndex: sourceObservation.sourceObservationIndex,
+        provenance: sourceObservation.provenance || null,
+      };
+      allEvidence.push(contribution);
     }
     return {
       result: this._resolved(sum / cores.length, allEvidence),
@@ -823,8 +899,18 @@ const CapacityResolver = {
       states[name] = 'resolving';
       stack.push(name);
 
+      const awakeGateApplies = capacityDef.zeroIfCannotBeAwake
+        && opts.snapshotType !== 'structural';
+      const forcedReason = opts.forcedUnknown && opts.forcedUnknown[name];
       const worker = registry[capacityDef.workerClass];
-      if (!worker) {
+      if (awakeGateApplies && opts.canBeAwake == null) {
+        cache[name] = resolver._unknown('unknownAwakeState');
+      } else if (awakeGateApplies && opts.canBeAwake === false) {
+        cache[name] = resolver._resolved(0, [{ kind: 'awakeGate' }], []);
+      } else if (forcedReason) {
+        cache[name] = resolver._unknown(forcedReason.reason || forcedReason,
+          forcedReason.evidence || []);
+      } else if (!worker) {
         cache[name] = resolver._unknown('unsupportedCapacityWorker', [{
           kind: 'workerClass',
           workerClass: capacityDef.workerClass || null,
@@ -865,6 +951,15 @@ const CapacityResolver = {
               } else if (applicability.state !== 'applies') {
                 workerResult = resolver._unknown(applicability.reason || 'insufficientCapacityMetadata');
               } else workerResult = worker.resolve(context);
+            } else if (worker.primaryTag) {
+              if (!resolver._metadataComplete(context)) {
+                workerResult = resolver._unknown('insufficientCapacityMetadata');
+              } else if (!resolver._partsWithTag(context, worker.primaryTag).length) {
+                workerResult = {
+                  state: 'notApplicable', value: null, reason: 'bodyCannotHaveCapacity',
+                  confidence: 'verified', evidence: [], derivedFrom: [],
+                };
+              } else workerResult = worker.resolve(context);
             } else {
               workerResult = worker.resolve(context);
             }
@@ -897,21 +992,229 @@ const CapacityResolver = {
     return cache;
   },
 
+  classifyEvidenceForSnapshot(joinedEvidence) {
+    const evidence = Array.isArray(joinedEvidence) ? joinedEvidence : [];
+    const structuralEvidence = [];
+    const currentEvidence = [];
+    const unresolvedPersistenceEvidence = [];
+    for (let i = 0; i < evidence.length; i++) {
+      const item = evidence[i];
+      if (!item) continue;
+      currentEvidence.push(item);
+      if (item.persistence === 'persistent') structuralEvidence.push(item);
+      else if (item.persistence !== 'temporary') unresolvedPersistenceEvidence.push(item);
+    }
+    return {
+      structuralEvidence: structuralEvidence,
+      currentEvidence: currentEvidence,
+      unresolvedPersistenceEvidence: unresolvedPersistenceEvidence,
+    };
+  },
+
+  _workerConsumedTags(workerClass) {
+    const tags = {
+      PawnCapacityWorker_Consciousness: ['ConsciousnessSource'],
+      PawnCapacityWorker_Manipulation: [
+        'ManipulationLimbCore', 'ManipulationLimbSegment', 'ManipulationLimbDigit',
+      ],
+      PawnCapacityWorker_Moving: [
+        'MovingLimbCore', 'MovingLimbSegment', 'MovingLimbDigit', 'Pelvis', 'Spine',
+      ],
+      PawnCapacityWorker_Sight: ['SightSource'],
+      PawnCapacityWorker_Talking: ['TalkingSource', 'TalkingPathway', 'Tongue'],
+      PawnCapacityWorker_Hearing: ['HearingSource'],
+      PawnCapacityWorker_BloodPumping: ['BloodPumpingSource'],
+      PawnCapacityWorker_Breathing: ['BreathingSource', 'BreathingPathway', 'BreathingSourceCage'],
+      PawnCapacityWorker_BloodFiltration: [
+        'BloodFiltrationKidney', 'BloodFiltrationLiver', 'BloodFiltrationSource',
+      ],
+    };
+    return tags[workerClass] || [];
+  },
+
+  isEvidenceRelevant(workerClass, observation, context) {
+    if (!observation || observation.rawPartIndex == null
+      && !(observation.partIdentity && Number.isInteger(observation.partIdentity.partIndex))) return false;
+    const observationIndex = observation.partIdentity && Number.isInteger(observation.partIdentity.partIndex)
+      ? observation.partIdentity.partIndex
+      : observation.rawPartIndex;
+    if (!Number.isInteger(observationIndex)) return false;
+    const tags = this._workerConsumedTags(workerClass);
+    const relevantParts = [];
+    for (let i = 0; i < tags.length; i++) {
+      const tagged = this._partsWithTag(context, tags[i]);
+      for (let j = 0; j < tagged.length; j++) {
+        if (relevantParts.indexOf(tagged[j].index) < 0) relevantParts.push(tagged[j].index);
+        const ancestors = this._ancestorIndexes(tagged[j].index, context.partIndex || []);
+        for (let k = 0; k < ancestors.length; k++) {
+          if (relevantParts.indexOf(ancestors[k]) < 0) relevantParts.push(ancestors[k]);
+        }
+      }
+    }
+    return relevantParts.indexOf(observationIndex) >= 0;
+  },
+
+  _definitionHasCapMod(definition, capacityName) {
+    return !!(definition && Array.isArray(definition.capModStages)
+      && definition.capModStages.some(stage => (stage.capMods || [])
+        .some(mod => mod.capacity === capacityName)));
+  },
+
+  _snapshotUncertainty(capacityName, capacityDef, observations, context, hediffCatalog, reason) {
+    const catalog = this._catalogIndex(hediffCatalog);
+    const evidence = Array.isArray(observations) ? observations : [];
+    for (let i = 0; i < evidence.length; i++) {
+      const item = evidence[i] || {};
+      const hediffDef = item.hediffDef || item.replacementDef || item.implantDef;
+      const definition = hediffDef ? catalog[hediffDef] : null;
+      if (this._definitionHasCapMod(definition, capacityName)) {
+        return {
+          reason: reason,
+          evidence: [{
+            kind: 'unresolvedPersistence',
+            hediffDef: hediffDef,
+            sourceObservationIndex: item.sourceObservationIndex,
+            affects: 'capMod',
+          }],
+        };
+      }
+      if (this.isEvidenceRelevant(capacityDef.workerClass, item, context)) {
+        return {
+          reason: reason,
+          evidence: [{
+            kind: 'unresolvedPersistence',
+            hediffDef: hediffDef || null,
+            sourceObservationIndex: item.sourceObservationIndex,
+            bodyDef: context.bodyDef && context.bodyDef.defName,
+            partIndex: item.partIdentity ? item.partIdentity.partIndex : item.rawPartIndex,
+            affects: 'partEfficiency',
+          }],
+        };
+      }
+      if (!definition && item.rawPartIndex == null && !item.partIdentity) {
+        return {
+          reason: reason,
+          evidence: [{
+            kind: 'unresolvedPersistence',
+            hediffDef: hediffDef || null,
+            sourceObservationIndex: item.sourceObservationIndex,
+            affects: 'unknownBodyWideSemantics',
+          }],
+        };
+      }
+    }
+    return null;
+  },
+
+  _capacityOutputKey(defName) {
+    if (!defName) return '';
+    return defName.charAt(0).toLowerCase() + defName.slice(1);
+  },
+
   resolvePawnCapacities(pawnEvidence, definitions) {
-    const bodyIdentity = this.resolveBodyIdentity(pawnEvidence, definitions);
-    const partIndex = bodyIdentity.state === 'resolved'
-      ? this.buildPartIndex(bodyIdentity.bodyDef)
-      : [];
-    const joinedObservations = this.joinObservations(
-      pawnEvidence && pawnEvidence.bodyEvidence,
-      bodyIdentity,
-      partIndex
-    );
+    const defs = definitions || {};
+    const evidence = pawnEvidence || {};
+    const capacityDefs = this._capacityDefIndex(defs.capacityDefs);
+    const bodyIdentity = this.resolveBodyIdentity(evidence, defs);
+    const capacities = {};
+    const capacityNames = Object.keys(capacityDefs).sort();
+    if (bodyIdentity.state !== 'resolved') {
+      for (let i = 0; i < capacityNames.length; i++) {
+        const name = capacityNames[i];
+        const definition = capacityDefs[name];
+        const fact = this._unknown('bodyIdentityUnknown', bodyIdentity.diagnostics || []);
+        capacities[this._capacityOutputKey(name)] = {
+          capacity: name,
+          workerClass: definition.workerClass || null,
+          workerSupported: !!(this.workers[definition.workerClass]
+            || _CAPACITY_DEPENDENCY_WORKERS[definition.workerClass]),
+          structural: fact,
+          current: this._unknown('bodyIdentityUnknown', bodyIdentity.diagnostics || []),
+        };
+      }
+      return { bodyIdentity: bodyIdentity, capacities: capacities };
+    }
+
+    const partIndex = this.buildPartIndex(bodyIdentity.bodyDef);
+    const joinedObservations = this.joinObservations(evidence.bodyEvidence, bodyIdentity, partIndex);
+    const classified = this.classifyEvidenceForSnapshot(joinedObservations);
+    const pawnState = evidence.pawnState || {};
+    const currentStatus = pawnState.currentStatus || {};
+    const sharedContext = {
+      bodyDef: bodyIdentity.bodyDef,
+      bodyPartDefs: defs.bodyPartDefs || {},
+      partIndex: partIndex,
+      hediffCatalog: defs.hediffCatalog || [],
+      prostheticEfficiency: defs.prostheticEfficiency || {},
+      completeness: defs.completeness || {},
+      pawnState: pawnState,
+      alwaysDowned: pawnState.alwaysDowned,
+    };
+    const structuralContext = Object.assign({}, sharedContext, {
+      joinedEvidence: classified.structuralEvidence,
+      painTotal: 0,
+    });
+    const currentContext = Object.assign({}, sharedContext, {
+      joinedEvidence: classified.currentEvidence,
+      painTotal: currentStatus.painTotal,
+    });
+
+    const structuralForced = {};
+    const currentForced = {};
+    for (let i = 0; i < capacityNames.length; i++) {
+      const name = capacityNames[i];
+      const definition = capacityDefs[name];
+      const persistenceUncertainty = this._snapshotUncertainty(
+        name,
+        definition,
+        classified.unresolvedPersistenceEvidence,
+        structuralContext,
+        defs.hediffCatalog,
+        'unresolvedPersistence'
+      );
+      if (persistenceUncertainty) structuralForced[name] = persistenceUncertainty;
+      const joinUncertainty = this._snapshotUncertainty(
+        name,
+        definition,
+        joinedObservations.filter(item => item.rawPartIndex != null && item.joinState !== 'resolved'),
+        currentContext,
+        defs.hediffCatalog,
+        'unresolvedObservationJoin'
+      );
+      if (joinUncertainty) {
+        currentForced[name] = joinUncertainty;
+        structuralForced[name] = joinUncertainty;
+      }
+    }
+
+    const graphRegistry = Object.assign({}, this.workers, _CAPACITY_DEPENDENCY_WORKERS);
+    const structuralGraph = this.resolveCapacityGraph(capacityDefs, structuralContext, {
+      workerRegistry: graphRegistry,
+      snapshotType: 'structural',
+      forcedUnknown: structuralForced,
+    });
+    const currentGraph = this.resolveCapacityGraph(capacityDefs, currentContext, {
+      workerRegistry: graphRegistry,
+      snapshotType: 'current',
+      canBeAwake: currentStatus.canBeAwake,
+      forcedUnknown: currentForced,
+    });
+
+    for (let i = 0; i < capacityNames.length; i++) {
+      const name = capacityNames[i];
+      const definition = capacityDefs[name];
+      capacities[this._capacityOutputKey(name)] = {
+        capacity: name,
+        workerClass: definition.workerClass || null,
+        workerSupported: !!(this.workers[definition.workerClass]
+          || _CAPACITY_DEPENDENCY_WORKERS[definition.workerClass]),
+        structural: structuralGraph[name],
+        current: currentGraph[name],
+      };
+    }
     return {
       bodyIdentity: bodyIdentity,
-      partIndex: partIndex,
-      joinedObservations: joinedObservations,
-      capacities: {},
+      capacities: capacities,
     };
   },
 };
