@@ -654,6 +654,215 @@ function _rwSkillToAppId(name) {
 function _capFirst(s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
 function _sanId(s) { return String(s).replace(/[^a-z0-9]+/gi, '_').toLowerCase(); }
 
+// ── Safe XML helpers (C3) ─────────────────────────────────────────────────────
+// Used by definition parsers that need inheritance resolution. These replace
+// the inline DOMParser boilerplate in older parsers and add direct-child-only
+// traversal (querySelector walks descendants, which is wrong for RimWorld XML
+// where nested defs reuse the same tag names).
+
+function _parseXmlDoc(xmlString) {
+  if (!xmlString || typeof xmlString !== 'string') return null;
+  let doc;
+  try { doc = new DOMParser().parseFromString(xmlString, 'text/xml'); } catch (_) { return null; }
+  if (!doc || !doc.documentElement) return null;
+  const rootName = String(doc.documentElement.tagName || doc.documentElement.nodeName || '').toLowerCase();
+  if (rootName === 'parsererror') return null;
+  if (typeof doc.getElementsByTagName === 'function' && doc.getElementsByTagName('parsererror').length) return null;
+  return doc;
+}
+
+function _elementChildren(el) {
+  if (!el) return [];
+  if (el.children) return Array.from(el.children);
+  return Array.from(el.childNodes || []).filter(node => node && node.nodeType === 1);
+}
+
+function _directChild(el, tagName) {
+  const children = _elementChildren(el);
+  for (let i = 0; i < children.length; i++) {
+    if (children[i].tagName === tagName) return children[i];
+  }
+  return null;
+}
+
+function _directChildren(el, tagName) {
+  return _elementChildren(el).filter(child => child.tagName === tagName);
+}
+
+function _textDirect(el, tagName) {
+  const child = _directChild(el, tagName);
+  if (!child) return null;
+  const t = child.textContent;
+  return t != null ? t.trim() : null;
+}
+
+// CRITICAL: preserves numeric 0 - returns null only for absent/unparseable,
+// NOT for zero. This differs from the parseFloat(x) || null pattern in older
+// parsers which conflates 0 with absent.
+function _numberDirect(el, tagName) {
+  const raw = _textDirect(el, tagName);
+  if (raw == null || raw === '') return null;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _boolDirect(el, tagName) {
+  const raw = _textDirect(el, tagName);
+  if (raw == null) return null;
+  if (/^\s*true\s*$/i.test(raw)) return true;
+  if (/^\s*false\s*$/i.test(raw)) return false;
+  return null;
+}
+
+function _boolAttribute(el, attributeName) {
+  if (!el || !el.hasAttribute(attributeName)) return null;
+  const raw = el.getAttribute(attributeName);
+  if (/^\s*true\s*$/i.test(raw || '')) return true;
+  if (/^\s*false\s*$/i.test(raw || '')) return false;
+  return null;
+}
+
+function _uniqueStrings(values) {
+  return Array.from(new Set((values || []).filter(Boolean)));
+}
+
+function _definitionProvenance(options, sourceOrder) {
+  const opts = options || {};
+  const sources = Array.isArray(opts.sources) ? opts.sources.slice() : [];
+  sources.push({
+    modId: opts.modId || null,
+    file: opts.file || null,
+    scanOrder: opts.scanOrder != null ? opts.scanOrder : null,
+    sourceOrder: sourceOrder,
+  });
+  return { modId: opts.modId || null, sources: sources };
+}
+
+function _mergeProvenance() {
+  const inputs = Array.from(arguments).filter(Boolean);
+  const sources = [];
+  let modId = null;
+  for (let i = 0; i < inputs.length; i++) {
+    if (modId == null && inputs[i].modId != null) modId = inputs[i].modId;
+    const next = Array.isArray(inputs[i].sources) ? inputs[i].sources : [];
+    for (let j = 0; j < next.length; j++) sources.push(next[j]);
+  }
+  return { modId: modId, sources: sources };
+}
+
+function _storeDefinition(result, defName, value) {
+  if (!result[defName]) {
+    result[defName] = value;
+    return;
+  }
+  const existing = result[defName];
+  existing._completeness = 'partial';
+  existing._completenessReasons = _uniqueStrings(
+    (existing._completenessReasons || []).concat(value._completenessReasons || [], [
+      'duplicateDefinitionConflict',
+      'sourceOrderingUncertain',
+    ])
+  );
+  existing._provenance = _mergeProvenance(existing._provenance, value._provenance);
+}
+
+// ── Inheritance resolution helper (C3) ────────────────────────────────────────
+// Resolves ParentName inheritance for a collection of raw parsed defs.
+// `fieldMerger(parentFields, childFields)` produces the merged rawFields.
+// Returns the resolved array (abstract defs stripped, concrete defs enriched).
+// Defs with unresolvable parents get _completeness:'partial'.
+
+function _resolveInheritance(rawDefs, fieldMerger) {
+  // Build lookups without silently choosing between duplicate parent candidates.
+  const byName = {};
+  for (let i = 0; i < rawDefs.length; i++) {
+    const rd = rawDefs[i];
+    const names = _uniqueStrings([rd.abstractName, rd.defName]);
+    for (let j = 0; j < names.length; j++) {
+      if (!byName[names[j]]) byName[names[j]] = [];
+      byName[names[j]].push(rd);
+    }
+  }
+
+  // Recursive parent chain resolver (with cycle detection)
+  function resolveChain(rd, visited) {
+    const ownReasons = (rd._completenessReasons || []).slice();
+    const ownCompleteness = rd._completeness || 'unknown';
+    if (!rd.parentName) {
+      return {
+        fields: rd.rawFields,
+        completeness: ownCompleteness,
+        reasons: ownReasons,
+        provenance: rd._provenance,
+      };
+    }
+    if (visited.has(rd.parentName)) {
+      return {
+        fields: rd.rawFields,
+        completeness: 'partial',
+        reasons: _uniqueStrings(ownReasons.concat('cyclicInheritance:' + rd.parentName)),
+        provenance: rd._provenance,
+      };
+    }
+    const parents = byName[rd.parentName] || [];
+    if (!parents.length) {
+      return {
+        fields: rd.rawFields,
+        completeness: 'partial',
+        reasons: _uniqueStrings(ownReasons.concat('unresolvedParent:' + rd.parentName)),
+        provenance: rd._provenance,
+      };
+    }
+    if (parents.length > 1) {
+      return {
+        fields: rd.rawFields,
+        completeness: 'partial',
+        reasons: _uniqueStrings(ownReasons.concat(['duplicateDefinitionConflict', 'sourceOrderingUncertain'])),
+        provenance: parents.reduce((p, parent) => _mergeProvenance(p, parent._provenance), rd._provenance),
+      };
+    }
+    const nextVisited = new Set(visited);
+    nextVisited.add(rd.parentName);
+    const parentResult = resolveChain(parents[0], nextVisited);
+    const merged = fieldMerger(parentResult.fields, rd.rawFields);
+    const completeness = ownCompleteness === 'complete' && parentResult.completeness === 'complete'
+      ? 'complete'
+      : (ownCompleteness === 'unknown' || parentResult.completeness === 'unknown' ? 'unknown' : 'partial');
+    return {
+      fields: merged,
+      completeness: completeness,
+      reasons: _uniqueStrings(parentResult.reasons.concat(ownReasons)),
+      provenance: _mergeProvenance(parentResult.provenance, rd._provenance),
+    };
+  }
+
+  const out = [];
+  for (let j = 0; j < rawDefs.length; j++) {
+    const rd = rawDefs[j];
+    // Named abstract bases participate in inheritance but never enter catalogs.
+    if (!rd.defName || rd.isAbstract) continue;
+    const chain = resolveChain(rd, new Set());
+    const result = Object.assign({}, chain.fields, {
+      defName: rd.defName,
+      _completeness: chain.completeness,
+      _completenessReasons: chain.reasons,
+      _provenance: chain.provenance || { modId: null, sources: [] },
+    });
+    out.push(result);
+  }
+  return out;
+}
+
+// ── Completeness + provenance factory (C3) ────────────────────────────────────
+
+function _makeCompleteness(completeness, reasons, provenance) {
+  return {
+    _completeness: completeness || 'unknown',
+    _completenessReasons: Array.isArray(reasons) ? reasons : [],
+    _provenance: provenance || { modId: null, sources: [] },
+  };
+}
+
 // Parse scanned <TraitDef> XML into { id: traitObj }. "Names + basic data":
 // one entry per trait degree (what a pawn actually has), with skillGains mapped
 // to skillMods where the XML declares them. Renderer-only (uses DOMParser).
@@ -869,18 +1078,24 @@ function parseTraitCatalogFromXML(xmlString) {
 // implant / condition) for grouping, and a default severity. Renderer-only (DOMParser).
 function parseHediffCatalogFromXML(xmlString) {
   const out = [];
-  let doc;
-  try { doc = new DOMParser().parseFromString(xmlString || '', 'text/xml'); } catch (_) { return out; }
+  const doc = _parseXmlDoc(xmlString);
+  if (!doc) return out;
   for (const h of doc.querySelectorAll('HediffDef')) {
-    if (h.getAttribute('Abstract') === 'True') continue;
-    const def = ((h.querySelector('defName') || {}).textContent || '').trim();
+    if (_boolAttribute(h, 'Abstract') === true) continue;
+    const def = _textDirect(h, 'defName') || '';
     if (!def) continue;
-    const label = ((h.querySelector('label') || {}).textContent || def).trim();
-    const cls = (((h.querySelector('hediffClass') || {}).textContent || '').trim()) || 'HediffWithComps';
-    const isImplant = !!h.querySelector('addedPartProps') || /AddedPart|Implant/i.test(cls);
-    const isInjury = /Injury/i.test(cls) || !!h.querySelector('injuryProps');
+    const label = _textDirect(h, 'label') || def;
+    const cls = _textDirect(h, 'hediffClass') || 'HediffWithComps';
+    const isImplant = !!_directChild(h, 'addedPartProps') || /AddedPart|Implant/i.test(cls);
+    const isInjury = /Injury/i.test(cls) || !!_directChild(h, 'injuryProps');
     const category = isImplant ? 'implant' : (isInjury ? 'injury' : 'condition');
-    const initSev = parseFloat(((h.querySelector('initialSeverity') || {}).textContent || '')) || (isInjury ? 5 : 0.5);
+    const parsedInitialSeverity = _numberDirect(h, 'initialSeverity');
+    const initSev = parsedInitialSeverity != null ? parsedInitialSeverity : (isInjury ? 5 : 0.5);
+    const completenessReasons = [];
+    if (h.hasAttribute('ParentName')) completenessReasons.push('unsupportedInheritanceShape');
+    if (_directChild(h, 'initialSeverity') && parsedInitialSeverity == null) {
+      completenessReasons.push('unparseableRelevantField');
+    }
     // Work this condition disables in-game (HediffStage.disabledWorkTags). This is how a
     // modded injury/implant says "a pawn with me can't do X" - the same mechanism the
     // game folds into CombinedDisabledWorkTags. Captured PER STAGE with its minSeverity so
@@ -899,17 +1114,27 @@ function parseHediffCatalogFromXML(xmlString) {
         else if (!into.includes(tag.toLowerCase())) into.push(tag.toLowerCase());
       });
     };
-    const stageLis = Array.from(h.querySelectorAll('stages > li'));
+    const stagesEl = _directChild(h, 'stages');
+    const stageLis = stagesEl ? _directChildren(stagesEl, 'li') : [];
     const disabledWorkStages = [];
     const hiddenStages = [];
-    let anyDisable = false, anyHidden = false;
+    const capModStages = [];
+    let anyDisable = false, anyHidden = false, anyCapMod = false;
     if (stageLis.length) {
       stageLis.forEach(li => {
-        const min = parseFloat(((li.querySelector('minSeverity') || {}).textContent || '')) || 0;
+        const parsedMin = _numberDirect(li, 'minSeverity');
+        const min = parsedMin != null ? parsedMin : 0;
+        if (_directChild(li, 'minSeverity') && parsedMin == null) {
+          completenessReasons.push('unparseableRelevantField');
+        }
         const work = [];
         let hidden = false;
+        // C3: capacity mod extraction per stage
+        const capMods = [];
+        let partEfficiencyOffset = null;
+        let partIgnoreMissingHP = null;
         // Only this stage's own direct children, not descendants of nested defs.
-        Array.from(li.children).forEach(c => {
+        _elementChildren(li).forEach(c => {
           if (!c.tagName) return;
           const t = c.tagName.toLowerCase();
           if (t === 'disabledworktags') mapTags(c.textContent, work);
@@ -917,21 +1142,63 @@ function parseHediffCatalogFromXML(xmlString) {
           // (Hediff.Visible) - e.g. utility/flag hediffs mods apply silently. Captured
           // so the health chips can hide them too.
           if (t === 'becomevisible' && /^\s*false\s*$/i.test(c.textContent || '')) hidden = true;
+          // C3: partEfficiencyOffset (affects the body part this hediff is on)
+          if (t === 'partefficiencyoffset') {
+            const peo = parseFloat(c.textContent || '');
+            if (Number.isFinite(peo)) partEfficiencyOffset = peo;
+          }
+          // C3: partIgnoreMissingHP (true = treat part HP as full even when damaged)
+          if (t === 'partignoremissinghp') {
+            const raw = String(c.textContent || '').trim();
+            if (/^true$/i.test(raw)) partIgnoreMissingHP = true;
+            else if (/^false$/i.test(raw)) partIgnoreMissingHP = false;
+            else completenessReasons.push('unparseableRelevantField');
+          }
+          // C3: capMods - capacity modifier list per stage
+          if (t === 'capmods') {
+            _elementChildren(c).forEach(modLi => {
+              if (modLi.tagName.toLowerCase() !== 'li') return;
+              const capacity = _textDirect(modLi, 'capacity') || null;
+              if (!capacity) return;
+              const offset = _numberDirect(modLi, 'offset');
+              const postFactor = _numberDirect(modLi, 'postFactor');
+              const setMax = _numberDirect(modLi, 'setMax');
+              if ((_directChild(modLi, 'offset') && offset == null)
+                || (_directChild(modLi, 'postFactor') && postFactor == null)
+                || (_directChild(modLi, 'setMax') && setMax == null)) {
+                completenessReasons.push('unparseableRelevantField');
+              }
+              capMods.push({ capacity, offset, postFactor, setMax });
+            });
+          }
         });
         if (work.length) anyDisable = true;
         if (hidden) anyHidden = true;
+        if (capMods.length || partEfficiencyOffset != null || partIgnoreMissingHP != null) anyCapMod = true;
         disabledWorkStages.push({ min, work });
         hiddenStages.push({ min, hidden });
+        capModStages.push({ minSeverity: min, capMods, partEfficiencyOffset, partIgnoreMissingHP });
       });
     } else {
       // No <stages> block but a stray top-level disabledWorkTags: treat as always-on.
       const work = [];
-      Array.from(h.querySelectorAll('disabledWorkTags')).forEach(n => mapTags(n.textContent, work));
+      const disabled = _directChild(h, 'disabledWorkTags');
+      if (disabled) mapTags(disabled.textContent, work);
       if (work.length) { anyDisable = true; disabledWorkStages.push({ min: 0, work }); }
     }
-    const entry = { def, label: _capFirst(label), hediffClass: cls, category, defaultSeverity: initSev };
+    const entry = {
+      def,
+      label: _capFirst(label),
+      hediffClass: cls,
+      category,
+      defaultSeverity: initSev,
+      _completeness: completenessReasons.length ? 'partial' : 'complete',
+      _completenessReasons: _uniqueStrings(completenessReasons),
+      _provenance: { modId: null, sources: [] },
+    };
     if (anyDisable) entry.disabledWorkStages = disabledWorkStages.sort((a, b) => a.min - b.min);
     if (anyHidden) entry.hiddenStages = hiddenStages.sort((a, b) => a.min - b.min);
+    if (anyCapMod) entry.capModStages = capModStages.sort((a, b) => a.minSeverity - b.minSeverity);
     out.push(entry);
   }
   return out;
@@ -2796,6 +3063,446 @@ function parseProstheticsFromXML(xmlString) {
     results[defName.trim()] = { label: label.charAt(0).toUpperCase() + label.slice(1), efficiency: eff };
   }
   return results;
+}
+
+// ── C3: Definition XML parsers with inheritance ───────────────────────────────
+//
+// Source audit (0A), installed RimWorld 1.6.4871 rev590:
+//   App.state.hediffCatalog shape (array of objects):
+//     { def, label, hediffClass, category, defaultSeverity,
+//       disabledWorkStages?, hiddenStages?, capModStages? }
+//
+//   Prosthetic efficiency shape (from parseProstheticsFromXML):
+//     { hediffDefName: { label, efficiency } }
+//
+//   C2 body-evidence flat field names (from capability-evidence.js _makeBodyEvidence):
+//     kind, partId, partDef, side, parentPartDef, provenance
+//     + extra fields by kind: replacementDef, implantDef, hediffDef, severity, stage
+//
+//   Exact workerClass values:
+//     PawnCapacityWorker_Consciousness, PawnCapacityWorker_Manipulation,
+//     PawnCapacityWorker_Moving, PawnCapacityWorker_Sight,
+//     PawnCapacityWorker_Talking, PawnCapacityWorker_Hearing.
+//   Exact tags consumed by those workers:
+//     ConsciousnessSource; ManipulationLimbCore/Segment/Digit;
+//     MovingLimbCore/Segment/Digit plus Pelvis and Spine; SightSource;
+//     TalkingSource plus TalkingPathway and Tongue; HearingSource.
+//   PawnCapacityDef defaults from the installed assembly:
+//     workerClass=PawnCapacityWorker, minForCapable=0, minValue=0,
+//     zeroIfCannotBeAwake=false. BodyPartDef defaults: hitPoints=10, tags=[].
+//   BodyDef.AllParts is cached root-first depth-first in XML child order.
+//   Save Scribe_BodyParts writes both body defName and a forced index for every
+//   non-null part reference. Omitted body within a present part node is not a
+//   pawn-body default in this target version.
+//   Capacity composition is audited for Task 5: awake gate, worker, offsets,
+//   combined postFactors, minimum setMax, minValue floor, hundredth rounding.
+
+// ── parseBodyDefsFromXML ──────────────────────────────────────────────────────
+// Parses <BodyDef> elements from scanned XML into a { defName: BodyDef } map.
+// Retains abstract/named parents for inheritance resolution.
+// Renderer-only (DOMParser).
+
+function parseBodyDefsFromXML(xmlString, options) {
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString);
+  if (!doc) return {};
+
+  // Phase 1: raw parse (retaining abstract defs)
+  const rawDefs = [];
+  let order = 0;
+  for (const el of doc.querySelectorAll('BodyDef')) {
+    const defName = _textDirect(el, 'defName');
+    const abstractName = el.getAttribute('Name') || null;
+    const parentName = el.getAttribute('ParentName') || null;
+    const isAbstract = _boolAttribute(el, 'Abstract') === true;
+
+    // Parse corePart tree recursively
+    const corePartEl = _directChild(el, 'corePart');
+    const corePart = corePartEl ? _parseBodyNode(corePartEl) : null;
+
+    const reasons = [];
+    if (el.hasAttribute('Abstract') && _boolAttribute(el, 'Abstract') == null) {
+      reasons.push('unparseableRelevantField');
+    }
+    if (!corePart && !parentName && !isAbstract) {
+      reasons.push('unparseableRelevantField');
+    }
+    rawDefs.push({
+      defName: defName || null,
+      abstractName: abstractName,
+      parentName: parentName,
+      isAbstract: isAbstract,
+      sourceOrder: order++,
+      modId: opts.modId || null,
+      rawFields: { corePart: corePart },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: reasons,
+      _provenance: _definitionProvenance(opts, order - 1),
+    });
+  }
+
+  // Phase 2: resolve inheritance
+  const resolved = _resolveInheritance(rawDefs, function(parentFields, childFields) {
+    return {
+      corePart: _mergeBodyNode(parentFields.corePart, childFields.corePart),
+    };
+  });
+
+  // Phase 3: detect duplicates, build output map
+  const result = {};
+  for (let i = 0; i < resolved.length; i++) {
+    const rd = resolved[i];
+    if (!rd.defName) continue;
+    const reasons = (rd._completenessReasons || []).slice();
+    _collectBodyNodeIssues(rd.corePart, reasons);
+    _storeDefinition(result, rd.defName, {
+      defName: rd.defName,
+      corePart: rd.corePart ? _publicBodyNode(rd.corePart) : null,
+      _completeness: reasons.length ? 'partial' : rd._completeness,
+      _completenessReasons: _uniqueStrings(reasons),
+      _provenance: rd._provenance,
+    });
+  }
+  return result;
+}
+
+// Recursive body part tree parser. Each node:
+// { def, customLabel, coverage, depth, height, parts: [...] }
+function _parseBodyNode(el) {
+  if (!el) return null;
+  const defEl = _directChild(el, 'def');
+  const customLabelEl = _directChild(el, 'customLabel');
+  const coverageEl = _directChild(el, 'coverage');
+  const depthEl = _directChild(el, 'depth');
+  const heightEl = _directChild(el, 'height');
+  const def = _textDirect(el, 'def') || null;
+  const customLabel = _textDirect(el, 'customLabel') || null;
+  const coverage = _numberDirect(el, 'coverage');
+  const depth = _textDirect(el, 'depth') || null;
+  const height = _textDirect(el, 'height') || null;
+
+  const parts = [];
+  const partsEl = _directChild(el, 'parts');
+  if (partsEl) {
+    const lis = _directChildren(partsEl, 'li');
+    for (let i = 0; i < lis.length; i++) {
+      const child = _parseBodyNode(lis[i]);
+      if (child) parts.push(child);
+    }
+  }
+
+  const issues = [];
+  if (coverageEl && coverage == null) issues.push('unparseableRelevantField');
+  return {
+    def: def,
+    customLabel: customLabel,
+    coverage: coverage,
+    depth: depth,
+    height: height,
+    parts: parts,
+    _inheritFalse: _boolAttribute(el, 'Inherit') === false,
+    _partsPresent: !!partsEl,
+    _partsInheritFalse: !!partsEl && _boolAttribute(partsEl, 'Inherit') === false,
+    _present: {
+      def: !!defEl,
+      customLabel: !!customLabelEl,
+      coverage: !!coverageEl,
+      depth: !!depthEl,
+      height: !!heightEl,
+    },
+    _parseIssues: issues,
+  };
+}
+
+function _collectBodyNodeIssues(node, reasons) {
+  if (!node) return;
+  reasons.push.apply(reasons, node._parseIssues || []);
+  if (!node.def) reasons.push('unparseableRelevantField');
+  for (let i = 0; i < node.parts.length; i++) _collectBodyNodeIssues(node.parts[i], reasons);
+}
+
+function _mergeBodyNode(parentNode, childNode) {
+  if (!childNode) return parentNode;
+  if (!parentNode || childNode._inheritFalse) return childNode;
+  const present = childNode._present || {};
+  let parts;
+  if (!childNode._partsPresent) parts = parentNode.parts || [];
+  else if (childNode._partsInheritFalse) parts = childNode.parts || [];
+  else parts = (parentNode.parts || []).concat(childNode.parts || []);
+  return {
+    def: present.def ? childNode.def : parentNode.def,
+    customLabel: present.customLabel ? childNode.customLabel : parentNode.customLabel,
+    coverage: present.coverage ? childNode.coverage : parentNode.coverage,
+    depth: present.depth ? childNode.depth : parentNode.depth,
+    height: present.height ? childNode.height : parentNode.height,
+    parts: parts,
+    _inheritFalse: false,
+    _partsPresent: childNode._partsPresent || parentNode._partsPresent,
+    _partsInheritFalse: childNode._partsInheritFalse,
+    _present: {
+      def: present.def || (parentNode._present || {}).def,
+      customLabel: present.customLabel || (parentNode._present || {}).customLabel,
+      coverage: present.coverage || (parentNode._present || {}).coverage,
+      depth: present.depth || (parentNode._present || {}).depth,
+      height: present.height || (parentNode._present || {}).height,
+    },
+    _parseIssues: (parentNode._parseIssues || []).concat(childNode._parseIssues || []),
+  };
+}
+
+function _publicBodyNode(node) {
+  return {
+    def: node.def,
+    customLabel: node.customLabel,
+    coverage: node.coverage,
+    depth: node.depth,
+    height: node.height,
+    parts: (node.parts || []).map(_publicBodyNode),
+  };
+}
+
+// ── parseBodyPartDefsFromXML ──────────────────────────────────────────────────
+// Parses <BodyPartDef> elements into { defName: BodyPartDef }.
+// Renderer-only (DOMParser).
+
+function parseBodyPartDefsFromXML(xmlString, options) {
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString);
+  if (!doc) return {};
+
+  const rawDefs = [];
+  let order = 0;
+  for (const el of doc.querySelectorAll('BodyPartDef')) {
+    const defName = _textDirect(el, 'defName');
+    const abstractName = el.getAttribute('Name') || null;
+    const parentName = el.getAttribute('ParentName') || null;
+    const isAbstract = _boolAttribute(el, 'Abstract') === true;
+
+    const label = _textDirect(el, 'label') || null;
+    const hitPoints = _numberDirect(el, 'hitPoints');
+
+    // Tags: <tags><li>...</li></tags>
+    const tags = [];
+    const tagsEl = _directChild(el, 'tags');
+    if (tagsEl) {
+      const lis = _directChildren(tagsEl, 'li');
+      for (let i = 0; i < lis.length; i++) {
+        const t = (lis[i].textContent || '').trim();
+        if (t) tags.push(t);
+      }
+    }
+
+    const reasons = [];
+    if (el.hasAttribute('Abstract') && _boolAttribute(el, 'Abstract') == null) {
+      reasons.push('unparseableRelevantField');
+    }
+    if (_directChild(el, 'hitPoints') && hitPoints == null) reasons.push('unparseableRelevantField');
+
+    rawDefs.push({
+      defName: defName || null,
+      abstractName: abstractName,
+      parentName: parentName,
+      isAbstract: isAbstract,
+      sourceOrder: order++,
+      modId: opts.modId || null,
+      rawFields: {
+        label: label,
+        hitPoints: hitPoints,
+        tags: tags,
+        tagsPresent: !!tagsEl,
+        tagsInheritFalse: !!tagsEl && _boolAttribute(tagsEl, 'Inherit') === false,
+      },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: reasons,
+      _provenance: _definitionProvenance(opts, order - 1),
+    });
+  }
+
+  const resolved = _resolveInheritance(rawDefs, function(parentFields, childFields) {
+    return {
+      label: childFields.label != null ? childFields.label : parentFields.label,
+      hitPoints: childFields.hitPoints != null ? childFields.hitPoints : parentFields.hitPoints,
+      tags: !childFields.tagsPresent
+        ? parentFields.tags
+        : (childFields.tagsInheritFalse ? childFields.tags : (parentFields.tags || []).concat(childFields.tags || [])),
+      tagsPresent: childFields.tagsPresent || parentFields.tagsPresent,
+      tagsInheritFalse: childFields.tagsInheritFalse,
+    };
+  });
+
+  const result = {};
+  for (let i = 0; i < resolved.length; i++) {
+    const rd = resolved[i];
+    if (!rd.defName) continue;
+    _storeDefinition(result, rd.defName, {
+      defName: rd.defName,
+      label: rd.label || null,
+      hitPoints: rd.hitPoints != null ? rd.hitPoints : 10,
+      tags: Array.isArray(rd.tags) ? rd.tags : [],
+      _completeness: rd._completeness,
+      _completenessReasons: rd._completenessReasons,
+      _provenance: rd._provenance,
+    });
+  }
+  return result;
+}
+
+// ── parsePawnCapacityDefsFromXML ──────────────────────────────────────────────
+// Parses <PawnCapacityDef> elements into { defName: PawnCapacityDef }.
+// Does not freeze guessed defaults for absent booleans/numbers.
+// Renderer-only (DOMParser).
+
+function parsePawnCapacityDefsFromXML(xmlString, options) {
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString);
+  if (!doc) return {};
+
+  const rawDefs = [];
+  let order = 0;
+  for (const el of doc.querySelectorAll('PawnCapacityDef')) {
+    const defName = _textDirect(el, 'defName');
+    const abstractName = el.getAttribute('Name') || null;
+    const parentName = el.getAttribute('ParentName') || null;
+    const isAbstract = _boolAttribute(el, 'Abstract') === true;
+
+    const workerClass = _textDirect(el, 'workerClass') || null;
+    const minForCapable = _numberDirect(el, 'minForCapable');
+    const minValue = _numberDirect(el, 'minValue');
+    const zeroIfCannotBeAwake = _boolDirect(el, 'zeroIfCannotBeAwake');
+
+    const reasons = [];
+    if (el.hasAttribute('Abstract') && _boolAttribute(el, 'Abstract') == null) {
+      reasons.push('unparseableRelevantField');
+    }
+    if ((_directChild(el, 'minForCapable') && minForCapable == null)
+      || (_directChild(el, 'minValue') && minValue == null)
+      || (_directChild(el, 'zeroIfCannotBeAwake') && zeroIfCannotBeAwake == null)) {
+      reasons.push('unparseableRelevantField');
+    }
+
+    rawDefs.push({
+      defName: defName || null,
+      abstractName: abstractName,
+      parentName: parentName,
+      isAbstract: isAbstract,
+      sourceOrder: order++,
+      modId: opts.modId || null,
+      rawFields: {
+        workerClass: workerClass,
+        minForCapable: minForCapable,
+        minValue: minValue,
+        zeroIfCannotBeAwake: zeroIfCannotBeAwake,
+      },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: reasons,
+      _provenance: _definitionProvenance(opts, order - 1),
+    });
+  }
+
+  const resolved = _resolveInheritance(rawDefs, function(parentFields, childFields) {
+    return {
+      workerClass: childFields.workerClass != null ? childFields.workerClass : parentFields.workerClass,
+      minForCapable: childFields.minForCapable != null ? childFields.minForCapable : parentFields.minForCapable,
+      minValue: childFields.minValue != null ? childFields.minValue : parentFields.minValue,
+      zeroIfCannotBeAwake: childFields.zeroIfCannotBeAwake != null ? childFields.zeroIfCannotBeAwake : parentFields.zeroIfCannotBeAwake,
+    };
+  });
+
+  const result = {};
+  for (let i = 0; i < resolved.length; i++) {
+    const rd = resolved[i];
+    if (!rd.defName) continue;
+    _storeDefinition(result, rd.defName, {
+      defName: rd.defName,
+      workerClass: rd.workerClass || 'PawnCapacityWorker',
+      minForCapable: rd.minForCapable != null ? rd.minForCapable : 0,
+      minValue: rd.minValue != null ? rd.minValue : 0,
+      zeroIfCannotBeAwake: rd.zeroIfCannotBeAwake != null ? rd.zeroIfCannotBeAwake : false,
+      _completeness: rd._completeness,
+      _completenessReasons: rd._completenessReasons,
+      _provenance: rd._provenance,
+    });
+  }
+  return result;
+}
+
+// ── parseRaceBodyMapFromXML ──────────────────────────────────────────────────
+// Parses ThingDef (race defs) to extract <race><body>BodyDefName</body></race>.
+// Returns { raceDefName: RaceBodyMapping }.
+// Renderer-only (DOMParser).
+
+function parseRaceBodyMapFromXML(xmlString, options) {
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString);
+  if (!doc) return {};
+
+  const rawDefs = [];
+  let order = 0;
+  for (const el of doc.querySelectorAll('ThingDef')) {
+    const defName = _textDirect(el, 'defName');
+    const abstractName = el.getAttribute('Name') || null;
+    const parentName = el.getAttribute('ParentName') || null;
+    const isAbstract = _boolAttribute(el, 'Abstract') === true;
+
+    // Only process defs that have a <race> element (race ThingDefs)
+    const raceEl = _directChild(el, 'race');
+    if (!raceEl && !isAbstract && !parentName) continue;
+
+    const bodyDefName = raceEl ? (_textDirect(raceEl, 'body') || null) : null;
+
+    const reasons = [];
+    if (el.hasAttribute('Abstract') && _boolAttribute(el, 'Abstract') == null) {
+      reasons.push('unparseableRelevantField');
+    }
+    rawDefs.push({
+      defName: defName || null,
+      abstractName: abstractName,
+      parentName: parentName,
+      isAbstract: isAbstract,
+      sourceOrder: order++,
+      modId: opts.modId || null,
+      rawFields: {
+        bodyDefName: bodyDefName,
+        hasRace: !!raceEl,
+        raceInheritFalse: !!raceEl && _boolAttribute(raceEl, 'Inherit') === false,
+      },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: reasons,
+      _provenance: _definitionProvenance(opts, order - 1),
+    });
+  }
+
+  const resolved = _resolveInheritance(rawDefs, function(parentFields, childFields) {
+    return {
+      bodyDefName: childFields.raceInheritFalse
+        ? childFields.bodyDefName
+        : (childFields.bodyDefName != null ? childFields.bodyDefName : parentFields.bodyDefName),
+      hasRace: childFields.hasRace || parentFields.hasRace,
+      raceInheritFalse: childFields.raceInheritFalse,
+    };
+  });
+
+  const result = {};
+  for (let i = 0; i < resolved.length; i++) {
+    const rd = resolved[i];
+    if (!rd.defName) continue;
+    // A ParentName alone does not prove that an arbitrary ThingDef is a race.
+    if (!rd.hasRace) continue;
+    const reasons = (rd._completenessReasons || []).slice();
+    if (!rd.bodyDefName) reasons.push('unparseableRelevantField');
+    // legacyIndexFallback: 'human' only for the Human race def - this is
+    // parser/provider metadata; CapacityResolver must never derive it.
+    const legacyIndexFallback = rd.defName === 'Human' ? 'human' : null;
+    _storeDefinition(result, rd.defName, {
+      raceDefName: rd.defName,
+      bodyDefName: rd.bodyDefName || null,
+      legacyIndexFallback: legacyIndexFallback,
+      _completeness: reasons.length ? 'partial' : rd._completeness,
+      _completenessReasons: _uniqueStrings(reasons),
+      _provenance: rd._provenance,
+    });
+  }
+  return result;
 }
 
 // Parent index for each body part (depth-first tree). -1 = root (torso).
