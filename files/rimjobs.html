@@ -309,7 +309,8 @@
       <div class="filter-tabs" id="filterTabs" style="margin-bottom:var(--gap-md); display:flex; gap:var(--gap-sm); align-items:center; justify-content:flex-end">
         <button class="btn btn-sm" id="manualPrioBtn" onclick="App.toggleManualPriorities()" title="Switch the table between Manual priorities (numbers 1-4) and Simple on/off mode, matching RimWorld's Work tab." style="font-size:var(--f-xs); padding:5px 12px">Manual</button>
         <button class="btn btn-sm" onclick="App.openJobColumnManager()" title="Choose which job columns show (vanilla/DLC by default; add modded or custom jobs). Drag column headers to reorder." style="font-size:var(--f-xs); padding:5px 12px; margin-right:auto">Columns</button>
-        <button class="btn btn-sm btn-accent" onclick="App.autoAssignAll()" title="Automatically assign job priorities based on Min-Max logic. Does not account for xenotype weaknesses or modded xenotypes." style="font-size:var(--f-xs); padding:5px 12px">Auto-Assign</button>
+        <button class="btn btn-sm btn-accent" id="autoAssignBtn" onclick="App.autoAssignAll()" title="Automatically assign job priorities based on Min-Max logic. Does not account for xenotype weaknesses or modded xenotypes." style="font-size:var(--f-xs); padding:5px 12px">Auto-Assign</button>
+        <button class="btn btn-sm priority-lock-pill" id="priorityLockBtn" onclick="App.togglePriorityLock()" aria-pressed="false" title="Lock priority editing while keeping the table scrollable." style="font-size:var(--f-xs); padding:5px 12px">&#128275; Unlocked</button>
         <button class="btn btn-sm" id="optimizerToggle" onclick="App.openWorkPlanner()" style="font-size:var(--f-xs); padding:5px 12px">Work Planner</button>
       </div>
       <div id="optimizerPanel" style="display:none; margin-bottom:var(--gap-md); max-height:35vh; overflow-y:auto; flex-shrink:0"></div>

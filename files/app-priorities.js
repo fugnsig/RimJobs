@@ -45,11 +45,62 @@ Object.assign(App, {
   // Renders one priority cell's inner box, honouring the manual/simple mode.
   // Simple mode shows an on/off tick (on = priority 3); manual shows 1-4.
   _prioCellHTML(pid, jid, prio) {
+    const locked = this._prioritiesAreLocked();
+    const lockAttrs = locked ? ' aria-disabled="true" title="Priorities are locked - unlock to edit"' : '';
     if (!this.state.settings.manualPriorities) {
       const on = prio !== null && prio !== undefined && prio !== 0;
-      return `<div class="prio-box prio-check ${on ? 'on' : 'empty'}" tabindex="0" onmousedown="App.handlePriorityClick(event, '${pid}', '${jid}')" onkeydown="App.handlePriorityKey(event, '${pid}', '${jid}')" oncontextmenu="event.preventDefault()" title="${on ? 'Enabled - click to disable' : 'Disabled - click to enable'}">${on ? '✓' : '&nbsp;'}</div>`;
+      const title = locked ? '' : ` title="${on ? 'Enabled - click to disable' : 'Disabled - click to enable'}"`;
+      return `<div class="prio-box prio-check ${on ? 'on' : 'empty'}" tabindex="0" onmousedown="App.handlePriorityClick(event, '${pid}', '${jid}')" onkeydown="App.handlePriorityKey(event, '${pid}', '${jid}')" oncontextmenu="event.preventDefault()"${lockAttrs}${title}>${on ? '✓' : '&nbsp;'}</div>`;
     }
-    return `<div class="prio-box ${prio ? 'p' + prio : 'empty'}" tabindex="0" onmousedown="App.handlePriorityClick(event, '${pid}', '${jid}')" onwheel="App.handlePriorityWheel(event, '${pid}', '${jid}')" onkeydown="App.handlePriorityKey(event, '${pid}', '${jid}')" oncontextmenu="event.preventDefault()">${prio !== null ? prio : '&nbsp;'}</div>`;
+    return `<div class="prio-box ${prio ? 'p' + prio : 'empty'}" tabindex="0" onmousedown="App.handlePriorityClick(event, '${pid}', '${jid}')" onwheel="App.handlePriorityWheel(event, '${pid}', '${jid}')" onkeydown="App.handlePriorityKey(event, '${pid}', '${jid}')" oncontextmenu="event.preventDefault()"${lockAttrs}>${prio !== null ? prio : '&nbsp;'}</div>`;
+  },
+
+  _prioritiesAreLocked() {
+    return this.state.settings.priorityLocked === true;
+  },
+
+  _guardPriorityEdit(action, notify = false) {
+    if (!this._prioritiesAreLocked()) return true;
+    if (notify && typeof this.toast === 'function') {
+      this.toast(`Priorities are locked. Unlock them to ${action || 'make changes'}.`);
+    }
+    return false;
+  },
+
+  _lockedPriorityActionAttrs(action) {
+    if (!this._prioritiesAreLocked()) return '';
+    return ` disabled aria-disabled="true" title="Unlock priorities to ${action || 'make this change'}."`;
+  },
+
+  _syncPriorityLockControls() {
+    if (typeof document === 'undefined') return;
+    const locked = this._prioritiesAreLocked();
+    const lockBtn = document.getElementById('priorityLockBtn');
+    if (lockBtn) {
+      lockBtn.textContent = locked ? '🔒 Locked' : '🔓 Unlocked';
+      lockBtn.classList.toggle('is-locked', locked);
+      lockBtn.setAttribute('aria-pressed', String(locked));
+      lockBtn.title = locked
+        ? 'Priority editing is locked. Click to unlock.'
+        : 'Lock priority editing while keeping the table scrollable.';
+    }
+    const autoBtn = document.getElementById('autoAssignBtn');
+    if (autoBtn) {
+      if (!autoBtn.dataset.unlockedTitle) autoBtn.dataset.unlockedTitle = autoBtn.title;
+      autoBtn.disabled = locked;
+      autoBtn.setAttribute('aria-disabled', String(locked));
+      autoBtn.title = locked ? 'Unlock priorities to use Auto-Assign.' : autoBtn.dataset.unlockedTitle;
+    }
+  },
+
+  togglePriorityLock() {
+    this.state.settings.priorityLocked = !this._prioritiesAreLocked();
+    this._syncPriorityLockControls();
+    this.renderTable();
+    const plannerOpen = typeof document !== 'undefined' && document.getElementById('workPlannerBody');
+    if (plannerOpen && typeof this.openWorkPlanner === 'function') this.openWorkPlanner();
+    else if (this._optimizerResult && typeof this.renderOptimizer === 'function') this.renderOptimizer();
+    this.triggerAutoSave();
   },
 
   // Toggle the Priorities table between manual (1-4) and simple (on/off) modes.
@@ -60,6 +111,7 @@ Object.assign(App, {
   },
 
   handlePriorityClick(e, pid, jid) {
+    if (!this._guardPriorityEdit('edit priorities')) return;
     e.preventDefault();
     const p = this.state.pawns.find(x => x.id === pid);
     if (!p) return;
@@ -88,6 +140,8 @@ Object.assign(App, {
     this.triggerAutoSave();
   },
   handlePriorityWheel(e, pid, jid) {
+    // Return before preventDefault so locking edits never locks normal page/table scrolling.
+    if (!this._guardPriorityEdit('edit priorities')) return;
     e.preventDefault();
     // Simple on/off mode has no numeric levels to scroll through.
     if (!this.state.settings.manualPriorities) return;
@@ -114,6 +168,7 @@ Object.assign(App, {
     this.triggerAutoSave();
   },
   handlePriorityKey(e, pid, jid) {
+    if (!this._guardPriorityEdit('edit priorities')) return;
     const simple = !this.state.settings.manualPriorities;
     if (e.key >= '1' && e.key <= '4') {
       // In simple mode any number key just enables (priority 3).
@@ -186,11 +241,13 @@ Object.assign(App, {
 
   // -- AUTO ASSIGN --
   autoAssignAll() {
+    if (!this._guardPriorityEdit('use Auto-Assign', true)) return false;
     // Only assign the columns currently visible in the table.
     Engine.runMinMaxAssignment(this.state.pawns, this.state.roles, this.state.priorities, this._visibleJobs());
     this.renderTable();
     this.toast('Auto-assigned visible columns, weighing skills, passions and xenotype/gene effects.');
     this.triggerAutoSave();
+    return true;
   },
 
   // -- COLONY OPTIMIZER --
@@ -228,8 +285,9 @@ Object.assign(App, {
     }
     let html = this._optimizerHTML(r);
     if (r.recommendations.length > 0 || r.gaps.some(g => g.bestPawn)) {
+      const disabled = this._lockedPriorityActionAttrs('apply suggestions');
       html += `<div style="display:flex; gap:8px; justify-content:flex-end; margin-top:4px">
-        <button class="btn btn-sm" onclick="App.applyAllOptimizerSuggestions()" style="font-size:var(--f-xs)">Apply All Suggestions</button>
+        <button class="btn btn-sm" onclick="App.applyAllOptimizerSuggestions()"${disabled} style="font-size:var(--f-xs)">Apply All Suggestions</button>
         <button class="btn btn-sm" onclick="App.toggleOptimizer()" style="font-size:var(--f-xs)">Dismiss</button>
       </div>`;
     }
@@ -240,6 +298,7 @@ Object.assign(App, {
   // used by both the inline panel and the Work Planner modal.
   _optimizerHTML(r) {
     let html = '';
+    const suggestionDisabled = this._lockedPriorityActionAttrs('apply this suggestion');
 
     // COVERAGE GAPS
     if (r.gaps.length > 0) {
@@ -258,7 +317,7 @@ Object.assign(App, {
             <div style="font-size:var(--f-xs); color:var(--text3)">${_escapeHtml(g.reason)}</div>
           </div>
           ${g.bestPawn ? `<div style="font-size:var(--f-xs); color:var(--text2); text-align:right; flex-shrink:0">Best: ${_escapeHtml(g.bestPawn.pawnName)}${g.bestPawn.hasSkill ? `<br><span style="color:var(--accent)">Skill ${g.bestPawn.skill}</span>` : ''}</div>
-          <button class="btn btn-sm" onclick="App.applyOptimizerSuggestion('${g.bestPawn.pawnId}','${g.jobId}',1)" style="flex-shrink:0; font-size:calc(10px * var(--font-scale)); padding:4px 8px">Set P1</button>` : ''}
+          <button class="btn btn-sm" onclick="App.applyOptimizerSuggestion('${g.bestPawn.pawnId}','${g.jobId}',1)"${suggestionDisabled} style="flex-shrink:0; font-size:calc(10px * var(--font-scale)); padding:4px 8px">Set P1</button>` : ''}
         </div>`;
       });
       html += `</div></div>`;
@@ -290,7 +349,7 @@ Object.assign(App, {
             <div style="font-size:var(--f-sm)"><span style="color:var(--accent); font-weight:700">${_escapeHtml(rec.pawnName)}</span> for <span style="font-weight:700">${_escapeHtml(rec.jobName)}</span></div>
             <div style="font-size:var(--f-xs); color:var(--text3)">${_escapeHtml(rec.reason)}</div>
           </div>
-          <button class="btn btn-sm" onclick="App.applyOptimizerSuggestion('${rec.pawnId}','${rec.jobId}',${rec.suggestedPriority})" style="flex-shrink:0; font-size:calc(10px * var(--font-scale)); padding:4px 8px">Set P${rec.suggestedPriority}</button>
+          <button class="btn btn-sm" onclick="App.applyOptimizerSuggestion('${rec.pawnId}','${rec.jobId}',${rec.suggestedPriority})"${suggestionDisabled} style="flex-shrink:0; font-size:calc(10px * var(--font-scale)); padding:4px 8px">Set P${rec.suggestedPriority}</button>
         </div>`;
       });
       html += `</div></div>`;
@@ -319,11 +378,12 @@ Object.assign(App, {
       ? this._optimizerHTML(r)
       : `<div class="settings-card" style="text-align:center; padding:24px; color:var(--text3)">Add pawns to analyse your colony.</div>`;
     const applyAll = (r.recommendations.length > 0 || r.gaps.some(g => g.bestPawn))
-      ? `<button class="btn btn-sm btn-accent" onclick="App.applyAllOptimizerSuggestions()" style="font-size:var(--f-xs)">Apply All</button>` : '';
+      ? `<button class="btn btn-sm btn-accent" onclick="App.applyAllOptimizerSuggestions()"${this._lockedPriorityActionAttrs('apply suggestions')} style="font-size:var(--f-xs)">Apply All</button>` : '';
+    const autoAssignDisabled = this._lockedPriorityActionAttrs('use Auto-Assign');
     const body = `
       <div id="workPlannerBody">
         <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px">
-          <button class="btn btn-sm btn-accent" onclick="App.autoAssignAll(); App.openWorkPlanner()" style="font-size:var(--f-xs)">Auto-Assign</button>
+          <button class="btn btn-sm btn-accent" onclick="App.autoAssignAll(); App.openWorkPlanner()"${autoAssignDisabled} style="font-size:var(--f-xs)">Auto-Assign</button>
           <button class="btn btn-sm" onclick="App._addTaskFromPlanner()" style="font-size:var(--f-xs)">+ Add task</button>
           <button class="btn btn-sm" onclick="App._dismissModal(false); App.openJobColumnManager()" style="font-size:var(--f-xs)">Manage columns</button>
           ${applyAll}
@@ -350,16 +410,19 @@ Object.assign(App, {
   },
 
   applyOptimizerSuggestion(pawnId, jobId, priority) {
+    if (!this._guardPriorityEdit('apply this suggestion', true)) return false;
     if (!this.state.priorities[pawnId]) this.state.priorities[pawnId] = {};
     this.state.priorities[pawnId][jobId] = priority;
     this.renderTable();
     this._refreshPlanner();
     this.triggerAutoSave();
+    return true;
   },
 
   applyAllOptimizerSuggestions() {
+    if (!this._guardPriorityEdit('apply suggestions', true)) return false;
     const r = this._optimizerResult;
-    if (!r) return;
+    if (!r) return false;
     // Apply gap fixes
     r.gaps.forEach(g => {
       if (g.bestPawn) {
@@ -375,5 +438,6 @@ Object.assign(App, {
     this.renderTable();
     this._refreshPlanner();
     this.triggerAutoSave();
+    return true;
   },
 });

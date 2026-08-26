@@ -344,6 +344,7 @@ Object.assign(App, {
   _isPortrait() { return window.innerHeight > window.innerWidth; },
 
   renderTable() {
+    if (typeof this._syncPriorityLockControls === 'function') this._syncPriorityLockControls();
     const wrap = document.getElementById('tableWrap'); if (!wrap) return;
     // Reflect the current priorities mode on the toolbar toggle.
     const mpBtn = document.getElementById('manualPrioBtn');
