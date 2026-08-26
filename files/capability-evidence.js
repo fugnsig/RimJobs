@@ -593,6 +593,80 @@ function _buildSkillOperations(effects, unresolvedSources) {
   };
 }
 
+function _rawSkillFactsFromPawn(pawn, unresolvedSources) {
+  const unresolved = unresolvedSources || [];
+  const records = pawn && pawn.rawSkillRecords && typeof pawn.rawSkillRecords === 'object'
+    ? pawn.rawSkillRecords : {};
+  const baseSkillFacts = {};
+  const passionFacts = {};
+  for (const [recordKey, raw] of Object.entries(records)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const skillDefId = typeof raw.skillDefId === 'string' && raw.skillDefId
+      ? raw.skillDefId : recordKey;
+    if (baseSkillFacts[skillDefId]) {
+      unresolved.push(_makeUnresolved(
+        'saveSkillRecord', skillDefId, 'Duplicate raw SkillRecord fact',
+        { rawTarget: skillDefId, candidateTargets: [skillDefId] }
+      ));
+      continue;
+    }
+    const recordPresence = ['present', 'absent', 'unknown'].includes(raw.recordPresence)
+      ? raw.recordPresence : 'unknown';
+    const levelKnown = recordPresence === 'present'
+      && raw.levelState === 'known' && Number.isFinite(raw.levelInt);
+    const sourceFactKey = 'saved-skill-record:' + skillDefId;
+    const evidence = [{
+      evidenceId: sourceFactKey,
+      sourceFactKey,
+      sourceKind: 'saveSkillRecord',
+      sourceId: skillDefId,
+      targetDefId: skillDefId,
+      representation: 'rawObservation',
+      provenance: raw.provenance || {},
+      confidence: raw.parserCompleteness === 'complete' ? 'verified' : 'unknown',
+    }];
+    baseSkillFacts[skillDefId] = {
+      skillDefId,
+      appSkillId: typeof raw.appSkillId === 'string' ? raw.appSkillId : null,
+      recordPresence,
+      levelFieldPresent: raw.levelFieldPresent === true,
+      storedLevelInt: levelKnown
+        ? { state: 'known', value: Math.trunc(raw.levelInt), evidence }
+        : { state: 'unknown', value: null, evidence },
+      parserCompleteness: ['complete', 'partial', 'unknown'].includes(raw.parserCompleteness)
+        ? raw.parserCompleteness : 'unknown',
+      evidence,
+    };
+    const passionKnown = recordPresence === 'present'
+      && typeof raw.rawPassionIdentity === 'string';
+    passionFacts[skillDefId] = {
+      skillDefId,
+      recordPresence,
+      passionFieldPresent: raw.passionFieldPresent === true,
+      state: passionKnown ? 'known' : 'unknown',
+      rawIdentity: passionKnown ? raw.rawPassionIdentity : null,
+      semantics: null,
+      directLearningFactor: null,
+      compatibilityBucket: null,
+      parserCompleteness: baseSkillFacts[skillDefId].parserCompleteness,
+      evidence,
+    };
+  }
+  const sourceCatalogue = pawn && pawn.skillRecordCatalogue
+    && typeof pawn.skillRecordCatalogue === 'object' ? pawn.skillRecordCatalogue : {};
+  return {
+    baseSkillFacts,
+    passionFacts,
+    catalogue: {
+      presence: ['present', 'absent', 'unknown'].includes(sourceCatalogue.presence)
+        ? sourceCatalogue.presence : 'unknown',
+      completeness: ['complete', 'partial', 'unknown'].includes(sourceCatalogue.completeness)
+        ? sourceCatalogue.completeness : 'unknown',
+      provenance: Object.assign({}, sourceCatalogue.provenance || {}),
+    },
+  };
+}
+
 // ─── Body semantic lookup helper ───────────────────────────────────────────────
 // BODY-EVID-001: Human body fallback is compatibility-gated. Never map an
 // unknown alien partIdx to a human arm/leg by coincidence. Only use
@@ -1414,7 +1488,7 @@ const CapabilityEvidence = {
         conservation: [],
         bodyEvidence: [],
         permissionEvidence: { rawSources: [], legacyIncapable: [] },
-        pawnState: { raceDefName: null, age: null, lifeStage: null, currentStatus: {}, currentStatusFacts: {}, baseSkills: {}, basePassions: {} },
+        pawnState: { raceDefName: null, age: null, lifeStage: null, currentStatus: {}, currentStatusFacts: {}, baseSkills: {}, basePassions: {}, baseSkillFacts: {}, passionFacts: {}, skillRecordCatalogue: { presence: 'unknown', completeness: 'unknown', provenance: {} } },
         unresolvedSources: [],
       };
     }
@@ -1446,6 +1520,7 @@ const CapabilityEvidence = {
     });
     const allNormalised = _normaliseEffects(normalised.concat(pawnPermissionEffects), allUnresolved);
     const skillBundle = _buildSkillOperations(allNormalised, allUnresolved);
+    const rawSkillFacts = _rawSkillFactsFromPawn(pawn, allUnresolved);
 
     const skills = pawn.skills || {};
     const baseSkills = {};
@@ -1496,6 +1571,9 @@ const CapabilityEvidence = {
         currentStatusFacts,
         baseSkills,
         basePassions,
+        baseSkillFacts: rawSkillFacts.baseSkillFacts,
+        passionFacts: rawSkillFacts.passionFacts,
+        skillRecordCatalogue: rawSkillFacts.catalogue,
       },
       unresolvedSources: allUnresolved,
     };
@@ -1505,6 +1583,7 @@ const CapabilityEvidence = {
   _normaliseEffects: _normaliseEffects,
   _normaliseSkillOperations: _normaliseSkillOperations,
   _buildSkillOperations: _buildSkillOperations,
+  _rawSkillFactsFromPawn: _rawSkillFactsFromPawn,
   _skillDefIdForAppSkill: _skillDefIdForAppSkill,
   _skillOperationKindForEffect: _skillOperationKindForEffect,
   _resolveXenoStrict: _resolveXenoStrict,

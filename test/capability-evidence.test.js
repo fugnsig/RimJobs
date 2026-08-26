@@ -2347,5 +2347,61 @@ module.exports = function run() {
     'CE-C5SK-011 Occultist is app policy with conserved legacy representation');
   }
 
+  // ======================================================================
+  // C5 RAW SKILL RECORD AND PASSION FACTS
+  // ======================================================================
+
+  {
+    const result = CE.collectPawnEvidence(mk('c5raw1', {
+      rawSkillRecords: {
+        Shooting: {
+          skillDefId: 'Shooting', appSkillId: 'shoot', recordPresence: 'present',
+          levelFieldPresent: true, levelState: 'known', levelInt: 0,
+          passionFieldPresent: true, rawPassionIdentity: 'Major',
+          parserCompleteness: 'complete', provenance: { sourceKind: 'saveSkillRecord' },
+        },
+        Cooking: {
+          skillDefId: 'Cooking', appSkillId: 'cook', recordPresence: 'present',
+          levelFieldPresent: false, levelState: 'known', levelInt: 0,
+          passionFieldPresent: false, rawPassionIdentity: 'None',
+          parserCompleteness: 'complete', provenance: { sourceKind: 'saveSkillRecord' },
+        },
+        Mining: {
+          skillDefId: 'Mining', appSkillId: 'mine', recordPresence: 'absent',
+          levelFieldPresent: false, levelState: 'unknown', levelInt: null,
+          passionFieldPresent: false, rawPassionIdentity: null,
+          parserCompleteness: 'complete', provenance: { sourceKind: 'providerAbsence' },
+        },
+        ModdedSkill: {
+          skillDefId: 'ModdedSkill', appSkillId: null, recordPresence: 'present',
+          levelFieldPresent: true, levelState: 'unknown', levelInt: null,
+          passionFieldPresent: true, rawPassionIdentity: 'VSE_Critical',
+          parserCompleteness: 'partial', provenance: { sourceKind: 'saveSkillRecord' },
+        },
+      },
+      skillRecordCatalogue: { completeness: 'partial', provenance: { sourceKind: 'save' } },
+    }));
+    ok(result.pawnState.baseSkillFacts.Shooting.storedLevelInt.value === 0
+      && result.pawnState.baseSkillFacts.Shooting.levelFieldPresent === true,
+    'CE-C5RAW-001 present zero remains a known saved record');
+    ok(result.pawnState.baseSkillFacts.Cooking.levelFieldPresent === false
+      && result.pawnState.baseSkillFacts.Cooking.storedLevelInt.value === 0,
+    'CE-C5RAW-002 missing level inside present record uses audited zero default');
+    ok(result.pawnState.baseSkillFacts.Mining.recordPresence === 'absent'
+      && result.pawnState.baseSkillFacts.Mining.storedLevelInt.state === 'unknown',
+    'CE-C5RAW-003 absent record is not defaulted at C2');
+    ok(result.pawnState.baseSkillFacts.ModdedSkill.storedLevelInt.state === 'unknown',
+      'CE-C5RAW-004 malformed saved level remains unknown');
+    ok(result.pawnState.passionFacts.Cooking.rawIdentity === 'None'
+      && result.pawnState.passionFacts.Cooking.passionFieldPresent === false,
+    'CE-C5RAW-005 missing passion inside present record uses audited None identity');
+    ok(result.pawnState.passionFacts.ModdedSkill.rawIdentity === 'VSE_Critical'
+      && result.pawnState.passionFacts.ModdedSkill.semantics === null,
+    'CE-C5RAW-006 unsupported modded passion remains raw without semantics');
+    ok(Object.keys(result.pawnState.passionFacts).length === 4
+      && !JSON.stringify(result.pawnState.baseSkillFacts).includes('runtimeDefaulted'),
+    'CE-C5RAW-007 one passion fact per exact record and no early runtime default');
+  }
+
   return { name: 'capability evidence (C2 adapters)', failures, total };
 };
