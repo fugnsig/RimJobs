@@ -178,6 +178,7 @@ const App = {
     settings: {
       verticalTitles: false,
       manualPriorities: true, // true = numbers 1-4; false = simple on/off, like RimWorld's Work tab
+      priorityLocked: false, // UI edit lock for the Priorities table and its assignment actions
       jobOrder: null, // ordered list of visible job-column ids (null = default: vanilla+DLC+custom)
       tableFontSize: 14,
       jobFontSize: 12,

@@ -7,6 +7,7 @@
  */
 const tests = [
   './engine.optimiser.test.js',
+  './priority-lock.test.js',
   './save-parser.fuzz.test.js',
   './save-export.fuzz.test.js',
   './trait-editor.fuzz.test.js',
