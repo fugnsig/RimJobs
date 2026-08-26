@@ -32,6 +32,7 @@ const tests = [
   './requirement-registry.test.js',
   './permission-resolver.test.js',
   './availability-resolver.test.js',
+  './c4-compatibility.test.js',
 ];
 
 (async () => {
