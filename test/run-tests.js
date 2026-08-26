@@ -34,6 +34,7 @@ const tests = [
   './permission-resolver.test.js',
   './availability-resolver.test.js',
   './c4-compatibility.test.js',
+  './c5-audit-contract.test.js',
 ];
 
 (async () => {
