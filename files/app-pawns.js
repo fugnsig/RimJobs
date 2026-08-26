@@ -624,6 +624,10 @@ Object.assign(App, {
     const skills = {}; SKILLS.forEach(s => skills[s.id] = 0);
     const passions = {}; SKILLS.forEach(s => passions[s.id] = 0);
     const passionDefs = {}; SKILLS.forEach(s => passionDefs[s.id] = 'None');
+    let rawSkillData = {
+      records: {},
+      catalogue: { presence: 'unknown', completeness: 'unknown', provenance: {} },
+    };
     let name = 'Imported Pawn';
 
     // 0. Try RimJobs JSON format (shared pawn data)
@@ -662,10 +666,28 @@ Object.assign(App, {
       else if (first) name = first;
 
       const skillNodes = xml.querySelectorAll('skills li');
+      const rawSkillRecords = {};
+      let rawSkillCompleteness = 'complete';
       skillNodes.forEach(node => {
-        const def = node.querySelector('def')?.textContent?.toLowerCase();
-        const level = parseInt(node.querySelector('level')?.textContent) || 0;
-        const passion = node.querySelector('passion')?.textContent;
+        const defText = node.querySelector('def')?.textContent;
+        const def = defText?.toLowerCase();
+        const levelNode = node.querySelector('level');
+        const passionNode = node.querySelector('passion');
+        const level = parseInt(levelNode?.textContent) || 0;
+        const passion = passionNode?.textContent;
+        if (this._rawSkillRecordFact && defText) {
+          const fact = this._rawSkillRecordFact(
+            defText, levelNode?.textContent, !!levelNode,
+            passion, !!passionNode,
+            { sourcePath: 'pastedPawn.skills.skills' }
+          );
+          if (fact && !rawSkillRecords[fact.skillDefId]) {
+            rawSkillRecords[fact.skillDefId] = fact;
+            if (fact.parserCompleteness !== 'complete') rawSkillCompleteness = 'partial';
+          } else if (fact) {
+            rawSkillCompleteness = 'partial';
+          }
+        }
         
         const skillId = this.mapSkillDefToId(def);
         if (skillId) {
@@ -675,9 +697,16 @@ Object.assign(App, {
           if (passion) { passionDefs[skillId] = passion; passions[skillId] = this._passionMeta(passion).bucket; }
         }
       });
+      rawSkillData = {
+        records: rawSkillRecords,
+        catalogue: {
+          presence: 'present', completeness: rawSkillCompleteness,
+          provenance: { sourceKind: 'saveSkillTracker', sourcePath: 'pastedPawn.skills.skills' },
+        },
+      };
 
       if (name !== 'Imported Pawn' || Object.values(skills).some(v => v > 0)) {
-        const pawn = this.createPawnObject(id, name, skills, passions, passionDefs);
+        const pawn = this.createPawnObject(id, name, skills, passions, passionDefs, rawSkillData);
         // Extract backstory if present in XML
         const storyNode = xml.querySelector('story');
         if (storyNode) {
@@ -899,7 +928,7 @@ Object.assign(App, {
     if (typeof this.renderSidebar === 'function') this.renderSidebar();
     this.triggerAutoSave();
   },
-  createPawnObject(id, name, skills, passions, passionDefs) {
+  createPawnObject(id, name, skills, passions, passionDefs, rawSkillData) {
     const idx = this.state.pawns.length;
     const av = AVATARS[idx % AVATARS.length];
     // Raw passion string per skill, so modded VSE passions round-trip losslessly.
@@ -910,7 +939,13 @@ Object.assign(App, {
     return {
       id, name,
       nickname: '', firstName: '', lastName: '',
-      skills, passions, passionDefs: pdefs, incapable: [], traits: [],
+      skills, passions, passionDefs: pdefs,
+      rawSkillRecords: rawSkillData && rawSkillData.records
+        ? JSON.parse(JSON.stringify(rawSkillData.records)) : {},
+      skillRecordCatalogue: rawSkillData && rawSkillData.catalogue
+        ? JSON.parse(JSON.stringify(rawSkillData.catalogue))
+        : { presence: 'unknown', completeness: 'unknown', provenance: {} },
+      incapable: [], traits: [],
       childhood: '', adulthood: '',
       xenotype: 'baseliner',
       role: 'none',

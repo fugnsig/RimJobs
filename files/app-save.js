@@ -238,6 +238,75 @@ Object.assign(App, {
     const cat = ((this.state && this.state.passionCatalog) || []).find(p => p.def === raw);
     return cat ? (cat.bucket | 0) : 0;
   },
+
+  _rawSkillRecordFact(defName, rawLevel, levelFieldPresent,
+    rawPassion, passionFieldPresent, provenance) {
+    const exactDefName = typeof defName === 'string' ? defName.trim() : '';
+    if (!exactDefName) return null;
+    const levelText = rawLevel == null ? '' : String(rawLevel).trim();
+    const levelValid = !levelFieldPresent || /^-?\d+$/.test(levelText);
+    const appSkillId = this.mapSkillDefToId
+      ? this.mapSkillDefToId(exactDefName.toLowerCase()) : null;
+    return {
+      skillDefId: exactDefName,
+      appSkillId: appSkillId || null,
+      recordPresence: 'present',
+      levelFieldPresent: levelFieldPresent === true,
+      levelState: levelValid ? 'known' : 'unknown',
+      levelInt: levelValid ? (levelFieldPresent ? parseInt(levelText, 10) : 0) : null,
+      passionFieldPresent: passionFieldPresent === true,
+      rawPassionIdentity: passionFieldPresent && rawPassion != null && String(rawPassion).trim()
+        ? String(rawPassion).trim() : 'None',
+      parserCompleteness: levelValid ? 'complete' : 'partial',
+      provenance: Object.assign({ sourceKind: 'saveSkillRecord' }, provenance || {}),
+    };
+  },
+
+  _parseRawSkillRecords(skillsData, provenance) {
+    if (typeof skillsData !== 'string') {
+      return {
+        records: {},
+        catalogue: {
+          presence: 'unknown', completeness: 'unknown',
+          provenance: Object.assign({ sourceKind: 'saveSkillTracker' }, provenance || {}),
+        },
+      };
+    }
+    const records = {};
+    let completeness = 'complete';
+    const entries = skillsData.match(/<li\b[^>]*>[\s\S]*?<\/li>/g) || [];
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
+      const text = tag => {
+        const match = entry.match(new RegExp('<' + tag + '>([^<]*)<\\/' + tag + '>'));
+        return match ? match[1] : null;
+      };
+      const defName = text('def');
+      if (!defName || records[defName]) {
+        completeness = 'partial';
+        continue;
+      }
+      const rawLevel = text('level');
+      const rawPassion = text('passion');
+      const fact = this._rawSkillRecordFact(
+        defName, rawLevel, rawLevel != null, rawPassion, rawPassion != null,
+        Object.assign({ sourceOrder: index }, provenance || {})
+      );
+      if (!fact) {
+        completeness = 'partial';
+        continue;
+      }
+      if (fact.parserCompleteness !== 'complete') completeness = 'partial';
+      records[fact.skillDefId] = fact;
+    }
+    return {
+      records,
+      catalogue: {
+        presence: 'present', completeness,
+        provenance: Object.assign({ sourceKind: 'saveSkillTracker' }, provenance || {}),
+      },
+    };
+  },
   _applySkillEditsToBlock(block, pawn) {
     if (!pawn.skills) return block;
     const useLast = this._blockHasNestedPawn(block);
@@ -1013,7 +1082,11 @@ Object.assign(App, {
       SKILLS.forEach(s => { skills[s.id] = 0; passions[s.id] = 0; passionDefs[s.id] = 'None'; });
 
       const allSkillBlocks = [...block.matchAll(/<skills>\s*<skills>([\s\S]*?)<\/skills>/g)];
-      const skillsData = allSkillBlocks.length > 0 ? allSkillBlocks[hasNestedPawn ? allSkillBlocks.length - 1 : 0][1] : '';
+      const skillsData = allSkillBlocks.length > 0
+        ? allSkillBlocks[hasNestedPawn ? allSkillBlocks.length - 1 : 0][1] : null;
+      const rawSkillData = this._parseRawSkillRecords(skillsData, {
+        sourcePath: 'pawn.skills.skills', pawnLoadId: loadID || null,
+      });
       if (skillsData) {
         const skillEntries = skillsData.split(/<li>/);
         for (const se of skillEntries) {
@@ -1344,6 +1417,8 @@ Object.assign(App, {
         skills,
         passions,
         passionDefs,
+        rawSkillRecords: rawSkillData.records,
+        skillRecordCatalogue: rawSkillData.catalogue,
         traits,
         incapable,
         permissionSources: [rawPermissionSource],
@@ -1880,7 +1955,14 @@ Object.assign(App, {
         break;
       }
       const id = this._uniqueId();
-      const pawn = this.createPawnObject(id, p.name, { ...p.skills }, { ...p.passions }, p.passionDefs ? { ...p.passionDefs } : null);
+      const pawn = this.createPawnObject(
+        id, p.name, { ...p.skills }, { ...p.passions },
+        p.passionDefs ? { ...p.passionDefs } : null,
+        {
+          records: p.rawSkillRecords || {},
+          catalogue: p.skillRecordCatalogue || null,
+        }
+      );
 
       // Store loadID for relation graph edge resolution
       if (p.loadID) pawn.loadID = p.loadID;
@@ -2557,6 +2639,13 @@ Object.assign(App, {
         }
         // Refresh passions
         if (incoming.passions) match.passions = { ...match.passions, ...incoming.passions };
+        if (incoming.passionDefs) match.passionDefs = { ...incoming.passionDefs };
+        if (incoming.rawSkillRecords) {
+          match.rawSkillRecords = JSON.parse(JSON.stringify(incoming.rawSkillRecords));
+        }
+        if (incoming.skillRecordCatalogue) {
+          match.skillRecordCatalogue = JSON.parse(JSON.stringify(incoming.skillRecordCatalogue));
+        }
         // Refresh health from save
         if (incoming.health) match.health = incoming.health;
         // Refresh relations from save
@@ -2817,6 +2906,41 @@ Object.assign(App, {
         const b = (p.passions[s.id]) | 0; p.passionDefs[s.id] = b === 2 ? 'Major' : b === 1 ? 'Minor' : 'None';
       }
     });
+    p.rawSkillRecords = p.rawSkillRecords && typeof p.rawSkillRecords === 'object'
+      ? p.rawSkillRecords : {};
+    for (const [defName, raw] of Object.entries(p.rawSkillRecords)) {
+      if (!raw || typeof raw !== 'object') {
+        delete p.rawSkillRecords[defName];
+        continue;
+      }
+      const presence = ['present', 'absent', 'unknown'].includes(raw.recordPresence)
+        ? raw.recordPresence : 'unknown';
+      raw.skillDefId = typeof raw.skillDefId === 'string' && raw.skillDefId
+        ? raw.skillDefId : defName;
+      raw.appSkillId = typeof raw.appSkillId === 'string' ? raw.appSkillId : null;
+      raw.recordPresence = presence;
+      raw.levelFieldPresent = raw.levelFieldPresent === true;
+      raw.levelState = raw.levelState === 'known' ? 'known' : 'unknown';
+      raw.levelInt = raw.levelState === 'known' && Number.isFinite(raw.levelInt)
+        ? Math.trunc(raw.levelInt) : null;
+      raw.passionFieldPresent = raw.passionFieldPresent === true;
+      raw.rawPassionIdentity = typeof raw.rawPassionIdentity === 'string'
+        ? raw.rawPassionIdentity : null;
+      raw.parserCompleteness = ['complete', 'partial', 'unknown'].includes(raw.parserCompleteness)
+        ? raw.parserCompleteness : 'unknown';
+      raw.provenance = raw.provenance && typeof raw.provenance === 'object'
+        ? raw.provenance : {};
+    }
+    p.skillRecordCatalogue = p.skillRecordCatalogue
+      && typeof p.skillRecordCatalogue === 'object'
+      ? p.skillRecordCatalogue
+      : { presence: 'unknown', completeness: 'unknown', provenance: {} };
+    p.skillRecordCatalogue.presence = ['present', 'absent', 'unknown']
+      .includes(p.skillRecordCatalogue.presence)
+      ? p.skillRecordCatalogue.presence : 'unknown';
+    p.skillRecordCatalogue.completeness = ['complete', 'partial', 'unknown']
+      .includes(p.skillRecordCatalogue.completeness)
+      ? p.skillRecordCatalogue.completeness : 'unknown';
     p.incapable = Array.isArray(p.incapable) ? p.incapable : [];
     p.permissionSources = Array.isArray(p.permissionSources) ? p.permissionSources : [];
     p.currentStatusSources = p.currentStatusSources && typeof p.currentStatusSources === 'object'
