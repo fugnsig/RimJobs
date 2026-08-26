@@ -2202,5 +2202,150 @@ module.exports = function run() {
       'CE-C4S-014 missing parser source does not become canonical false');
   }
 
+  // ======================================================================
+  // C5 EXACT SKILL-OPERATION VOCABULARY AND CONSERVATION
+  // ======================================================================
+
+  {
+    const result = CE.collectPawnEvidence(mk('c5sk1', { childhood: 'ArtisanFarmer23' }));
+    const operation = result.skillOperations.find(item =>
+      item.sourceFactKey === 'backstory:ArtisanFarmer23:child:skillMods:cook');
+    ok(operation && operation.kind === 'creationSkillGain'
+      && operation.skillDefId === 'Cooking' && operation.compatibilityOnly === true,
+    'CE-C5SK-001 backstory skill gain is creation-only evidence');
+  }
+
+  {
+    const result = CE.collectPawnEvidence(mk('c5sk2', { traits: ['gourmand'] }));
+    const operation = result.skillOperations.find(item => item.skillDefId === 'Cooking');
+    ok(operation && operation.kind === 'creationSkillGain'
+      && operation.canonicalEligible === false,
+    'CE-C5SK-002 audited trait gain cannot become runtime aptitude');
+  }
+
+  {
+    const result = CE.collectPawnEvidence(mk('c5sk3', {
+      geneDefIds: ['gene_mining_good'],
+    }));
+    const operation = result.skillOperations.find(item => item.skillDefId === 'Mining');
+    const conservation = result.conservation.find(item =>
+      item.sourceFactKey === operation.sourceFactKey);
+    ok(operation && operation.kind === 'runtimeAptitudeOffset'
+      && operation.value === 4 && operation.compatibilityOnly === false
+      && conservation.representations.some(item => item.representation === 'canonicalExact')
+      && conservation.representations.some(item => item.representation === 'legacyCompatibility'),
+    'CE-C5SK-003 curated generated-gene aptitude has the exact semantic role');
+  }
+
+  {
+    App.state.customGenes.mod_gene_inferred = {
+      id: 'mod_gene_inferred', modId: 'example.mod', skillMods: { mine: 3 },
+    };
+    const result = CE.collectPawnEvidence(mk('c5sk4', {
+      geneDefIds: ['mod_gene_inferred'],
+    }));
+    const operation = result.skillOperations.find(item => item.appSkillId === 'mine');
+    ok(operation && operation.kind === 'unknownSkillOperation'
+      && operation.canonicalEligible === false,
+    'CE-C5SK-004 inferred gene-name modifier stays unknown');
+    delete App.state.customGenes.mod_gene_inferred;
+  }
+
+  {
+    App.state.customTraits.mod_trait_arbitrary = {
+      id: 'mod_trait_arbitrary', modId: 'example.mod', skillMods: { social: 2 },
+    };
+    const result = CE.collectPawnEvidence(mk('c5sk5', { traits: ['mod_trait_arbitrary'] }));
+    const operation = result.skillOperations.find(item => item.appSkillId === 'social');
+    ok(operation && operation.kind === 'unknownSkillOperation'
+      && operation.skillDefId === 'Social',
+    'CE-C5SK-005 arbitrary custom modifier has an exact target but unknown semantics');
+    delete App.state.customTraits.mod_trait_arbitrary;
+  }
+
+  {
+    App.state.customXenotypes.mod_summary = {
+      id: 'mod_summary', modId: 'example.mod', genes: [], skillMods: { art: 5 },
+      incapable: [], uvSensitivity: 0,
+    };
+    const result = CE.collectPawnEvidence(mk('c5sk6', { xenotype: 'mod_summary' }));
+    const operation = result.skillOperations.find(item => item.appSkillId === 'art');
+    ok(operation && operation.kind === 'summaryFallback'
+      && operation.skillDefId === 'Artistic' && operation.compatibilityOnly === true,
+    'CE-C5SK-006 xenotype aggregate remains summary fallback');
+    delete App.state.customXenotypes.mod_summary;
+  }
+
+  {
+    const roleResult = CE.collectPawnEvidence(mk('c5sk7', { role: 'leader' }));
+    const roleOperation = roleResult.skillOperations.find(item => item.appSkillId === 'social');
+    App.getIdeoEffects = () => ({
+      mood: 0, workSpeed: 0, combatSkill: 0, socialSkill: 0, researchSpeed: 2,
+    });
+    const ideologyResult = CE.collectPawnEvidence(mk('c5sk8'));
+    const ideologyOperation = ideologyResult.skillOperations.find(item => item.appSkillId === 'intel');
+    App.getIdeoEffects = () => ({
+      mood: 0, workSpeed: 0, combatSkill: 0, socialSkill: 0, researchSpeed: 0,
+    });
+    ok(roleOperation && ideologyOperation
+      && roleOperation.kind === 'appPolicySkillOffset'
+      && ideologyOperation.kind === 'appPolicySkillOffset'
+      && !roleOperation.canonicalEligible && !ideologyOperation.canonicalEligible,
+    'CE-C5SK-007 role and ideology offsets remain app policy');
+  }
+
+  {
+    App.state.customTraits.mod_trait_unknown_target = {
+      id: 'mod_trait_unknown_target', modId: 'example.mod',
+      skillMods: { modded_unknown_skill: 7 },
+    };
+    const result = CE.collectPawnEvidence(mk('c5sk9', {
+      traits: ['mod_trait_unknown_target'],
+    }));
+    const operation = result.skillOperations.find(item =>
+      item.appSkillId === 'modded_unknown_skill');
+    ok(operation && operation.kind === 'unknownSkillOperation'
+      && operation.skillDefId === null && operation.candidateSkillDefIds.length === 0,
+    'CE-C5SK-008 unknown skill target remains local and unresolved');
+    delete App.state.customTraits.mod_trait_unknown_target;
+  }
+
+  {
+    const base = {
+      operationId: 'op-a', sourceFactKey: 'shared-source',
+      kind: 'runtimeAptitudeOffset', skillDefId: 'Mining', appSkillId: 'mine',
+      value: 4, applicability: 'applicable', applicabilityReason: null,
+      compatibilityOnly: false, superseded: false, canonicalEligible: true,
+      evidence: {}, confidence: 'verified', completeness: 'complete',
+      candidateSkillDefIds: ['Mining'],
+    };
+    const unresolved = [];
+    const normalised = CE._normaliseSkillOperations([
+      base, { ...base, operationId: 'op-b' },
+    ], unresolved);
+    ok(normalised.operations.every(item => item.canonicalEligible === false)
+      && unresolved.some(item => /Duplicate canonical eligibility/.test(item.reason)),
+    'CE-C5SK-009 duplicate canonical eligibility is rejected');
+
+    const superseded = CE._normaliseSkillOperations([
+      { ...base, operationId: 'op-c', superseded: true },
+    ], []);
+    ok(superseded.operations[0].canonicalEligible === false
+      && superseded.conservation[0].eligibleCanonicalOperationIds.length === 0,
+    'CE-C5SK-010 superseded operation is never canonically eligible');
+  }
+
+  {
+    const result = CE.collectPawnEvidence(mk('c5sk11', { traits: ['occultist'] }));
+    const operation = result.skillOperations.find(item => item.appSkillId === 'intel');
+    const linkedLegacy = result.effects.find(item => item.evidenceId
+      === 'trait:occultist:skillMods:intel');
+    ok(operation && linkedLegacy
+      && operation.kind === 'appPolicySkillOffset'
+      && operation.sourceFactKey === linkedLegacy.sourceFactKey
+      && linkedLegacy.representation === 'legacyCompatibility',
+    'CE-C5SK-011 Occultist is app policy with conserved legacy representation');
+  }
+
   return { name: 'capability evidence (C2 adapters)', failures, total };
 };

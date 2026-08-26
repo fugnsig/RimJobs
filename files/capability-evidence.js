@@ -35,6 +35,27 @@ const AUTHORITY_RANK = Object.freeze({
 
 const VALID_CONFIDENCE = new Set(['verified', 'derived', 'inferred', 'unknown']);
 
+const SKILL_OPERATION_KIND = Object.freeze({
+  RUNTIME_APTITUDE: 'runtimeAptitudeOffset',
+  CREATION_GAIN: 'creationSkillGain',
+  APP_POLICY: 'appPolicySkillOffset',
+  SUMMARY_FALLBACK: 'summaryFallback',
+  UNKNOWN: 'unknownSkillOperation',
+});
+
+const _APP_SKILL_TO_DEF = Object.freeze({
+  shoot: 'Shooting', construct: 'Construction', cook: 'Cooking',
+  animal: 'Animals', art: 'Artistic', social: 'Social', melee: 'Melee',
+  mine: 'Mining', plant: 'Plants', craft: 'Crafting', medicine: 'Medicine',
+  intel: 'Intellectual',
+});
+
+// Only curated entries known to transcribe TraitDegreeData.skillGains belong
+// here. Other baked/custom skillMods remain explicitly unknown rather than
+// acquiring runtime semantics from their numeric shape.
+const _AUDITED_TRAIT_CREATION_GAINS = new Set(['gourmand', 'brawler', 'sickly']);
+const _CURATED_APTITUDE_GENE_ID = /^gene_(shooting|melee|construct|mining|cooking|plants|animals|crafting|art|social|medicine|intel)_(terrible|poor|good|great)$/;
+
 // ─── Record constructors ───────────────────────────────────────────────────────
 // Type-specific fields (hours, weight, activity, fallbackHours, etc.) belong in
 // opts.fields and are merged onto the record via Object.assign.
@@ -394,6 +415,184 @@ function _normaliseEffects(effects, unresolvedSources) {
   return result;
 }
 
+function _skillDefIdForAppSkill(appSkillId) {
+  return _APP_SKILL_TO_DEF[appSkillId] || null;
+}
+
+function _skillDefinitionForEffect(effect) {
+  const provenance = effect && effect.provenance || {};
+  if (provenance.sourceKind === 'trait') return _resolveTraitStrict(provenance.sourceId);
+  if (provenance.sourceKind !== 'gene') return null;
+  const allGenes = typeof GENES !== 'undefined' ? GENES : [];
+  const customGenes = (typeof App !== 'undefined' && App.state && App.state.customGenes)
+    ? App.state.customGenes : {};
+  return allGenes.find(gene => gene.id === provenance.sourceId)
+    || customGenes[provenance.sourceId]
+    || null;
+}
+
+function _skillOperationKindForEffect(effect) {
+  const provenance = effect && effect.provenance || {};
+  const sourceKind = provenance.sourceKind;
+  const definition = _skillDefinitionForEffect(effect);
+  const declaredKind = definition && (definition.skillOperationKind
+    || (definition.skillOperationKinds && definition.skillOperationKinds[effect.target]));
+  if (Object.values(SKILL_OPERATION_KIND).includes(declaredKind)) return declaredKind;
+
+  if (sourceKind === 'backstory') return SKILL_OPERATION_KIND.CREATION_GAIN;
+  if (sourceKind === 'role' || sourceKind === 'ideology') return SKILL_OPERATION_KIND.APP_POLICY;
+  if (sourceKind === 'xenotype' || effect.authority === 'summaryFallback') {
+    return SKILL_OPERATION_KIND.SUMMARY_FALLBACK;
+  }
+  if (sourceKind === 'trait') {
+    if (provenance.sourceId === 'occultist') return SKILL_OPERATION_KIND.APP_POLICY;
+    if (definition && definition.skillSourceField === 'TraitDegreeData.skillGains') {
+      return SKILL_OPERATION_KIND.CREATION_GAIN;
+    }
+    if (!provenance.modId && _AUDITED_TRAIT_CREATION_GAINS.has(provenance.sourceId)) {
+      return SKILL_OPERATION_KIND.CREATION_GAIN;
+    }
+    return SKILL_OPERATION_KIND.UNKNOWN;
+  }
+  if (sourceKind === 'gene') {
+    if (definition && (definition.skillSourceField === 'GeneDef.aptitudes'
+      || definition.runtimeAptitudeExact === true
+      || Array.isArray(definition.aptitudesExact))) {
+      return SKILL_OPERATION_KIND.RUNTIME_APTITUDE;
+    }
+    if (!provenance.modId && _CURATED_APTITUDE_GENE_ID.test(provenance.sourceId || '')) {
+      return SKILL_OPERATION_KIND.RUNTIME_APTITUDE;
+    }
+    return SKILL_OPERATION_KIND.UNKNOWN;
+  }
+  return SKILL_OPERATION_KIND.UNKNOWN;
+}
+
+function _normaliseSkillOperations(operations, unresolvedSources) {
+  const unresolved = unresolvedSources || [];
+  const source = Array.isArray(operations) ? operations : [];
+  const normalised = source.map(operation => Object.assign({}, operation, {
+    canonicalEligible: operation.canonicalEligible === true
+      && operation.superseded !== true
+      && operation.compatibilityOnly !== true,
+  }));
+  const groups = new Map();
+  for (const operation of normalised) {
+    const groupKey = [operation.sourceFactKey, operation.skillDefId, operation.kind].join('|');
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push(operation);
+  }
+  groups.forEach(group => {
+    const eligible = group.filter(operation => operation.canonicalEligible === true);
+    if (eligible.length <= 1) return;
+    for (const operation of eligible) operation.canonicalEligible = false;
+    unresolved.push(_makeUnresolved(
+      'skillOperation', group[0].sourceFactKey,
+      'Duplicate canonical eligibility for conserved skill source fact',
+      { candidateTargets: group[0].skillDefId ? [group[0].skillDefId] : [] }
+    ));
+  });
+
+  const bySourceFact = new Map();
+  for (const operation of normalised) {
+    if (!bySourceFact.has(operation.sourceFactKey)) bySourceFact.set(operation.sourceFactKey, []);
+    bySourceFact.get(operation.sourceFactKey).push(operation);
+  }
+  const conservation = Array.from(bySourceFact.entries()).map(([sourceFactKey, group]) => ({
+    sourceFactKey,
+    representations: group.map(operation => ({
+      operationId: operation.operationId,
+      representation: operation.compatibilityOnly ? 'rawObservation' : 'canonicalExact',
+      semanticKind: operation.kind,
+      canonicalEligible: operation.canonicalEligible === true,
+      superseded: operation.superseded === true,
+    })),
+    eligibleCanonicalOperationIds: group
+      .filter(operation => operation.canonicalEligible === true)
+      .map(operation => operation.operationId),
+  }));
+  return { operations: normalised, conservation };
+}
+
+function _buildSkillOperations(effects, unresolvedSources) {
+  const source = Array.isArray(effects) ? effects : [];
+  const rawOperations = [];
+  const skillMetadataByEvidenceId = new Map();
+  for (const effect of source) {
+    if (!effect || effect.type !== 'skillOffset') continue;
+    const kind = _skillOperationKindForEffect(effect);
+    const skillDefId = _skillDefIdForAppSkill(effect.target);
+    const sourceFactKey = effect.sourceFactKey || effect.evidenceId;
+    const runtimeApplicability = effect.runtimeApplicability;
+    const applicability = runtimeApplicability === 'applicable'
+      || runtimeApplicability === 'inapplicable'
+      || runtimeApplicability === 'unknown'
+      ? runtimeApplicability
+      : kind === SKILL_OPERATION_KIND.RUNTIME_APTITUDE ? 'unknown' : 'applicable';
+    const completeness = skillDefId && applicability !== 'unknown' ? 'complete' : 'partial';
+    const compatibilityOnly = kind !== SKILL_OPERATION_KIND.RUNTIME_APTITUDE;
+    const superseded = effect.superseded === true;
+    const operationId = 'skill-operation:' + effect.evidenceId;
+    const operation = {
+      operationId,
+      sourceFactKey,
+      kind,
+      skillDefId,
+      appSkillId: effect.target == null ? null : effect.target,
+      candidateSkillDefIds: skillDefId ? [skillDefId] : [],
+      value: typeof effect.value === 'number' && Number.isFinite(effect.value)
+        ? effect.value : null,
+      applicability,
+      applicabilityReason: applicability === 'unknown'
+        ? 'Runtime source applicability is not yet proven' : null,
+      compatibilityOnly,
+      superseded,
+      canonicalEligible: kind === SKILL_OPERATION_KIND.RUNTIME_APTITUDE
+        && !compatibilityOnly && !superseded && skillDefId != null
+        && applicability === 'applicable',
+      evidence: {
+        evidenceId: effect.evidenceId,
+        sourceFactKey,
+        sourceKind: effect.provenance.sourceKind,
+        sourceId: effect.provenance.sourceId == null ? null : effect.provenance.sourceId,
+        targetDefId: skillDefId,
+        representation: kind === SKILL_OPERATION_KIND.RUNTIME_APTITUDE
+          ? 'canonicalExact' : 'legacyCompatibility',
+        provenance: effect.provenance,
+        confidence: effect.confidence,
+      },
+      confidence: effect.confidence,
+      completeness,
+    };
+    rawOperations.push(operation);
+    skillMetadataByEvidenceId.set(effect.evidenceId, {
+      sourceFactKey, representation: 'legacyCompatibility', semanticKind: kind,
+      compatibilityOnly: true, canonicalEligible: false, applicability,
+      completeness, superseded,
+    });
+  }
+  const normalised = _normaliseSkillOperations(rawOperations, unresolvedSources);
+  const conservation = normalised.conservation.map(record => {
+    const legacy = source.find(effect => effect && effect.evidenceId === record.sourceFactKey);
+    return Object.assign({}, record, {
+      representations: legacy ? [{
+        evidenceId: legacy.evidenceId,
+        representation: 'legacyCompatibility',
+        semanticKind: 'skillOffset',
+        canonicalEligible: false,
+        superseded: legacy.superseded === true,
+      }].concat(record.representations) : record.representations,
+    });
+  });
+  return {
+    operations: normalised.operations,
+    conservation,
+    legacyEffects: source.map(effect => skillMetadataByEvidenceId.has(effect.evidenceId)
+      ? Object.assign({}, effect, skillMetadataByEvidenceId.get(effect.evidenceId))
+      : effect),
+  };
+}
+
 // ─── Body semantic lookup helper ───────────────────────────────────────────────
 // BODY-EVID-001: Human body fallback is compatibility-gated. Never map an
 // unknown alien partIdx to a human arm/leg by coincidence. Only use
@@ -516,6 +715,7 @@ const CapabilityEvidence = {
   CAPACITY: CAPACITY,
   AUTHORITY_RANK: AUTHORITY_RANK,
   VALID_CONFIDENCE: VALID_CONFIDENCE,
+  SKILL_OPERATION_KIND: SKILL_OPERATION_KIND,
 
   fromTraits(pawn) {
     const effects = [];
@@ -1210,6 +1410,8 @@ const CapabilityEvidence = {
     if (!pawn) {
       return {
         effects: [],
+        skillOperations: [],
+        conservation: [],
         bodyEvidence: [],
         permissionEvidence: { rawSources: [], legacyIncapable: [] },
         pawnState: { raceDefName: null, age: null, lifeStage: null, currentStatus: {}, currentStatusFacts: {}, baseSkills: {}, basePassions: {} },
@@ -1243,6 +1445,7 @@ const CapabilityEvidence = {
       confidence: 'verified',
     });
     const allNormalised = _normaliseEffects(normalised.concat(pawnPermissionEffects), allUnresolved);
+    const skillBundle = _buildSkillOperations(allNormalised, allUnresolved);
 
     const skills = pawn.skills || {};
     const baseSkills = {};
@@ -1270,7 +1473,9 @@ const CapabilityEvidence = {
     }
 
     return {
-      effects: allNormalised,
+      effects: skillBundle.legacyEffects,
+      skillOperations: skillBundle.operations,
+      conservation: skillBundle.conservation,
       bodyEvidence,
       permissionEvidence: {
         rawSources: Array.isArray(pawn.permissionSources)
@@ -1298,6 +1503,10 @@ const CapabilityEvidence = {
 
   // Exposed for testing and downstream use
   _normaliseEffects: _normaliseEffects,
+  _normaliseSkillOperations: _normaliseSkillOperations,
+  _buildSkillOperations: _buildSkillOperations,
+  _skillDefIdForAppSkill: _skillDefIdForAppSkill,
+  _skillOperationKindForEffect: _skillOperationKindForEffect,
   _resolveXenoStrict: _resolveXenoStrict,
   _resolveRoleStrict: _resolveRoleStrict,
   _geneRefsForPawn: _geneRefsForPawn,
