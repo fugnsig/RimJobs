@@ -2348,6 +2348,107 @@ module.exports = function run() {
   }
 
   // ======================================================================
+  // C5 EXACT GLOBAL LEARNING FACTOR OPERATIONS
+  // ======================================================================
+
+  {
+    const pawn = mk('c5glf1', {
+      traits: ['fast_learner', 'too_smart'],
+      traitSuppressionFacts: {
+        fast_learner: { state: 'known', value: false },
+        too_smart: { state: 'known', value: false },
+      },
+    });
+    const result = CE.collectPawnEvidence(pawn);
+    const operations = CE._selectCanonicalStatOperations(
+      result.statOperations, 'GlobalLearningFactor');
+    const legacy = result.effects.filter(item => item.type === 'statFactor'
+      && item.target === 'learningRate');
+    ok(operations.length === 2
+      && operations.every(item => item.kind === 'statOffset'
+        && item.phase === 'traitOffset' && item.canonicalEligible)
+      && 1 + operations.reduce((sum, item) => sum + item.value, 0) === 2.5,
+    'CE-C5GLF-001 Fast Learner plus Too Smart is two additive exact offsets');
+    ok(legacy.length === 2 && legacy.every(item => item.compatibilityOnly === true)
+      && legacy.reduce((value, item) => value * item.value, 1) === 3.0625,
+    'CE-C5GLF-002 multiplicative aliases remain compatibility-only');
+    ok(operations.every(operation => {
+      const record = result.conservation.find(item =>
+        item.sourceFactKey === operation.sourceFactKey);
+      return record && record.representations.some(item =>
+        item.representation === 'canonicalExact')
+        && record.representations.some(item =>
+          item.representation === 'legacyCompatibility');
+    }), 'CE-C5GLF-003 exact and legacy representations share source-fact records');
+  }
+
+  {
+    const result = CE.collectPawnEvidence(mk('c5glf4', {
+      traits: ['fast_learner', 'slow_learner'],
+      traitSuppressionFacts: {
+        fast_learner: { state: 'known', value: false },
+        slow_learner: { state: 'known', value: false },
+      },
+    }));
+    const operations = CE._selectCanonicalStatOperations(
+      result.statOperations, 'GlobalLearningFactor');
+    ok(1 + operations.reduce((sum, item) => sum + item.value, 0) === 1,
+      'CE-C5GLF-004 Slow Learner stacks as a negative offset');
+  }
+
+  {
+    App.state.customTraits.mod_learning_alias = {
+      id: 'mod_learning_alias', modId: 'example.mod', learningRate: 0.5,
+      workSpeed: 0, breakThreshold: 0, skillMods: {},
+    };
+    const result = CE.collectPawnEvidence(mk('c5glf5', {
+      traits: ['mod_learning_alias'],
+      traitSuppressionFacts: { mod_learning_alias: { state: 'known', value: false } },
+    }));
+    ok(result.effects.some(item => item.evidenceId
+      === 'trait:mod_learning_alias:learningRate')
+      && !result.statOperations.some(item => item.sourceDefId === 'mod_learning_alias'),
+    'CE-C5GLF-005 untyped legacy learning factor is never upgraded numerically');
+    delete App.state.customTraits.mod_learning_alias;
+  }
+
+  {
+    const result = CE.collectPawnEvidence(mk('c5glf6', { traits: ['fast_learner'] }));
+    const operation = result.statOperations.find(item =>
+      item.statDefId === 'GlobalLearningFactor');
+    ok(operation && operation.applicability === 'unknown'
+      && operation.canonicalEligible === false && operation.completeness === 'partial',
+    'CE-C5GLF-006 incomplete trait applicability cannot be consumed');
+  }
+
+  {
+    const base = {
+      operationId: 'stat-a', sourceFactKey: 'same-stat-source',
+      kind: 'statOffset', statDefId: 'GlobalLearningFactor', sourceDefId: 'Example',
+      phase: 'traitOffset', phaseOrder: 4, sourceOrder: 0, value: 0.75,
+      applicability: 'applicable', compatibilityOnly: false, superseded: false,
+      canonicalEligible: true, confidence: 'verified', completeness: 'complete', evidence: [],
+    };
+    const unresolved = [];
+    const duplicate = CE._normaliseStatOperations([
+      base, { ...base, operationId: 'stat-b' },
+    ], unresolved);
+    ok(duplicate.operations.every(item => item.canonicalEligible === false)
+      && unresolved.some(item => /Duplicate canonical stat eligibility/.test(item.reason)),
+    'CE-C5GLF-007 duplicate exact stat operation is rejected');
+    const superseded = CE._normaliseStatOperations([
+      { ...base, operationId: 'stat-c', superseded: true },
+    ], []);
+    ok(CE._selectCanonicalStatOperations(
+      superseded.operations, 'GlobalLearningFactor').length === 0,
+    'CE-C5GLF-008 superseded exact stat operation is excluded');
+    ok(CE._selectCanonicalStatOperations([
+      base, { ...base, operationId: 'stat-d', statDefId: 'WorkSpeedGlobal' },
+    ], 'GlobalLearningFactor').length === 1,
+    'CE-C5GLF-009 unrelated StatDef target is excluded');
+  }
+
+  // ======================================================================
   // C5 RAW SKILL RECORD AND PASSION FACTS
   // ======================================================================
 
