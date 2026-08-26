@@ -55,6 +55,8 @@ const _APP_SKILL_TO_DEF = Object.freeze({
 // acquiring runtime semantics from their numeric shape.
 const _AUDITED_TRAIT_CREATION_GAINS = new Set(['gourmand', 'brawler', 'sickly']);
 const _CURATED_APTITUDE_GENE_ID = /^gene_(shooting|melee|construct|mining|cooking|plants|animals|crafting|art|social|medicine|intel)_(terrible|poor|good|great)$/;
+const _AUDITED_GLF_TRAITS = new Set(['fast_learner', 'too_smart', 'slow_learner']);
+const _AUDITED_GLF_GENES = new Set(['gene_quick_study', 'gene_slow_study']);
 
 // ─── Record constructors ───────────────────────────────────────────────────────
 // Type-specific fields (hours, weight, activity, fallbackHours, etc.) belong in
@@ -664,6 +666,176 @@ function _rawSkillFactsFromPawn(pawn, unresolvedSources) {
         ? sourceCatalogue.completeness : 'unknown',
       provenance: Object.assign({}, sourceCatalogue.provenance || {}),
     },
+  };
+}
+
+function _statSourceApplicability(effect, pawn) {
+  const provenance = effect && effect.provenance || {};
+  if (provenance.sourceKind === 'trait') {
+    const fact = pawn && pawn.traitSuppressionFacts
+      && pawn.traitSuppressionFacts[provenance.sourceId];
+    if (!fact || fact.state !== 'known') return 'unknown';
+    return fact.value === true ? 'inapplicable' : 'applicable';
+  }
+  if (provenance.sourceKind === 'gene') {
+    const fact = pawn && pawn.geneActiveFacts && pawn.geneActiveFacts[provenance.sourceId];
+    if (!fact || fact.state !== 'known') return 'unknown';
+    return fact.value === true ? 'applicable' : 'inapplicable';
+  }
+  return 'unknown';
+}
+
+function _exactLearningOffsetDescriptor(effect) {
+  if (!effect || effect.type !== 'statFactor' || effect.target !== STAT.LEARNING_RATE) return null;
+  const provenance = effect.provenance || {};
+  const definition = _skillDefinitionForEffect(effect);
+  const declared = definition && definition.exactStatOperations
+    && definition.exactStatOperations.learningRate;
+  if (declared && declared.statDefId === 'GlobalLearningFactor'
+    && declared.kind === 'statOffset' && Number.isFinite(declared.value)) {
+    return { value: declared.value, sourceField: declared.sourceField || 'statOffsets' };
+  }
+  if (provenance.sourceKind === 'trait'
+    && !provenance.modId && _AUDITED_GLF_TRAITS.has(provenance.sourceId)) {
+    return { value: effect.value - 1, sourceField: 'TraitDegreeData.statOffsets' };
+  }
+  if (provenance.sourceKind === 'gene'
+    && !provenance.modId && _AUDITED_GLF_GENES.has(provenance.sourceId)) {
+    return { value: effect.value - 1, sourceField: 'GeneDef.statOffsets' };
+  }
+  return null;
+}
+
+function _normaliseStatOperations(operations, unresolvedSources) {
+  const unresolved = unresolvedSources || [];
+  const normalised = (Array.isArray(operations) ? operations : []).map(operation =>
+    Object.assign({}, operation, {
+      canonicalEligible: operation.canonicalEligible === true
+        && operation.compatibilityOnly !== true && operation.superseded !== true,
+    }));
+  const groups = new Map();
+  for (const operation of normalised) {
+    const key = [operation.sourceFactKey, operation.statDefId, operation.kind].join('|');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(operation);
+  }
+  groups.forEach(group => {
+    const eligible = group.filter(operation => operation.canonicalEligible === true);
+    if (eligible.length <= 1) return;
+    for (const operation of eligible) operation.canonicalEligible = false;
+    unresolved.push(_makeUnresolved(
+      'statOperation', group[0].sourceFactKey,
+      'Duplicate canonical stat eligibility for conserved source fact',
+      { rawTarget: group[0].statDefId, candidateTargets: [group[0].statDefId] }
+    ));
+  });
+  const conservation = Array.from(normalised.reduce((map, operation) => {
+    if (!map.has(operation.sourceFactKey)) map.set(operation.sourceFactKey, []);
+    map.get(operation.sourceFactKey).push(operation);
+    return map;
+  }, new Map()).entries()).map(([sourceFactKey, group]) => ({
+    sourceFactKey,
+    representations: group.map(operation => ({
+      operationId: operation.operationId,
+      representation: operation.compatibilityOnly ? 'rawObservation' : 'canonicalExact',
+      semanticKind: operation.kind,
+      canonicalEligible: operation.canonicalEligible === true,
+      superseded: operation.superseded === true,
+    })),
+    eligibleCanonicalOperationIds: group.filter(operation => operation.canonicalEligible)
+      .map(operation => operation.operationId),
+  }));
+  return { operations: normalised, conservation };
+}
+
+function _selectCanonicalStatOperations(operations, statDefId) {
+  return (Array.isArray(operations) ? operations : []).filter(operation =>
+    operation && operation.statDefId === statDefId
+      && operation.canonicalEligible === true
+      && operation.compatibilityOnly !== true
+      && operation.superseded !== true);
+}
+
+function _buildExactLearningStatOperations(effects, pawn, unresolvedSources) {
+  const source = Array.isArray(effects) ? effects : [];
+  const rawOperations = [];
+  const metadata = new Map();
+  const legacyBySourceFact = new Map();
+  for (const effect of source) {
+    if (!effect || effect.type !== 'statFactor' || effect.target !== STAT.LEARNING_RATE) continue;
+    const sourceFactKey = effect.sourceFactKey || effect.evidenceId;
+    const descriptor = _exactLearningOffsetDescriptor(effect);
+    const applicability = _statSourceApplicability(effect, pawn);
+    const completeness = descriptor && applicability !== 'unknown' ? 'complete' : 'partial';
+    const legacyMetadata = {
+      sourceFactKey,
+      representation: 'legacyCompatibility',
+      semanticKind: 'statFactor',
+      compatibilityOnly: true,
+      canonicalEligible: false,
+      applicability,
+      completeness,
+      superseded: effect.superseded === true,
+    };
+    metadata.set(effect.evidenceId, legacyMetadata);
+    legacyBySourceFact.set(sourceFactKey, effect);
+    if (!descriptor) continue;
+    const sourceKind = effect.provenance.sourceKind;
+    const phase = sourceKind === 'trait' ? 'traitOffset' : 'geneOffset';
+    const phaseOrder = sourceKind === 'trait' ? 4 : 8;
+    rawOperations.push({
+      operationId: 'stat-operation:' + effect.evidenceId + ':GlobalLearningFactor',
+      sourceFactKey,
+      kind: 'statOffset',
+      statDefId: 'GlobalLearningFactor',
+      sourceDefId: effect.provenance.sourceId == null ? null : effect.provenance.sourceId,
+      sourceField: descriptor.sourceField,
+      phase,
+      phaseOrder,
+      sourceOrder: 0,
+      value: descriptor.value,
+      applicability,
+      applicabilityReason: applicability === 'unknown'
+        ? 'Source suppression or active state is not proven' : null,
+      compatibilityOnly: false,
+      superseded: effect.superseded === true,
+      canonicalEligible: applicability === 'applicable' && effect.superseded !== true,
+      confidence: effect.confidence,
+      completeness,
+      evidence: [{
+        evidenceId: effect.evidenceId,
+        sourceFactKey,
+        sourceKind,
+        sourceId: effect.provenance.sourceId == null ? null : effect.provenance.sourceId,
+        targetDefId: 'GlobalLearningFactor',
+        representation: 'canonicalExact',
+        provenance: Object.assign({}, effect.provenance, { sourceField: descriptor.sourceField }),
+        confidence: effect.confidence,
+      }],
+    });
+  }
+  const normalised = _normaliseStatOperations(rawOperations, unresolvedSources);
+  const bySourceFact = new Map(normalised.conservation.map(record =>
+    [record.sourceFactKey, Object.assign({}, record, { representations: record.representations.slice() })]));
+  legacyBySourceFact.forEach((legacy, sourceFactKey) => {
+    if (!bySourceFact.has(sourceFactKey)) {
+      bySourceFact.set(sourceFactKey, {
+        sourceFactKey, representations: [], eligibleCanonicalOperationIds: [],
+      });
+    }
+    bySourceFact.get(sourceFactKey).representations.unshift({
+      evidenceId: legacy.evidenceId,
+      representation: 'legacyCompatibility',
+      semanticKind: 'statFactor',
+      canonicalEligible: false,
+      superseded: legacy.superseded === true,
+    });
+  });
+  return {
+    operations: normalised.operations,
+    conservation: Array.from(bySourceFact.values()),
+    legacyEffects: source.map(effect => metadata.has(effect.evidenceId)
+      ? Object.assign({}, effect, metadata.get(effect.evidenceId)) : effect),
   };
 }
 
@@ -1485,6 +1657,7 @@ const CapabilityEvidence = {
       return {
         effects: [],
         skillOperations: [],
+        statOperations: [],
         conservation: [],
         bodyEvidence: [],
         permissionEvidence: { rawSources: [], legacyIncapable: [] },
@@ -1520,6 +1693,8 @@ const CapabilityEvidence = {
     });
     const allNormalised = _normaliseEffects(normalised.concat(pawnPermissionEffects), allUnresolved);
     const skillBundle = _buildSkillOperations(allNormalised, allUnresolved);
+    const statBundle = _buildExactLearningStatOperations(
+      skillBundle.legacyEffects, pawn, allUnresolved);
     const rawSkillFacts = _rawSkillFactsFromPawn(pawn, allUnresolved);
 
     const skills = pawn.skills || {};
@@ -1548,9 +1723,10 @@ const CapabilityEvidence = {
     }
 
     return {
-      effects: skillBundle.legacyEffects,
+      effects: statBundle.legacyEffects,
       skillOperations: skillBundle.operations,
-      conservation: skillBundle.conservation,
+      statOperations: statBundle.operations,
+      conservation: skillBundle.conservation.concat(statBundle.conservation),
       bodyEvidence,
       permissionEvidence: {
         rawSources: Array.isArray(pawn.permissionSources)
@@ -1584,6 +1760,9 @@ const CapabilityEvidence = {
   _normaliseSkillOperations: _normaliseSkillOperations,
   _buildSkillOperations: _buildSkillOperations,
   _rawSkillFactsFromPawn: _rawSkillFactsFromPawn,
+  _normaliseStatOperations: _normaliseStatOperations,
+  _selectCanonicalStatOperations: _selectCanonicalStatOperations,
+  _buildExactLearningStatOperations: _buildExactLearningStatOperations,
   _skillDefIdForAppSkill: _skillDefIdForAppSkill,
   _skillOperationKindForEffect: _skillOperationKindForEffect,
   _resolveXenoStrict: _resolveXenoStrict,
