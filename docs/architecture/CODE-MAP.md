@@ -255,6 +255,55 @@ Lookup table mapping features to files, entry points, state and tests.
 
 ---
 
+## Permission and Availability Resolution (C4)
+
+**Target runtime:** RimWorld `1.6.4871 rev590`.
+
+**Scanner/provider inputs:**
+- `main.js` - collects installed `WorkTypeDef`, `WorkGiverDef`, race `ThingDef`/life-stage work fragments, active package evidence, definition provenance, and requirement-specific PatchOperation uncertainty. The scanner records relevant uncertainty but does not execute patches.
+- `files/data.js` - `parseWorkTypeDefsFromXML()`, `parseWorkGiverDefsFromXML()`, and `parseRaceWorkSettingsFromXML()` preserve exact WorkTags, WorkGiver membership, ordered required capacities, minimum ages, provenance, and per-dimension/per-path completeness.
+- `files/app-editors.js` - merges the scanner/provider result into renderer definition state without converting unknown data to defaults.
+- `files/app-save.js` and `files/capability-evidence.js` - C2 supplies separate job, WorkType, and canonical WorkTag permission evidence, structured unresolved candidates, raw `pawn.incapable` preservation for legacy use, and tri-state current-status facts.
+
+**Canonical modules:**
+- `files/requirement-registry.js` - builds a deeply immutable, runtime-versioned snapshot of `JobRequirementPolicy`, OR-alternative `WorkPath` values, AND capacity requirements, and opaque race work policies. It binds 23 audited direct jobs; the ten audited app jobs and all unsupported custom jobs remain explicit `unknown` policies.
+- `files/permission-resolver.js` - emits schema-version-1 structural `PermissionReport` values (`allowed`, `blocked`, `unknown`) from C2 evidence, C3 structural capacity facts, and the requirement snapshot. It evaluates exact namespaces, conditional persistent restrictions, race work gates, strict capacity thresholds, and WorkGiver alternatives. Structured target ambiguity resolves only when every supplied candidate has the same outcome.
+- `files/c4-evaluation-context.js` - creates one deeply immutable request-scoped context per pawn evaluation batch, with exactly one C2 evidence collection and one C3 capacity resolution. It forwards the full C3 capability-definition bundle and holds no revision cache or invalidation state.
+- `files/availability-resolver.js` - independently emits schema-version-1 current `AvailabilityReport` values (`available`, `unavailable`, `unknown`) from tri-state current statuses, C3 current capacity facts, temporary/current-only restrictions, and the same requirement snapshot. It never reads Permission.
+- `files/c4-legacy-compatibility.js` - shadow-only adapter. Legacy truth delegates unchanged to `Engine.evaluateJobPermission()` and `App.isIncapable()`; `compare()` names canonical-versus-legacy differences. Canonical unknown never projects to incapable.
+
+**Dependency and load order:**
+
+```text
+data
+  -> C2 capability evidence
+  -> C3 capacity resolver
+  -> C4 requirement registry
+  -> C4 Permission / immutable context / Availability
+  -> existing Engine and App legacy surfaces
+  -> C4 legacy compatibility shadow adapter
+```
+
+`files/rimjobs.html` loads the pure modules in that order. No production planner, assignment, viability, bottleneck, scheduling, summary, priority, or renderer consumer invokes C4 yet. Consumer and UI migration is reserved for C7; smarter assignment behaviour is reserved for C8.
+
+**Tests:**
+- `test/fixtures/c4-runtime-audit-1.6.4871.json` and `test/c4-audit-contract.test.js` - exact audited WorkTags, job partition, race gates, and WorkGiver path truths (25 checks).
+- `test/requirement-scanner.test.js` - extraction, inheritance, completeness, active packages, patch signals, malformed XML, and unsupported giver cases (21 checks).
+- `test/requirement-registry.test.js` - direct/unknown policies, path and threshold semantics, race lookup, and immutability (54 checks).
+- `test/permission-resolver.test.js` - target namespaces, ambiguity, structural conditions, age, capacities, alternative paths, unknown relevance, and report aggregation (44 checks).
+- `test/availability-resolver.test.js` - immutable context, tri-state global status, current paths/restrictions, and independent peer combinations (37 checks).
+- `test/c4-compatibility.test.js` - exact legacy delegation and named Firefight, Fishing, Hauling, downed, app-job, and every-`incapBlocks` shadow case (139 checks).
+
+**Known conservative unknowns:**
+- Relevant unapplied PatchOperations make only the affected requirement dimension or path partial; there is no PatchOperation engine.
+- Unsupported/custom WorkGiver execution semantics remain unknown even when standard metadata can still be preserved.
+- Missing or incomplete active-package evidence prevents claiming an inactive definition or complete catalogue.
+- Missing mental-state, deactivation, unconscious, or awake inputs remain tri-state unknown. Awake facts are derived only from the audited exact inputs in the request context.
+- Unsupported app/custom jobs remain unknown without an explicit definition-backed or reviewed `appPolicy`; no closest-vanilla analogue is canonical truth.
+- Race definition names are opaque registry keys. Missing or partial race work settings remain unknown, and no race identity branch supplies a default.
+
+---
+
 ## Test Suite Summary
 
 | Suite | File | Checks | Subsystem |
@@ -278,7 +327,13 @@ Lookup table mapping features to files, entry points, state and tests.
 | 4D stress | `test/stress-4d.fuzz.test.js` | 36 | Blueprints |
 | Logo date line | `test/logo-date.test.js` | 12 | UI |
 | Capability corpus (C1 freeze) | `test/capability-corpus.test.js` | 140 | Capability evaluation, skill calc, work speed, scheduling, temporal coverage/resilience - frozen regression fixtures for all capability-related production functions |
-| Capability evidence (C2) | `test/capability-evidence.test.js` | 421 | Canonical evidence adapters, body evidence, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
+| Capability evidence (C2) | `test/capability-evidence.test.js` | 450 | Canonical evidence adapters, body evidence, permission targets, status facts, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
 | Capacity resolver (C3) | `test/capacity-resolver.test.js` | 122 | Body identity, raw-index joins, audited workers, capMods, dependency graph, dual snapshots, Human parity and XML parser fixtures |
+| C4 audit contract | `test/c4-audit-contract.test.js` | 25 | Runtime WorkTags, job policy partition, race ages and WorkGiver path truths |
+| C4 requirement scanner | `test/requirement-scanner.test.js` | 21 | Work/race extraction, completeness, package activation and patch uncertainty |
+| C4 requirement registry | `test/requirement-registry.test.js` | 54 | Immutable policies, exact mappings, OR/AND paths, thresholds and race lookup |
+| C4 Permission | `test/permission-resolver.test.js` | 44 | Structural targets, ambiguity, age, capacity, path and unknown aggregation |
+| C4 Availability/context | `test/availability-resolver.test.js` | 37 | Request context, tri-state status, current paths and peer independence |
+| C4 compatibility/shadow | `test/c4-compatibility.test.js` | 139 | Exact C1 delegation and named canonical-versus-legacy deltas |
 
-The suite currently runs 21 suites and 34,199 checks. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.
+The suite currently runs 27 suites and 34,548 checks. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.
