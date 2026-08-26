@@ -174,14 +174,17 @@ const PermissionResolver = (() => {
     return aggregate;
   }
 
-  function matchingUnresolved(unresolved, jobId, policy) {
+  function candidateOutcome(candidate, jobId, policy) {
+    if (!candidate || typeof candidate !== 'object') return 'unknown';
     const policyTagMask = tagMask(policy.permission.workTags.values);
-    return (unresolved || []).filter(item => (item.candidateTargets || []).some(candidate => {
-      if (candidate.kind === 'job') return candidate.target === jobId;
-      if (candidate.kind === 'workType') return candidate.target === policy.workTypeDefName;
-      if (candidate.kind === 'workTag') return !!(tagMask([candidate.target]) & policyTagMask);
-      return false;
-    }));
+    if (candidate.kind === 'job') return candidate.target === jobId ? 'failed' : 'satisfied';
+    if (candidate.kind === 'workType') {
+      return candidate.target === policy.workTypeDefName ? 'failed' : 'satisfied';
+    }
+    if (candidate.kind === 'workTag') {
+      return !!(tagMask([candidate.target]) & policyTagMask) ? 'failed' : 'satisfied';
+    }
+    return 'unknown';
   }
 
   function resolve(context, jobId) {
@@ -281,15 +284,22 @@ const PermissionResolver = (() => {
       requirementProvenance: policy.permission.workTags.provenance,
     }));
 
-    const relevantUnresolved = matchingUnresolved(c2.unresolvedSources, jobId, policy);
-    for (let i = 0; i < relevantUnresolved.length; i++) {
-      const item = relevantUnresolved[i];
+    const unresolved = c2.unresolvedSources || [];
+    for (let i = 0; i < unresolved.length; i++) {
+      const item = unresolved[i];
+      const candidates = Array.isArray(item.candidateTargets) ? item.candidateTargets : [];
+      if (!candidates.length) continue;
+      const outcomes = candidates.map(candidate => candidateOutcome(candidate, jobId, policy));
+      const hasFailed = outcomes.includes('failed');
+      if (!hasFailed) continue;
+      const result = outcomes.every(outcome => outcome === 'failed') ? 'failed' : 'unknown';
       evaluations.push(makeEvaluation({
         evaluationId: 'permission:unresolved:' + i,
         requirementId: 'permissionEvidenceCompleteness:' + i,
-        kind: 'registryCompleteness', result: 'unknown', snapshot: null,
-        code: 'permission.evidence.relevantAmbiguity',
-        params: { rawTarget: item.rawTarget || null },
+        kind: 'registryCompleteness', result, snapshot: null,
+        code: result === 'failed' ? 'permission.evidence.unanimousAmbiguity'
+          : 'permission.evidence.relevantAmbiguity',
+        params: { rawTarget: item.rawTarget || null, candidateCount: candidates.length },
         requirementProvenance: item.provenance || { modId: item.modId || null, sources: [] },
       }));
     }

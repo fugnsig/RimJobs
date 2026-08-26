@@ -114,13 +114,25 @@ module.exports = function run() {
     const structured = resolve(p, { evidence: {
       unresolvedSources: [{ rawTarget: 'caring', candidateTargets: [{ kind: 'workTag', target: 'Caring' }] }],
     } });
+    const unanimous = resolve(p, { evidence: {
+      unresolvedSources: [{ rawTarget: 'ambiguity', candidateTargets: [
+        { kind: 'job', target: 'ambiguity' }, { kind: 'workTag', target: 'Caring' },
+      ] }],
+    } });
+    const nonUnanimous = resolve(p, { evidence: {
+      unresolvedSources: [{ rawTarget: 'ambiguity', candidateTargets: [
+        { kind: 'job', target: 'ambiguity' }, { kind: 'workTag', target: 'Mining' },
+      ] }],
+    } });
     const opaque = resolve(p, { evidence: {
       unresolvedSources: [{ rawTarget: 'Caring', candidateTargets: [] }],
     } });
     const unrelated = resolve(p, { evidence: {
       unresolvedSources: [{ rawTarget: 'Mining', candidateTargets: [{ kind: 'workTag', target: 'Mining' }] }],
     } });
-    ok(structured.state === 'unknown', 'PR-010 structured relevant ambiguity propagates unknown');
+    ok(structured.state === 'blocked', 'PR-010 unanimous single structured candidate resolves');
+    ok(unanimous.state === 'blocked', 'PR-010B unanimous multi-namespace candidates resolve blocked');
+    ok(nonUnanimous.state === 'unknown', 'PR-010C non-unanimous candidate outcomes remain unknown');
     ok(opaque.state === 'allowed', 'PR-011 opaque raw ambiguity is not reparsed');
     ok(unrelated.state === 'allowed', 'PR-012 unrelated unknown evidence does not poison policy');
   }
@@ -129,7 +141,9 @@ module.exports = function run() {
     const p = policy({ jobId: 'coexist' });
     const report = resolve(p, { evidence: {
       effects: [effect('disableJob', 'coexist', 'block')],
-      unresolvedSources: [{ candidateTargets: [{ kind: 'workTag', target: 'Caring' }] }],
+      unresolvedSources: [{ candidateTargets: [
+        { kind: 'workTag', target: 'Caring' }, { kind: 'workTag', target: 'Mining' },
+      ] }],
     } });
     ok(report.state === 'blocked' && report.blockers.length > 0 && report.unknowns.length > 0,
       'PR-013 confirmed blocker and relevant unknown coexist');
