@@ -31,6 +31,7 @@ const tests = [
   './requirement-scanner.test.js',
   './requirement-registry.test.js',
   './permission-resolver.test.js',
+  './availability-resolver.test.js',
 ];
 
 (async () => {
