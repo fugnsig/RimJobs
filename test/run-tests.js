@@ -46,6 +46,7 @@ const tests = [
   './c6-rest-stat-registration.test.js',
   './c6-need-suppression-evidence.test.js',
   './c6-activity-provider-semantics.test.js',
+  './c6-temporal-coverage.test.js',
 ];
 
 (async () => {

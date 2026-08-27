@@ -1034,6 +1034,27 @@ const _C5_STAT_PHASES = Object.freeze({
   inspiration: Object.freeze({ statOffset: ['inspiration', 21, 'inspirationOperations'], statFactor: ['inspiration', 21, 'inspirationOperations'] }),
 });
 
+const _C6_TEMPORAL_FAMILIES = Object.freeze([
+  'restNeed', 'recreation', 'windows', 'conditions', 'activities',
+]);
+
+function _temporalFamilyCoverage(options) {
+  const source = options && options.temporalCoverage || {};
+  const output = {};
+  for (const family of _C6_TEMPORAL_FAMILIES) {
+    const entry = source[family];
+    const completeness = typeof entry === 'string' ? entry
+      : entry && entry.completeness;
+    output[family] = {
+      completeness: ['complete', 'partial', 'unknown'].includes(completeness)
+        ? completeness : 'unknown',
+      unresolvedEvidence: Array.isArray(entry && entry.unresolvedEvidence)
+        ? entry.unresolvedEvidence.map(item => Object.assign({}, item)) : [],
+    };
+  }
+  return output;
+}
+
 const _C5_SOURCE_FAMILIES = Object.freeze([
   'traitOffsets', 'hediffOffsets', 'preceptOffsets', 'roleOffsets',
   'geneOffsets', 'lifeStageOffsets', 'equipmentOffsets', 'traitFactors',
@@ -2175,6 +2196,7 @@ const CapabilityEvidence = {
         statOperations: [],
         sourceFamilyCompleteness: _sourceFamilyCompleteness(
           options && options.effectivenessSourceCatalogues),
+        temporalCoverage: _temporalFamilyCoverage(options),
         structuralContextFacts: _buildStructuralContextFacts(null, options),
         conservation: [],
         bodyEvidence: [],
@@ -2279,6 +2301,7 @@ const CapabilityEvidence = {
       skillOperations: skillBundle.operations,
       statOperations: allStatOperations.operations,
       sourceFamilyCompleteness: pawnStatBundle.sourceFamilyCompleteness,
+      temporalCoverage: _temporalFamilyCoverage(options),
       structuralContextFacts,
       conservation: skillBundle.conservation.concat(Array.from(statConservation.values())),
       bodyEvidence,
