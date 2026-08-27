@@ -48,6 +48,7 @@ const tests = [
   './c6-activity-provider-semantics.test.js',
   './c6-temporal-coverage.test.js',
   './c6-undergrounder-uv.test.js',
+  './temporal-profile-resolver.test.js',
 ];
 
 (async () => {
