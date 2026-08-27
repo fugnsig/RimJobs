@@ -38,6 +38,7 @@ const tests = [
   './effectiveness-scanner.test.js',
   './c5-pawn-stat-evidence.test.js',
   './effectiveness-registry.test.js',
+  './structural-skill-passion.test.js',
 ];
 
 (async () => {
