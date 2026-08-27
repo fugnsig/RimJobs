@@ -116,6 +116,7 @@ const App = {
     scannedWorkTypeDefs: {},
     scannedWorkGiverDefs: {},
     scannedRaceWorkPolicies: {},
+    effectivenessProvider: null,
     requirementUncertainty: { workType: {}, workGiver: {}, raceWork: {}, dataset: {} },
     activePackageResolution: { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['missingTargetSaveModList'] },
     customMaterials: [], // NEW: User-defined materials

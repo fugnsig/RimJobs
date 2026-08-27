@@ -108,7 +108,7 @@ module.exports = function run() {
   'RS-018 missing target-save activation stays unknown');
 
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  ok(/CACHE_VERSION\s*=\s*6/.test(mainSource)
+  ok(/CACHE_VERSION\s*=\s*7/.test(mainSource)
     && /workTypeDefsXml/.test(mainSource) && /workGiverDefsXml/.test(mainSource),
   'RS-019 scanner cache and IPC schema include C4 fragments');
   ok(/requiredCapacities/.test(mainSource) && /pathCatalogue/.test(mainSource)
