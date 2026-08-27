@@ -47,6 +47,7 @@ const tests = [
   './c6-need-suppression-evidence.test.js',
   './c6-activity-provider-semantics.test.js',
   './c6-temporal-coverage.test.js',
+  './c6-undergrounder-uv.test.js',
 ];
 
 (async () => {
