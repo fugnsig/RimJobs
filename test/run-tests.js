@@ -44,6 +44,7 @@ const tests = [
   './structural-effectiveness-resolver.test.js',
   './c5-compatibility.test.js',
   './c6-rest-stat-registration.test.js',
+  './c6-need-suppression-evidence.test.js',
 ];
 
 (async () => {

@@ -1413,6 +1413,16 @@ function parseGenesFromXML(xmlString) {
       }
     }
 
+    // Disabled needs - retained verbatim for need-suppression evidence (C6).
+    const disablesNeeds = [];
+    const dnEl = gDef.querySelector('disablesNeeds');
+    if (dnEl) {
+      for (const li of dnEl.querySelectorAll('li')) {
+        const raw = (li.textContent || '').trim();
+        if (raw) disablesNeeds.push(raw);
+      }
+    }
+
     const id = 'mod_gene_' + _sanId(dn);
     const out = {
       id, label: _capFirst(label.trim()), category: _capFirst(cat),
@@ -1420,6 +1430,7 @@ function parseGenesFromXML(xmlString) {
       permissionSources: [_parsePermissionSource(gDef, 'disabledWorkTags', 'workTag')],
     };
     if (incapable.length) out.incapable = [...new Set(incapable)];
+    if (disablesNeeds.length) out.disablesNeeds = disablesNeeds;
     results[id] = out;
   }
   return results;
@@ -1573,7 +1584,7 @@ const TRAITS = [
   { id: 'perfect_memory', label: 'Perfect Memory', description: 'Outstanding memory. Skills never decay.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
   { id: 'occultist', label: 'Occultist', description: 'Knowledge of dark energy. +100% study.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: { intel: 2 } },
   { id: 'joyous', label: 'Joyous', description: 'Makes everyone feel better.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
-  { id: 'body_mastery', label: 'Body Mastery', description: 'No basic needs (Food/Sleep).', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
+  { id: 'body_mastery', label: 'Body Mastery', description: 'No basic needs (Food/Sleep).', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {}, disablesNeeds: ['Food', 'Rest', 'Comfort'] },
   { id: 'disturbing', label: 'Disturbing', description: 'Fixated on horrendous ideas.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
   { id: 'void_fascination', label: 'Void Fascination', description: 'Intrigued by entities.', workSpeed: 0, learningRate: 0, breakThreshold: 0, skillMods: {} },
 ];
@@ -2167,8 +2178,8 @@ const GENES = [
   { id: 'gene_long_lived', label: 'Long-lived',  category: 'Aging', description: 'Ages at half speed.' },
   { id: 'gene_fire_resist', label: 'Fire Resistant', category: 'Resistance', description: 'Resistant to fire damage.' },
   { id: 'gene_toxic_resist', label: 'Toxic Resistant', category: 'Resistance', description: 'Resistant to toxic environments.' },
-  { id: 'gene_no_sleep',  label: 'Sleepless',   category: 'Needs', description: 'Does not need sleep.' },
-  { id: 'gene_no_food',   label: 'Non-Eating',  category: 'Needs', description: 'Does not need food.' },
+  { id: 'gene_no_sleep',  label: 'Sleepless',   category: 'Needs', description: 'Does not need sleep.', disablesNeeds: ['Rest'] },
+  { id: 'gene_no_food',   label: 'Non-Eating',  category: 'Needs', description: 'Does not need food.', disablesNeeds: ['Food'] },
   // ── Incapable Genes ──
   { id: 'gene_incap_violence',  label: 'Incapable of Violence',  category: 'Incapable', description: 'Cannot do violence.', incapable: ['violence'], disabledWorkTagsExact: ['Violent'] },
   { id: 'gene_incap_cooking',   label: 'Incapable of Cooking',   category: 'Incapable', description: 'Cannot cook.', incapable: ['cooking'], disabledWorkTagsExact: ['Cooking'] },
