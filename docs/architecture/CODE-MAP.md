@@ -205,7 +205,7 @@ Lookup table mapping features to files, entry points, state and tests.
 - Must never depend on `engine.js`.
 
 **Tests:**
-- `test/capability-evidence.test.js` - 421 checks
+- `test/capability-evidence.test.js` - 492 checks
 
 **Invariants:**
 - EVID-001
@@ -304,13 +304,74 @@ data
 
 ---
 
+## Structural Effectiveness Resolution (C5)
+
+**Target runtime:** RimWorld `1.6.4871 rev590`.
+
+**Evidence and definition inputs:**
+- `files/app-save.js` and `files/capability-evidence.js` preserve raw SkillRecord presence as `present`, `absent`, or `unknown`, including independent level and passion field presence. Only the skill and passion resolvers may derive `runtimeDefaulted`, and only after a complete active SkillDef catalogue proves an absent record.
+- `files/capability-evidence.js` exposes exact canonical skill and stat operations, source-fact conservation, per-source-family completeness, and typed pawn context facts. Trait, gene, hediff, precept, role, and life-stage definition operations are joined to the current pawn at request time. A complete empty family proves no operation; a partial or unknown family opens an evaluation frontier.
+- `files/effectiveness-registry.js` builds a deeply immutable, pawn-independent definition snapshot. It contains exact SkillDef policies, passion providers, source-operation catalogues, job policies, phase templates, and five evaluated StatDefs: `GlobalLearningFactor`, `AnimalsLearningFactor`, `WorkSpeedGlobal`, `MiningSpeed`, and `CookSpeed`. Other evidenced facet stats remain `recordOnly`. The final registry search's `hediffs` match is this definition catalogue, not pawn evidence.
+
+**Canonical modules:**
+- `files/c5-evaluation-context.js` reuses supplied C2 and C3 facts with zero additional work, or performs one C2 collection and one C3 resolution in standalone mode. The context is immutable and request-scoped.
+- `files/structural-skill-resolver.js` and `files/structural-passion-resolver.js` emit separate exact per-SkillDef facts. Stored level, runtime aptitude, disablement diagnostics, runtime projections, raw passion identity, and supported passion semantics remain distinct.
+- `files/structural-stat-resolver.js` merges definition templates with the current pawn's canonical C2 stat operations in the audited 28-phase order. It stops at the first relevant frontier, retains a contiguous numeric prefix, marks later operations `notEvaluated`, handles dependency cycles, and uses only request-local memoisation.
+- `files/structural-learning-resolver.js` keeps direct passion-only learning separate from ordinary learning. Ordinary learning uses `GlobalLearningFactor` and, only for the exact Animals SkillDef, `AnimalsLearningFactor`. Current saturation and debug learning remain `notEvaluated`.
+- `files/structural-effectiveness-resolver.js` assembles duplicate-free plural `skillFacts`, `passionFacts`, and `learningRateFacts`, independent `globalWorkSpeed`, and top-level plural facets. A wholly skillless job has three empty arrays. Facets retain zero, one, or many StatDefs and never collapse to a job scalar.
+- `files/c5-legacy-compatibility.js` is shadow-only. It delegates unchanged C1 skill, passion, global-speed, and job-speed surfaces and retains the 14 reviewed differences by name. Legacy numbers never enter canonical calculation.
+
+**Dependency and load order:**
+
+```text
+data
+  -> C2 capability evidence
+  -> C3 capacity resolver
+  -> C4 requirement registry
+  -> C5 effectiveness registry
+  -> C5 immutable request context
+  -> C5 skill and passion resolvers
+  -> C5 ordered stat resolver
+  -> C5 learning resolver
+  -> C5 plural report assembler
+  -> unchanged Engine and App C1 surfaces
+  -> C5 legacy shadow adapter
+```
+
+`files/rimjobs.html` loads the modules in this order and invokes none. No planner, renderer, assignment, priority, viability, bottleneck, optimiser, chart, or scheduler consumes C5. C7 owns parity-proven consumer migration and any durable caching boundary. C8 owns weighting, recommendations, ranking, and assignment intelligence.
+
+**Precision, state, and confidence:**
+- C3 exposes rounded structural capacity values. C5 Option A evaluates the audited capacity formulas against those public values and emits `capacityInputRoundedByC3`; the result is partial with `exactAgainstRoundedC3CapacityInput`, even when no semantic frontier exists. It never claims an interval or bit-exact runtime parity.
+- Completeness describes whether all relevant inputs are captured. Confidence describes the strength of a specific claim. A verified identity may coexist with partial arithmetic and unresolved later phases.
+- `unknown`, `notApplicable`, `notEvaluated`, and a partial contiguous prefix are distinct states. Unknown evidence affects only its relevant skill, stat, facet, or job policy.
+
+**Tests:**
+- `test/c5-audit-contract.test.js` - executable runtime and legacy contract (10 checks).
+- `test/effectiveness-scanner.test.js` - focused definitions, inheritance, packages, patches, and facet bindings (28 checks).
+- `test/c5-pawn-stat-evidence.test.js` - current-pawn source joins, family completeness, and typed context (27 checks).
+- `test/effectiveness-registry.test.js` - immutable pawn-independent registry and plural policies (22 checks).
+- `test/structural-skill-passion.test.js` - request context, SkillFact, PassionFact, and resolver-only defaults (18 checks).
+- `test/structural-stat-resolver.test.js` - phase order, frontier, dependencies, cycles, exact formulas, and Option A precision (31 checks).
+- `test/structural-learning-resolver.test.js` - direct and ordinary learning boundaries (16 checks).
+- `test/structural-effectiveness-resolver.test.js` - plural report and top-level facet assembly (20 checks).
+- `test/c5-compatibility.test.js` - exact C1 delegation and named shadow differences (27 checks).
+
+**Known conservative unknowns:**
+- Arbitrary mod C# skill, passion, StatPart, worker, WorkGiver, JobDriver, and recipe semantics remain unknown without a reviewed versioned provider.
+- Current glow, inspiration, equipment, map, target, building, recipe, quest, training, and learning-saturation inputs remain current, mixed, unresolved, or `notEvaluated` as appropriate.
+- Missing applicability, active-package, trait suppression, gene activity, hediff persistence, scenario, or source-family completeness opens only the affected frontier.
+- Unsupported app/custom jobs and unsupported facet bindings remain explicit unknowns. There is no closest analogue, arbitrary PatchOperation interpreter, or arbitrary C# interpreter.
+- C5 emits no effectiveness score, primary skill, ranking proxy, assignment change, long-lived cache, or consumer migration. Production C1 output remains unchanged.
+
+---
+
 ## Test Suite Summary
 
 | Suite | File | Checks | Subsystem |
 |-------|------|--------|-----------|
 | Engine optimiser + maths | `test/engine.optimiser.test.js` | 87 | Priorities, work speed, capability evaluation, matrix parity, CAP corpus, temporal coverage, proposals, acceptance |
-| Save parser fuzz | `test/save-parser.fuzz.test.js` | 28 | Save import |
-| Save export fuzz | `test/save-export.fuzz.test.js` | 22,684 | Save round-trip |
+| Save parser fuzz | `test/save-parser.fuzz.test.js` | 30 | Save import |
+| Save export fuzz | `test/save-export.fuzz.test.js` | 22,689 | Save round-trip |
 | Trait editor fuzz | `test/trait-editor.fuzz.test.js` | 4,287 | Pawn editing |
 | State normaliser fuzz | `test/state-normaliser.fuzz.test.js` | 7 | State management |
 | Clipboard import fuzz | `test/clipboard-import.fuzz.test.js` | 34 | Import |
@@ -327,7 +388,7 @@ data
 | 4D stress | `test/stress-4d.fuzz.test.js` | 36 | Blueprints |
 | Logo date line | `test/logo-date.test.js` | 12 | UI |
 | Capability corpus (C1 freeze) | `test/capability-corpus.test.js` | 140 | Capability evaluation, skill calc, work speed, scheduling, temporal coverage/resilience - frozen regression fixtures for all capability-related production functions |
-| Capability evidence (C2) | `test/capability-evidence.test.js` | 450 | Canonical evidence adapters, body evidence, permission targets, status facts, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
+| Capability evidence (C2) | `test/capability-evidence.test.js` | 492 | Canonical evidence adapters, body evidence, permission targets, status facts, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
 | Capacity resolver (C3) | `test/capacity-resolver.test.js` | 122 | Body identity, raw-index joins, audited workers, capMods, dependency graph, dual snapshots, Human parity and XML parser fixtures |
 | C4 audit contract | `test/c4-audit-contract.test.js` | 25 | Runtime WorkTags, job policy partition, race ages and WorkGiver path truths |
 | C4 requirement scanner | `test/requirement-scanner.test.js` | 21 | Work/race extraction, completeness, package activation and patch uncertainty |
@@ -335,5 +396,14 @@ data
 | C4 Permission | `test/permission-resolver.test.js` | 44 | Structural targets, ambiguity, age, capacity, path and unknown aggregation |
 | C4 Availability/context | `test/availability-resolver.test.js` | 37 | Request context, tri-state status, current paths and peer independence |
 | C4 compatibility/shadow | `test/c4-compatibility.test.js` | 139 | Exact C1 delegation and named canonical-versus-legacy deltas |
+| C5 audit contract | `test/c5-audit-contract.test.js` | 10 | Runtime facts, phases, formulas, plural policies, and shadow classifications |
+| C5 effectiveness scanner/provider | `test/effectiveness-scanner.test.js` | 28 | Focused definitions, inheritance, packages, patches, source operations, and facets |
+| C5 pawn stat evidence | `test/c5-pawn-stat-evidence.test.js` | 27 | Current-pawn catalogue joins, source-family completeness, and typed context facts |
+| C5 effectiveness registry | `test/effectiveness-registry.test.js` | 22 | Immutable pawn-independent definitions, supported stats, and plural policies |
+| C5 structural skill and passion | `test/structural-skill-passion.test.js` | 18 | Request context, exact SkillFact and PassionFact, resolver-only defaults |
+| C5 structural stat resolver | `test/structural-stat-resolver.test.js` | 31 | Ordered operations, frontier, dependencies, cycles, and capacity precision |
+| C5 structural learning | `test/structural-learning-resolver.test.js` | 16 | Direct and ordinary learning with current inputs excluded |
+| C5 structural effectiveness reports | `test/structural-effectiveness-resolver.test.js` | 20 | Plural skills and top-level facets without scalar aggregation |
+| C5 legacy effectiveness shadow | `test/c5-compatibility.test.js` | 27 | Exact C1 delegation and 14 named canonical differences |
 
-The suite currently runs 27 suites and 34,548 checks. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.
+The verified suite runs 37 suites, 0 skipped, 0 failures, and 34,821 checks. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.

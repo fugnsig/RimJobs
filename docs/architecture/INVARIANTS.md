@@ -153,6 +153,108 @@ No planning, assignment, viability, bottleneck, summary, scheduling, priority, o
 
 ---
 
+## Structural Effectiveness (C5)
+
+These invariants target RimWorld `1.6.4871 rev590`. C5 is an immutable, shadow-only structural fact layer. Existing C1 calculations and consumers remain production truth until C7.
+
+### C5-001: Parser facts and runtime defaults are separate
+
+The save parser and C2 preserve SkillRecord presence as `present`, `absent`, or `unknown`, plus independent `levelFieldPresent` and `passionFieldPresent` facts. They never emit `runtimeDefaulted`.
+
+Only the skill and passion resolvers may derive `runtimeDefaulted`, and only from an absent record plus a proven-complete active SkillDef catalogue. An absent record with partial catalogue evidence remains unknown. A present record with a missing level or passion field uses the audited runtime field default.
+
+**Regression coverage:** `test/capability-evidence.test.js`, `test/structural-skill-passion.test.js` (C5-SP-007 through C5-SP-010)
+
+### C5-002: Canonical skill concepts never collapse into one number
+
+Saved level, runtime aptitude, creation-time gain, app-policy offset, compatibility summary, total disablement, permanent disablement, and runtime level projections remain separate. Imported creation gains are already represented by saved `levelInt` and are never added again. Canonical aptitude consumes only eligible active gene, non-suppressed trait, and supported hediff operations selected by C2.
+
+Passion identity is also separate. SkillFact does not embed PassionFact, and LearningRateFact references `passionSkillDefId` without embedding another passion fact.
+
+**Regression coverage:** `test/c5-pawn-stat-evidence.test.js`, `test/structural-skill-passion.test.js`, `test/structural-learning-resolver.test.js`
+
+### C5-003: Definition snapshots are pawn-independent
+
+`EffectivenessDefinitionSnapshot` contains definition templates, source-operation catalogues, policies, provenance, completeness, dependencies, and patch uncertainty only. It contains no pawn evidence, active-pawn source list, capacity result, or request applicability.
+
+The actual pawn's trait, gene, hediff, precept, role, and life-stage operations are selected from canonical C2 evidence at request time. Resolvers consume typed operations and typed structural context facts. They never branch on race, trait, gene, hediff, xenotype, body, or prosthetic identity to invent semantics.
+
+**Regression coverage:** `test/effectiveness-registry.test.js`, `test/c5-pawn-stat-evidence.test.js`, `test/structural-skill-passion.test.js`, `test/structural-stat-resolver.test.js`
+
+### C5-004: Source-family completeness controls absence
+
+A complete empty source family proves that no relevant operation exists for that family and target StatDef. A partial or unknown empty family opens the frontier at its exact StatWorker phase. Operations for definitions the pawn does not possess never enter the stream as speculative applicability checks.
+
+Exact and compatibility representations may coexist only through C2 source-fact conservation and supersession. Compatibility-only and superseded records never enter canonical calculations, and C5 never identity-deduplicates source records.
+
+**Regression coverage:** `test/capability-evidence.test.js`, `test/c5-pawn-stat-evidence.test.js`, `test/structural-stat-resolver.test.js`
+
+### C5-005: Stat evaluation follows the audited order and first frontier
+
+The ordered StatResolver follows all 28 target-runtime phases. It stops numeric composition at the first relevant unresolved, current, mixed, unsupported, incomplete, inapplicable-unknown, missing-operand, or cyclic operation. `resolvedPrefixValue` is only the value before that frontier. Every later operation remains visible as `notEvaluated` and is never applied.
+
+Dependencies remain at their declared phase. Recursive memoisation is request-local, and a repeated StatDef in the active path creates a dependency-cycle frontier with the full path. There is no long-lived result cache, revision counter, or invalidation API.
+
+**Regression coverage:** `test/structural-stat-resolver.test.js` (C5-ST and C5-CAP cases)
+
+### C5-006: C3 rounded capacity input has an explicit precision limit
+
+C5 applies only the audited capacity-offset and capacity-factor formulas to C3's public structural CapacityFact. `unknown` and `notApplicable` never become numeric zero.
+
+When every capacity operation can be evaluated against C3's rounded value, C5 emits `capacityInputRoundedByC3`, sets `numericClaim` to `exactAgainstRoundedC3CapacityInput`, and keeps the result partial even with no semantic frontier. C5 does not claim an interval or bit-exact runtime parity and does not change C3.
+
+**Regression coverage:** `test/structural-stat-resolver.test.js` (C5-CAP-001 through C5-CAP-009), `test/capacity-resolver.test.js`
+
+### C5-007: Direct and ordinary learning remain distinct
+
+Direct learning is the exact passion factor only. Ordinary non-Animals learning multiplies passion by `GlobalLearningFactor`. Ordinary Animals learning additionally multiplies by `AnimalsLearningFactor`. A relevant stat frontier blocks the ordinary structural factor without erasing a known direct passion factor.
+
+Legacy `learningRate` compatibility factors, current daily saturation, debug fast learning, and the current learning factor never enter canonical structural learning.
+
+**Regression coverage:** `test/structural-learning-resolver.test.js`
+
+### C5-008: Reports preserve every exact SkillDef and facet
+
+`skillFacts`, `passionFacts`, and `learningRateFacts` are duplicate-free arrays ordered by exact SkillDef identity. A wholly skillless job has three empty arrays. Multiple skills remain plural; no primary skill is selected.
+
+`globalWorkSpeed` is independent. Facets are top-level and preserve zero, one, or many StatDefs. Record-only StatDefs are reported but not evaluated. Definition-backed zero-stat facets remain structural, and unsupported C# or custom-job semantics remain explicit unknowns. No facet set is flattened into a job scalar.
+
+**Regression coverage:** `test/structural-effectiveness-resolver.test.js`
+
+### C5-009: Unknown propagates only across relevant dimensions
+
+An unknown passion does not poison SkillFact. An unresolved Mining operation does not poison Cooking. An unsupported job mapping does not poison globally resolved facts. Confirmed facts and relevant unresolved facts coexist, and unrelated evidence is not added to the report.
+
+Completeness and confidence are independent. Completeness describes captured relevant inputs; confidence describes the support for a particular identity or arithmetic claim.
+
+**Regression coverage:** `test/structural-skill-passion.test.js`, `test/structural-stat-resolver.test.js`, `test/structural-learning-resolver.test.js`, `test/structural-effectiveness-resolver.test.js`
+
+### C5-010: Current effectiveness is outside C5
+
+Glow, inspiration, equipment, map, target, building, recipe, quest, animal training, learning saturation, and other live inputs remain current, mixed, unresolved, or `notEvaluated`. The top-level `currentEffectiveness.state` is always `notEvaluated`.
+
+C5 is independent of C4 Permission and Availability. Those results never zero, hide, or suppress a structural skill, passion, learning, stat, or facet fact.
+
+**Regression coverage:** `test/structural-stat-resolver.test.js`, `test/structural-learning-resolver.test.js`, `test/structural-effectiveness-resolver.test.js`
+
+### C5-011: Legacy effectiveness is isolated and shadow-only
+
+`C5LegacyCompatibility` delegates unchanged to `App.effectiveSkill()`, `App._passionValue()`, `App._passionMeta()`, `Engine.calculateWorkSpeedMod()`, and `Engine.calculateRealWorkSpeed()`. Its named differences are diagnostic shadow results. Canonical unknown never becomes legacy zero, and a legacy number never enters canonical arithmetic.
+
+All eleven C1 speed formulas remain compatibility-only. Canonical modules contain no reference to the adapter or legacy calculation surfaces.
+
+**Regression coverage:** `test/capability-corpus.test.js`, `test/c5-compatibility.test.js`
+
+### C5-012: C5 does not migrate consumers or implement intelligence
+
+No renderer, planner, priority, assignment, optimiser, viability, bottleneck, chart, summary, scheduler, or temporal consumer may call C5 during Phase C5. C5 emits no effectiveness score, suitability scalar, ranking proxy, best-pawn helper, or assignment change.
+
+C7 owns parity-proven consumer migration and any durable report cache. C8 owns weighting, ranking, recommendations, and smarter assignment. C5 implements neither.
+
+**Regression coverage:** Task 14 static architecture gates plus the complete C1-C5 suite
+
+---
+
 ## Save Editing
 
 ### SAVE-001: Never mutate the original save file
