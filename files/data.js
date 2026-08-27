@@ -3850,7 +3850,7 @@ function parseEffectivenessProviderFromXML(parts, options) {
   const sourceMap = opts.sourceMap || {};
   const supportedStats = new Set([
     'GlobalLearningFactor', 'AnimalsLearningFactor', 'WorkSpeedGlobal',
-    'MiningSpeed', 'CookSpeed',
+    'MiningSpeed', 'CookSpeed', 'RestFallRateFactor', 'RestRateMultiplier',
   ]);
   const supportedParts = new Set([
     'StatPart_Glow', 'StatPart_Slave', 'StatPart_OverseerStatOffset',

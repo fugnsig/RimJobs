@@ -76,8 +76,8 @@ module.exports = function run() {
   ok(snapshot.schemaVersion === 1 && snapshot.runtimeVersion === '1.6.4871 rev590',
     'ER-001 snapshot is schema and runtime versioned');
   ok(Object.keys(snapshot.statDefinitions.supported).sort().join(',') ===
-    'AnimalsLearningFactor,CookSpeed,GlobalLearningFactor,MiningSpeed,WorkSpeedGlobal',
-  'ER-002 exactly five StatDefs are evaluator-supported');
+    'AnimalsLearningFactor,CookSpeed,GlobalLearningFactor,MiningSpeed,RestFallRateFactor,RestRateMultiplier,WorkSpeedGlobal',
+  'ER-002 exactly seven StatDefs are evaluator-supported');
   ok(snapshot.statDefinitions.recordOnly.DeepDrillingSpeed.evaluatorSupport === 'recordOnly'
     && !snapshot.statDefinitions.supported.DeepDrillingSpeed,
   'ER-003 record-only StatDefs remain separate');

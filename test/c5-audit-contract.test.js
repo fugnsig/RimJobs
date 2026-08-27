@@ -126,8 +126,8 @@ function validate(candidate) {
 
   check(stable(Object.keys(stats)) === stable([
     'GlobalLearningFactor', 'AnimalsLearningFactor', 'WorkSpeedGlobal',
-    'MiningSpeed', 'CookSpeed',
-  ]), 'five-supported-stats');
+    'MiningSpeed', 'CookSpeed', 'RestFallRateFactor', 'RestRateMultiplier',
+  ]), 'seven-supported-stats');
   check(Object.values(stats).every(stat => stat.support === 'initialSubset'),
     'supported-stat-classification');
   check(stats.WorkSpeedGlobal.defaultBaseValue === 1
@@ -167,6 +167,7 @@ function validate(candidate) {
     GlobalLearningFactor: [], AnimalsLearningFactor: [],
     WorkSpeedGlobal: ['WorkSpeedGlobalOffsetMech'],
     MiningSpeed: ['WorkSpeedGlobal'], CookSpeed: ['WorkSpeedGlobal'],
+    RestFallRateFactor: [], RestRateMultiplier: [],
   }), 'dependency-graph');
 
   const jobIds = jobs.map(job => job.jobId);

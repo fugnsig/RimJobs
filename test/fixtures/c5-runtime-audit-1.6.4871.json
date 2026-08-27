@@ -192,6 +192,38 @@
       "postProcessCurve": [{ "x": -20, "y": 0.01 }, { "x": 0, "y": 0.4 }, { "x": 20, "y": 1.6 }],
       "postProcessStatFactors": ["WorkSpeedGlobal"],
       "roundValue": false
+    },
+    "RestFallRateFactor": {
+      "support": "initialSubset",
+      "defaultBaseValue": 1,
+      "minValue": 0.0001,
+      "scenarioRandomizable": false,
+      "skillNeeds": [],
+      "capacityOffsets": [],
+      "capacityFactors": [],
+      "dependencies": [],
+      "statParts": [],
+      "postProcessCurve": [],
+      "postProcessStatFactors": [],
+      "roundValue": false
+    },
+    "RestRateMultiplier": {
+      "support": "initialSubset",
+      "defaultBaseValue": 1.0,
+      "minValue": 0.05,
+      "scenarioRandomizable": true,
+      "skillNeeds": [],
+      "capacityOffsets": [],
+      "capacityFactors": [
+        { "capacityDefId": "BloodPumping", "weight": 0.3, "max": null, "allowedDefect": 0, "useReciprocal": false },
+        { "capacityDefId": "Metabolism", "weight": 0.3, "max": null, "allowedDefect": 0, "useReciprocal": false },
+        { "capacityDefId": "Breathing", "weight": 0.3, "max": null, "allowedDefect": 0, "useReciprocal": false }
+      ],
+      "dependencies": [],
+      "statParts": [],
+      "postProcessCurve": [],
+      "postProcessStatFactors": [],
+      "roundValue": false
     }
   },
   "recordOnlyStatDefs": [
@@ -206,7 +238,9 @@
     "AnimalsLearningFactor": [],
     "WorkSpeedGlobal": ["WorkSpeedGlobalOffsetMech"],
     "MiningSpeed": ["WorkSpeedGlobal"],
-    "CookSpeed": ["WorkSpeedGlobal"]
+    "CookSpeed": ["WorkSpeedGlobal"],
+    "RestFallRateFactor": [],
+    "RestRateMultiplier": []
   },
   "jobPolicies": [
     { "jobId": "firefight", "sourceWorkTypeDefIds": ["Firefighter"], "skillDefIds": [], "facets": [{ "facetId": "fire-beating", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
