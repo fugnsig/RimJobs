@@ -220,6 +220,83 @@ module.exports = function run() {
       'C5-ST-018 unknown humanlike property opens the Age frontier');
   }
 
+  // C5-CAP-001..008: Option A evaluates audited formulas against rounded C3 facts.
+  {
+    const capacityContext = (operations, facts) => makeContext({ Test: definition('Test', [
+      op('base', 'base', 'setBase', { value: 10 }), ...operations,
+    ]) }, { structuralCapacities: { capacities: facts } });
+    const offset = op('sight-offset', 'capacityOffset', 'capacityOffset',
+      { scale: 4, max: 1.5 }, { capacityDefId: 'Sight' });
+    const offsetResult = Resolver.resolve(capacityContext([offset], {
+      sight: { capacity: 'Sight', structural: { state: 'resolved', value: 0.8,
+        evidence: [{ evidenceId: 'sight' }] } },
+    }), 'Test');
+    ok(Math.abs(offsetResult.resolvedPrefixValue - 9.2) < 1e-9,
+      'C5-CAP-001 capacity offset uses (min(value,max)-1)*scale');
+    const capped = Resolver.resolve(capacityContext([offset], {
+      sight: { capacity: 'Sight', structural: { state: 'resolved', value: 2, evidence: [] } },
+    }), 'Test');
+    ok(capped.resolvedPrefixValue === 12,
+      'C5-CAP-002 capacity offset honours max');
+
+    const factorOne = op('manip-factor', 'capacityFactor', 'capacityFactor',
+      { weight: 1, max: null, allowedDefect: 0, useReciprocal: false },
+      { capacityDefId: 'Manipulation' });
+    const factorHalf = op('sight-factor', 'capacityFactor', 'capacityFactor',
+      { weight: 0.5, max: 1, allowedDefect: 0, useReciprocal: false },
+      { capacityDefId: 'Sight', sourceOrder: 1 });
+    const factors = Resolver.resolve(capacityContext([factorOne, factorHalf], {
+      manipulation: { capacity: 'Manipulation', structural: { state: 'resolved', value: 0.8, evidence: [] } },
+      sight: { capacity: 'Sight', structural: { state: 'resolved', value: 0.5, evidence: [] } },
+    }), 'Test');
+    ok(Math.abs(factors.resolvedPrefixValue - 6) < 1e-9,
+      'C5-CAP-003 weighted capacity factors apply sequentially');
+    ok(factors.precision.length === 2 && factors.frontierIndex === null
+      && factors.state === 'partial' && factors.completeness === 'partial'
+      && factors.numericClaim === 'exactAgainstRoundedC3CapacityInput',
+    'C5-CAP-004 complete rounded evaluation is partial without semantic frontier');
+    ok(factors.precision.every(notice => notice.kind === 'capacityInputRoundedByC3'
+      && notice.roundingIncrement === 0.01
+      && notice.claim === 'exactAgainstRoundedC3InputNotBitExactRuntime'),
+    'C5-CAP-005 precision notices disclose the exact Option A boundary');
+
+    const defect = op('defect', 'capacityFactor', 'capacityFactor',
+      { weight: 1, max: 1, allowedDefect: 0.25, useReciprocal: false },
+      { capacityDefId: 'Manipulation' });
+    const defectResult = Resolver.resolve(capacityContext([defect], {
+      manipulation: { capacity: 'Manipulation', structural: { state: 'resolved', value: 0.5, evidence: [] } },
+    }), 'Test');
+    ok(Math.abs(defectResult.resolvedPrefixValue - (10 * (2 / 3))) < 1e-9,
+      'C5-CAP-006 allowedDefect uses audited inverse lerp');
+    const reciprocal = op('reciprocal', 'capacityFactor', 'capacityFactor',
+      { weight: 1, max: null, allowedDefect: 0, useReciprocal: true },
+      { capacityDefId: 'Manipulation' });
+    const reciprocalResult = Resolver.resolve(capacityContext([reciprocal], {
+      manipulation: { capacity: 'Manipulation', structural: { state: 'resolved', value: 0.5, evidence: [] } },
+    }), 'Test');
+    ok(reciprocalResult.resolvedPrefixValue === 20,
+      'C5-CAP-007 reciprocal capacity factor follows audited cap logic');
+
+    for (const [state, reason] of [['unknown', 'capacityInputUnknown'],
+      ['notApplicable', 'capacityNotApplicable']]) {
+      const input = { state, value: null, evidence: [] };
+      const result = Resolver.resolve(capacityContext([factorOne], {
+        manipulation: { capacity: 'Manipulation', structural: input },
+      }), 'Test');
+      ok(result.frontier && result.frontier.reasonCode === reason
+        && result.resolvedPrefixValue === 10,
+      'C5-CAP-008 ' + state + ' capacity opens frontier and never becomes zero');
+    }
+    const preserved = { capacities: { manipulation: { capacity: 'Manipulation',
+      structural: { state: 'resolved', value: 0.8, evidence: [] } } } };
+    const before = JSON.stringify(preserved);
+    Resolver.resolve(makeContext({ Test: definition('Test', [
+      op('base', 'base', 'setBase', { value: 10 }), factorOne,
+    ]) }, { structuralCapacities: preserved }), 'Test');
+    ok(JSON.stringify(preserved) === before,
+      'C5-CAP-009 C3 input is not mutated');
+  }
+
   const source = fs.readFileSync(path.join(__dirname, '..', 'files',
     'structural-stat-resolver.js'), 'utf8');
   ok(!/knownStructuralValue|partialValue|continueAfter|module.*cache|revision|invalidate/.test(source),

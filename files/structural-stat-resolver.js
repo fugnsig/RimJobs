@@ -131,6 +131,29 @@ const StructuralStatResolver = (() => {
     return null;
   }
 
+  function structuralCapacityFact(context, capacityDefId) {
+    const table = context.structuralCapacities && context.structuralCapacities.capacities || {};
+    for (const entry of Object.values(table)) {
+      if (entry && entry.capacity === capacityDefId) return entry.structural || null;
+    }
+    const direct = table[capacityDefId];
+    return direct && (direct.structural || direct) || null;
+  }
+
+  function capacityNotice(capacityDefId, fact) {
+    return {
+      kind: 'capacityInputRoundedByC3', capacityDefId, roundedValue: fact.value,
+      roundingIncrement: 0.01,
+      claim: 'exactAgainstRoundedC3InputNotBitExactRuntime',
+      evidence: clone(fact.evidence || []),
+    };
+  }
+
+  function inverseLerp(min, max, value) {
+    if (max === min) return value < min ? 0 : 1;
+    return Math.max(0, Math.min(1, (value - min) / (max - min)));
+  }
+
   function applicabilityFor(operation, context) {
     if (operation.applicability === 'inapplicable') return { state: 'inapplicable' };
     const facts = context.pawnEvidence && context.pawnEvidence.structuralContextFacts || {};
@@ -175,14 +198,14 @@ const StructuralStatResolver = (() => {
   }
 
   function evaluation(operation, state, inputValue, operandValue, outputValue,
-    dependency, reasonCode) {
+    dependency, reasonCode, precision) {
     return {
       operation, state,
       inputValue: Number.isFinite(inputValue) ? inputValue : null,
       operandValue: Number.isFinite(operandValue) ? operandValue : null,
       outputValue: Number.isFinite(outputValue) ? outputValue : null,
       dependency: dependency || null,
-      precision: [], reasonCode: reasonCode || null,
+      precision: clone(precision || []), reasonCode: reasonCode || null,
     };
   }
 
@@ -230,6 +253,7 @@ const StructuralStatResolver = (() => {
     const applied = [];
     const unresolved = [];
     const gatheredEvidence = [];
+    const precision = [];
     let value = null;
     let frontier = null;
     let frontierIndex = null;
@@ -247,6 +271,7 @@ const StructuralStatResolver = (() => {
       let operandValue = operation.operand && operation.operand.value;
       let outputValue = null;
       let dependency = null;
+      let operationPrecision = [];
 
       if (!reasonCode && operation.kind === 'sourceFamilyFrontier') {
         reasonCode = 'sourceFamilyIncomplete';
@@ -290,6 +315,7 @@ const StructuralStatResolver = (() => {
         else {
           operandValue = dependency.resolvedPrefixValue;
           outputValue = value * operandValue;
+          operationPrecision = clone(dependency.precision || []);
         }
       } else if (!reasonCode && operation.kind === 'transform') {
         if (!Number.isFinite(value)) reasonCode = 'missingInputValue';
@@ -323,7 +349,38 @@ const StructuralStatResolver = (() => {
         }
       } else if (!reasonCode && (operation.kind === 'capacityOffset'
         || operation.kind === 'capacityFactor')) {
-        reasonCode = 'capacityEvaluationDeferred';
+        const fact = structuralCapacityFact(context, operation.capacityDefId);
+        if (!fact || fact.state === 'unknown') reasonCode = 'capacityInputUnknown';
+        else if (fact.state === 'notApplicable') reasonCode = 'capacityNotApplicable';
+        else if (fact.state !== 'resolved' || !Number.isFinite(fact.value)) {
+          reasonCode = 'capacityInputUnknown';
+        } else if (!Number.isFinite(value)) reasonCode = 'missingInputValue';
+        else {
+          const capacityValue = fact.value;
+          const operand = operation.operand || {};
+          operationPrecision = [capacityNotice(operation.capacityDefId, fact)];
+          operandValue = capacityValue;
+          if (operation.kind === 'capacityOffset') {
+            if (!Number.isFinite(operand.scale)) reasonCode = 'missingOperand';
+            else {
+              const maximum = Number.isFinite(operand.max) ? operand.max : Infinity;
+              outputValue = value + (Math.min(capacityValue, maximum) - 1) * operand.scale;
+            }
+          } else if (!Number.isFinite(operand.weight)) reasonCode = 'missingOperand';
+          else {
+            let factor = capacityValue;
+            const allowedDefect = Number.isFinite(operand.allowedDefect)
+              ? operand.allowedDefect : 0;
+            if (allowedDefect !== 0 && factor < 1) {
+              factor = inverseLerp(0, 1 - allowedDefect, factor);
+            }
+            if (Number.isFinite(operand.max)) factor = Math.min(factor, operand.max);
+            if (operand.useReciprocal === true) {
+              factor = Math.abs(factor) < 0.001 ? 5 : Math.min(1 / factor, 5);
+            }
+            outputValue = value + (value * factor - value) * operand.weight;
+          }
+        }
       } else if (!reasonCode) {
         reasonCode = 'unsupportedOperationKind';
       }
@@ -331,7 +388,7 @@ const StructuralStatResolver = (() => {
       if (reasonCode) {
         frontierIndex = index;
         frontier = evaluation(operation, 'frontier', inputValue, operandValue, null,
-          dependency, reasonCode);
+          dependency, reasonCode, operationPrecision);
         unresolved.push({ reasonCode, message: reasonCode, affectedDimension: 'stat',
           targetDefId: statDefId, candidateTargetDefIds: operation.dependencyStatDefId
             ? [operation.dependencyStatDefId] : [], operationId: operation.operationId,
@@ -339,27 +396,34 @@ const StructuralStatResolver = (() => {
         break;
       }
       value = outputValue;
+      for (const notice of operationPrecision) {
+        if (!precision.some(item => item.capacityDefId === notice.capacityDefId
+          && item.roundedValue === notice.roundedValue)) precision.push(notice);
+      }
       gatheredEvidence.push(...(operation.evidence || []));
       applied.push(evaluation(operation, 'applied', inputValue, operandValue,
-        outputValue, dependency, null));
+        outputValue, dependency, null, operationPrecision));
     }
 
     const notEvaluated = frontierIndex == null ? [] : stream.slice(frontierIndex + 1)
       .map(operation => evaluation(operation, 'notEvaluated', null, null, null, null,
         'afterFrontier'));
     const hasValue = Number.isFinite(value);
-    const state = frontier ? (hasValue ? 'partial' : 'unknown') : (hasValue ? 'resolved' : 'unknown');
+    const state = frontier ? (hasValue ? 'partial' : 'unknown')
+      : (hasValue ? (precision.length ? 'partial' : 'resolved') : 'unknown');
     const result = freeze({
       schemaVersion: 1, runtimeVersion: snapshot.runtimeVersion || null, statDefId,
       state, completeness: state === 'resolved' ? 'complete'
         : state === 'partial' ? 'partial' : 'unknown',
-      confidence: state === 'resolved' ? 'verified' : 'unknown',
+      confidence: !frontier && hasValue ? 'verified' : 'unknown',
       resolvedPrefixValue: hasValue ? value : null,
       frontierIndex,
       evaluatedOperationCount: applied.length + (frontier ? 1 : 0),
-      numericClaim: state === 'resolved' ? 'exactRuntimeDurableValue'
+      numericClaim: !frontier && precision.length
+        ? 'exactAgainstRoundedC3CapacityInput'
+        : state === 'resolved' ? 'exactRuntimeDurableValue'
         : hasValue ? 'contiguousPrefixOnly' : 'noNumericClaim',
-      applied, frontier, notEvaluated, precision: [], dependencyPath,
+      applied, frontier, notEvaluated, precision, dependencyPath,
       evidence: clone(gatheredEvidence), unresolved,
     });
     memo.set(statDefId, result);
