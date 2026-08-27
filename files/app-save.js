@@ -104,6 +104,60 @@ Object.assign(App, {
     };
   },
 
+  // Preserve exact runtime source observations without inventing resolver
+  // semantics. In particular, a non-null gene override proves inactivity, but
+  // a null override does not prove Gene.Active for every possible gene class.
+  _parseTraitRuntimeFacts(allTraitsXml) {
+    const tag = (block, name) => {
+      const match = String(block || '').match(new RegExp('<' + name + '>([\\s\\S]*?)<\\/' + name + '>', 'i'));
+      return match ? match[1].trim() : null;
+    };
+    return this._topLevelLis(String(allTraitsXml || '')).map((item, sourceOrder) => {
+      const traitDefId = tag(item, 'def');
+      if (!traitDefId) return null;
+      const degreeRaw = tag(item, 'degree');
+      const degreeParsed = degreeRaw == null ? 0 : Number.parseInt(degreeRaw, 10);
+      const suppressedRaw = tag(item, 'suppressedBy');
+      const suppression = suppressedRaw == null
+        ? { state: 'unknown', value: null }
+        : { state: 'known', value: !/^null$/i.test(suppressedRaw) };
+      return {
+        traitDefId,
+        degree: Number.isInteger(degreeParsed) ? degreeParsed : 0,
+        degreeState: degreeRaw == null || Number.isInteger(degreeParsed) ? 'known' : 'unknown',
+        suppression,
+        suppressedBy: suppression.state === 'known' && suppression.value ? suppressedRaw : null,
+        sourceOrder,
+        provenance: { sourceKind: 'saveTrait', sourceField: 'story/traits/allTraits' },
+      };
+    }).filter(Boolean);
+  },
+
+  _parseGeneRuntimeFacts(geneListXml) {
+    const tag = (block, name) => {
+      const match = String(block || '').match(new RegExp('<' + name + '>([\\s\\S]*?)<\\/' + name + '>', 'i'));
+      return match ? match[1].trim() : null;
+    };
+    return this._topLevelLis(String(geneListXml || '')).map((item, sourceOrder) => {
+      const geneDefId = tag(item, 'def');
+      if (!geneDefId) return null;
+      const overriddenRaw = tag(item, 'overriddenByGene');
+      const overrideKnown = overriddenRaw != null;
+      const overriddenByGeneId = overrideKnown && !/^null$/i.test(overriddenRaw)
+        ? overriddenRaw : null;
+      return {
+        geneDefId,
+        overrideState: overrideKnown ? 'known' : 'unknown',
+        overriddenByGeneId,
+        active: overriddenByGeneId
+          ? { state: 'known', value: false }
+          : { state: 'unknown', value: null },
+        sourceOrder,
+        provenance: { sourceKind: 'saveGene', sourceField: 'genes/endogenes|xenogenes' },
+      };
+    }).filter(Boolean);
+  },
+
   _showRefreshBtn() {
     const btn = document.getElementById('refreshSaveBtn');
     if (btn) btn.style.display = this._lastSaveFilePath ? '' : 'none';
@@ -712,10 +766,24 @@ Object.assign(App, {
     };
     // Active modlist from <meta> (packageIds + display names), so we can warn when
     // assigned content belongs to a mod that is not active in THIS save. Lowercased ids.
-    const _modIdsBlock = (xmlString.match(/<modIds>([\s\S]*?)<\/modIds>/) || [])[1] || '';
+    const _modIdsMatch = xmlString.match(/<modIds>([\s\S]*?)<\/modIds>/);
+    const _modIdsBlock = _modIdsMatch ? _modIdsMatch[1] : '';
     meta.modIds = [...(_modIdsBlock.matchAll(/<li>([^<]*)<\/li>/g))].map(m => m[1].trim().toLowerCase()).filter(Boolean);
     const _modNamesBlock = (xmlString.match(/<modNames>([\s\S]*?)<\/modNames>/) || [])[1] || '';
     meta.modNames = [...(_modNamesBlock.matchAll(/<li>([^<]*)<\/li>/g))].map(m => m[1].trim()).filter(Boolean);
+    const _activePackage = packageId => meta.modIds.indexOf(packageId.toLowerCase()) >= 0;
+    const _dlcFact = (state, value, sourceField) => ({
+      state, value: state === 'known' ? value === true : null,
+      evidence: [{ sourceKind: 'saveMeta', sourceField }],
+    });
+    meta.dlc.anomaly = _activePackage('ludeon.rimworld.anomaly');
+    const _hasGenesTracker = /<genes>/.test(xmlString);
+    meta.dlcActiveFacts = {
+      Biotech: _dlcFact(_hasGenesTracker || _modIdsMatch ? 'known' : 'unknown',
+        _hasGenesTracker || _activePackage('ludeon.rimworld.biotech'),
+        'meta/modIds|genes'),
+      Anomaly: _dlcFact(_modIdsMatch ? 'known' : 'unknown', meta.dlc.anomaly, 'meta/modIds'),
+    };
 
     const ticks = parseInt(_tag(xmlString, 'ticksGame')) || 0;
     meta.ticks = ticks;
@@ -1118,6 +1186,7 @@ Object.assign(App, {
           traits.push({ def: tDef, degree });
         }
       }
+      const traitRuntimeFacts = this._parseTraitRuntimeFacts(traitsData);
 
       // Parse gender - try shortBlock first (regular pawns have <gender> near header),
       // fall back to <bodyType>Male/Female</bodyType> for modded races (CreepJoiners etc.)
@@ -1234,10 +1303,14 @@ Object.assign(App, {
 
       // Parse genes (endogenes + xenogenes) -these define the xenotype's actual effects
       const geneDefIds = [];
+      const geneRuntimeFacts = [];
       const geneBlocks = [...block.matchAll(/<(?:endogenes|xenogenes)>([\s\S]*?)<\/(?:endogenes|xenogenes)>/g)];
       for (const gBlock of geneBlocks) {
-        const geneDefs = gBlock[1].matchAll(/<def>([\w]+)<\/def>/g);
-        for (const gm of geneDefs) geneDefIds.push(gm[1]);
+        const parsedFacts = this._parseGeneRuntimeFacts(gBlock[1]);
+        for (const fact of parsedFacts) {
+          geneDefIds.push(fact.geneDefId);
+          geneRuntimeFacts.push(Object.assign({}, fact, { sourceOrder: geneRuntimeFacts.length }));
+        }
       }
 
       // Parse colonist bar display order (playerSettings.displayOrder)
@@ -1420,6 +1493,7 @@ Object.assign(App, {
         rawSkillRecords: rawSkillData.records,
         skillRecordCatalogue: rawSkillData.catalogue,
         traits,
+        traitRuntimeFacts,
         incapable,
         permissionSources: [rawPermissionSource],
         currentStatusSources: this._parseCurrentStatusSources(shortBlock),
@@ -1433,6 +1507,8 @@ Object.assign(App, {
         wornApparel,
         records,
         geneDefIds,
+        geneRuntimeFacts,
+        dlcActiveFacts: JSON.parse(JSON.stringify(meta.dlcActiveFacts)),
         hediffs,
         bodyDef: pawnBodyDef,
         rawHediffs,
@@ -1974,6 +2050,12 @@ Object.assign(App, {
 
       // Store gene def IDs for romance/orientation estimation
       if (p.geneDefIds && p.geneDefIds.length) pawn.geneDefIds = p.geneDefIds;
+      pawn.geneRuntimeFacts = Array.isArray(p.geneRuntimeFacts)
+        ? JSON.parse(JSON.stringify(p.geneRuntimeFacts)) : [];
+      pawn.traitRuntimeFacts = Array.isArray(p.traitRuntimeFacts)
+        ? JSON.parse(JSON.stringify(p.traitRuntimeFacts)) : [];
+      pawn.dlcActiveFacts = p.dlcActiveFacts
+        ? JSON.parse(JSON.stringify(p.dlcActiveFacts)) : {};
 
       // Store nickname/first/last for display
       if (p.nickname) pawn.nickname = p.nickname;
@@ -2157,6 +2239,9 @@ Object.assign(App, {
           }
           return tId;
         });
+      }
+      for (let traitIndex = 0; traitIndex < pawn.traitRuntimeFacts.length; traitIndex++) {
+        pawn.traitRuntimeFacts[traitIndex].appTraitId = pawn.traits[traitIndex] || null;
       }
 
       // Map incapable work tags
@@ -2653,6 +2738,15 @@ Object.assign(App, {
         // Refresh loadID and geneDefIds from save
         if (incoming.loadID) match.loadID = incoming.loadID;
         if (incoming.geneDefIds) match.geneDefIds = incoming.geneDefIds;
+        if (incoming.geneRuntimeFacts) {
+          match.geneRuntimeFacts = JSON.parse(JSON.stringify(incoming.geneRuntimeFacts));
+        }
+        if (incoming.traitRuntimeFacts) {
+          match.traitRuntimeFacts = JSON.parse(JSON.stringify(incoming.traitRuntimeFacts));
+        }
+        if (incoming.dlcActiveFacts) {
+          match.dlcActiveFacts = JSON.parse(JSON.stringify(incoming.dlcActiveFacts));
+        }
         match.raceDefName = incoming.raceDefName || null;
         // Refresh incapable from save
         if (incoming.incapable) match.incapable = incoming.incapable;
@@ -2960,6 +3054,10 @@ Object.assign(App, {
     p.relations = Array.isArray(p.relations) ? p.relations : [];
     p.loadID = typeof p.loadID === 'string' ? p.loadID : '';
     p.geneDefIds = Array.isArray(p.geneDefIds) ? p.geneDefIds : [];
+    p.geneRuntimeFacts = Array.isArray(p.geneRuntimeFacts) ? p.geneRuntimeFacts : [];
+    p.traitRuntimeFacts = Array.isArray(p.traitRuntimeFacts) ? p.traitRuntimeFacts : [];
+    p.dlcActiveFacts = p.dlcActiveFacts && typeof p.dlcActiveFacts === 'object'
+      ? p.dlcActiveFacts : {};
     p.schedule = Array.isArray(p.schedule) && p.schedule.length === 24 ? p.schedule : Array(24).fill(0);
     // Clamp schedule values to valid range (0=sleep, 1=work, 2=joy, 3=anything)
     p.schedule = p.schedule.map(v => { const n = parseInt(v); return (Number.isFinite(n) && n >= 0 && n <= 3) ? n : 0; });
