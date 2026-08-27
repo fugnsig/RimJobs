@@ -1500,6 +1500,16 @@ const CapabilityEvidence = {
         }
       }
 
+      // Generic need-suppression from definition data
+      if (Array.isArray(def.disablesNeeds)) {
+        for (let n = 0; n < def.disablesNeeds.length; n++) {
+          const needId = def.disablesNeeds[n];
+          const eid = 'trait:' + traitId + ':needSuppression:' + needId;
+          effects.push(_makeEvidence(eid, 'needSuppression', needId, true,
+            provenance, confidence));
+        }
+      }
+
       // Temporal mappings (scheduler-relevant evidence)
       if (_TEMPORAL_TRAITS[traitId]) {
         const temporal = _TEMPORAL_TRAITS[traitId](traitId, provenance, confidence);
@@ -1610,6 +1620,16 @@ const CapabilityEvidence = {
             confidence,
             opts: baseOpts,
           });
+        }
+      }
+
+      // Generic need-suppression from definition data
+      if (Array.isArray(def.disablesNeeds)) {
+        for (let n = 0; n < def.disablesNeeds.length; n++) {
+          const needId = def.disablesNeeds[n];
+          const eid = 'gene:' + gId + ':needSuppression:' + needId;
+          effects.push(_makeEvidence(eid, 'needSuppression', needId, true,
+            provenance, confidence, baseOpts));
         }
       }
 
