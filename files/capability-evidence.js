@@ -2125,8 +2125,43 @@ const CapabilityEvidence = {
         'requiredActivity', null, 2,
         { sourceKind: 'hediff', sourceId: psyDef },
         'derived',
-        { fields: { activity: 'meditation', hours: 2 } }
+        { fields: {
+          activity: 'meditation', hours: 2,
+          obligation: 'required',
+          satisfiesNeeds: ['recreation'],
+          composition: { resolved: true, rule: 'singleSource' },
+        } }
       ));
+    }
+
+    // Generic requiredActivities from hediff catalog entries.
+    // Modded or extended hediffs may declare activities without audited composition.
+    for (const hi of pawn.health) {
+      if (!hi || !hi.def || !catMap[hi.def]) continue;
+      const entry = catMap[hi.def];
+      if (!Array.isArray(entry.requiredActivities) || !entry.requiredActivities.length) continue;
+      // seenDefs already tracks this def from the main loop above; reuse for dedup.
+      if (seenDefs.has('activity:' + hi.def)) continue;
+      seenDefs.add('activity:' + hi.def);
+
+      const modId = defSources[hi.def] || null;
+      for (const act of entry.requiredActivities) {
+        if (!act || !act.activity) continue;
+        effects.push(_makeEvidence(
+          'hediff:' + hi.def + ':requiredActivity:' + act.activity,
+          'requiredActivity', null,
+          act.hours == null ? null : act.hours,
+          { sourceKind: 'hediffDef', sourceId: hi.def, modId: modId },
+          'inferred',
+          { fields: {
+            activity: act.activity,
+            hours: act.hours == null ? null : act.hours,
+            obligation: act.obligation || 'unknown',
+            satisfiesNeeds: Array.isArray(act.satisfiesNeeds) ? act.satisfiesNeeds : [],
+            composition: { resolved: false },
+          } }
+        ));
+      }
     }
 
     return { effects, unresolved };
