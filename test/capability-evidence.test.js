@@ -2504,5 +2504,199 @@ module.exports = function run() {
     'CE-C5RAW-007 one passion fact per exact record and no early runtime default');
   }
 
+  // ======================================================================
+  // C5 EXACT RUNTIME APTITUDE OPERATIONS
+  // ======================================================================
+
+  {
+    App.state.customGenes.c5_exact_mining = {
+      id: 'c5_exact_mining', defName: 'AptitudeStrong_Mining',
+      definitionKind: 'GeneDef', generatedFromTemplate: 'AptitudeStrong',
+      dlc: 'Biotech', aptitudeCompleteness: 'complete',
+      aptitudes: [{ skillDefId: 'Mining', offset: 4, sourceOrder: 0 }],
+    };
+    App.state.customGenes.c5_exact_mining_2 = {
+      id: 'c5_exact_mining_2', defName: 'C5_AptitudeMiningTwo',
+      definitionKind: 'GeneDef', dlc: 'Biotech', aptitudeCompleteness: 'complete',
+      aptitudes: [{ skillDefId: 'Mining', offset: 2, sourceOrder: 0 }],
+    };
+    App.state.customGenes.c5_template_only = {
+      id: 'c5_template_only', defName: 'C5_AptitudeTemplate',
+      definitionKind: 'GeneTemplateDef', aptitudeOffset: 3,
+      aptitudeCompleteness: 'partial',
+    };
+    const basePawn = {
+      geneDefIds: ['c5_exact_mining', 'c5_exact_mining_2', 'c5_template_only'],
+      geneRuntimeFacts: [
+        { geneDefId: 'c5_exact_mining', sourceOrder: 0,
+          active: { state: 'known', value: true }, overriddenByGeneId: null },
+        { geneDefId: 'c5_exact_mining_2', sourceOrder: 1,
+          active: { state: 'known', value: true }, overriddenByGeneId: null },
+        { geneDefId: 'c5_template_only', sourceOrder: 2,
+          active: { state: 'known', value: true }, overriddenByGeneId: null },
+      ],
+      dlcActiveFacts: {
+        Biotech: { state: 'known', value: true },
+        Anomaly: { state: 'known', value: false },
+      },
+    };
+    const active = CE.collectPawnEvidence(mk('c5apt1', basePawn));
+    const mining = active.skillOperations.filter(item =>
+      item.kind === 'runtimeAptitudeOffset' && item.skillDefId === 'Mining');
+    ok(mining.length === 2 && mining.every(item => item.canonicalEligible)
+      && mining.reduce((sum, item) => sum + item.value, 0) === 6,
+    'CE-C5APT-001 active generated GeneDefs stack as exact Mining aptitude');
+    ok(active.skillOperations.some(item => item.sourceDefId === 'c5_template_only'
+      && item.kind === 'unknownSkillOperation' && !item.canonicalEligible),
+    'CE-C5APT-002 GeneTemplate inference remains an unknown operation');
+
+    const inactive = CE.collectPawnEvidence(mk('c5apt2', {
+      ...basePawn,
+      geneRuntimeFacts: [{ geneDefId: 'c5_exact_mining', sourceOrder: 0,
+        active: { state: 'known', value: false }, overriddenByGeneId: 'Gene_9' }],
+      geneDefIds: ['c5_exact_mining'],
+    }));
+    const inactiveOp = inactive.skillOperations.find(item =>
+      item.sourceDefId === 'c5_exact_mining' && item.skillDefId === 'Mining');
+    ok(inactiveOp && inactiveOp.applicability === 'inapplicable'
+      && inactiveOp.canonicalEligible === false,
+    'CE-C5APT-003 inactive overridden gene is retained but never consumed');
+
+    const noDlc = CE.collectPawnEvidence(mk('c5apt3', {
+      ...basePawn, geneDefIds: ['c5_exact_mining'],
+      geneRuntimeFacts: basePawn.geneRuntimeFacts.slice(0, 1),
+      dlcActiveFacts: { Biotech: { state: 'known', value: false } },
+    }));
+    const noDlcOp = noDlc.skillOperations.find(item =>
+      item.sourceDefId === 'c5_exact_mining' && item.skillDefId === 'Mining');
+    ok(noDlcOp && noDlcOp.applicability === 'inapplicable'
+      && noDlcOp.canonicalEligible === false,
+    'CE-C5APT-004 inactive Biotech branch excludes otherwise active gene');
+
+    const unknownDlc = CE.collectPawnEvidence(mk('c5apt3b', {
+      ...basePawn, geneDefIds: ['c5_exact_mining'],
+      geneRuntimeFacts: basePawn.geneRuntimeFacts.slice(0, 1),
+      dlcActiveFacts: {},
+    }));
+    const unknownDlcOp = unknownDlc.skillOperations.find(item =>
+      item.sourceDefId === 'c5_exact_mining' && item.skillDefId === 'Mining');
+    ok(unknownDlcOp && unknownDlcOp.applicability === 'unknown'
+      && unknownDlcOp.canonicalEligible === false,
+    'CE-C5APT-004B unknown Biotech branch remains unresolved');
+
+    const unknownActive = CE.collectPawnEvidence(mk('c5apt4', {
+      ...basePawn, geneDefIds: ['c5_exact_mining'],
+      geneRuntimeFacts: [{ geneDefId: 'c5_exact_mining', sourceOrder: 0,
+        active: { state: 'unknown', value: null }, overriddenByGeneId: null }],
+    }));
+    const unknownActiveOp = unknownActive.skillOperations.find(item =>
+      item.sourceDefId === 'c5_exact_mining' && item.skillDefId === 'Mining');
+    ok(unknownActiveOp && unknownActiveOp.applicability === 'unknown'
+      && unknownActiveOp.completeness === 'partial' && !unknownActiveOp.canonicalEligible,
+    'CE-C5APT-005 missing Gene Active proof remains scoped unknown');
+
+    delete App.state.customGenes.c5_exact_mining;
+    delete App.state.customGenes.c5_exact_mining_2;
+    delete App.state.customGenes.c5_template_only;
+  }
+
+  {
+    App.state.customTraits.c5_anomaly_trait = {
+      id: 'c5_anomaly_trait', defName: 'C5_AnomalyTrait', dlc: 'Anomaly',
+      traitDegreeCompleteness: 'complete',
+      traitDegrees: [{ degree: 1, aptitudeCompleteness: 'complete',
+        aptitudes: [{ skillDefId: 'Animals', offset: 3, sourceOrder: 0 }] }],
+    };
+    const exact = CE.collectPawnEvidence(mk('c5apt6', {
+      traits: ['c5_anomaly_trait'],
+      traitRuntimeFacts: [{ traitDefId: 'C5_AnomalyTrait', appTraitId: 'c5_anomaly_trait',
+        degree: 1, sourceOrder: 0, suppression: { state: 'known', value: false } }],
+      dlcActiveFacts: { Anomaly: { state: 'known', value: true } },
+    }));
+    const exactOp = exact.skillOperations.find(item =>
+      item.sourceDefId === 'C5_AnomalyTrait' && item.skillDefId === 'Animals');
+    ok(exactOp && exactOp.value === 3 && exactOp.canonicalEligible,
+    'CE-C5APT-006 exact non-suppressed trait degree aptitude is canonical');
+
+    const suppressed = CE.collectPawnEvidence(mk('c5apt7', {
+      traits: ['c5_anomaly_trait'],
+      traitRuntimeFacts: [{ traitDefId: 'C5_AnomalyTrait', appTraitId: 'c5_anomaly_trait',
+        degree: 1, sourceOrder: 0, suppression: { state: 'known', value: true } }],
+      dlcActiveFacts: { Anomaly: { state: 'known', value: true } },
+    }));
+    const suppressedOp = suppressed.skillOperations.find(item =>
+      item.sourceDefId === 'C5_AnomalyTrait' && item.skillDefId === 'Animals');
+    ok(suppressedOp && suppressedOp.applicability === 'inapplicable'
+      && !suppressedOp.canonicalEligible,
+    'CE-C5APT-007 suppressed trait aptitude is retained but excluded');
+
+    const missingSuppression = CE.collectPawnEvidence(mk('c5apt8', {
+      traits: ['c5_anomaly_trait'],
+      traitRuntimeFacts: [{ traitDefId: 'C5_AnomalyTrait', appTraitId: 'c5_anomaly_trait',
+        degree: 1, sourceOrder: 0, suppression: { state: 'unknown', value: null } }],
+      dlcActiveFacts: { Anomaly: { state: 'known', value: true } },
+    }));
+    const partial = missingSuppression.skillOperations.find(item =>
+      item.sourceDefId === 'C5_AnomalyTrait' && item.skillDefId === 'Animals');
+    ok(partial && partial.applicability === 'unknown' && partial.completeness === 'partial',
+    'CE-C5APT-008 missing trait suppression remains scoped unknown');
+    delete App.state.customTraits.c5_anomaly_trait;
+  }
+
+  {
+    App.state.hediffCatalog = [{
+      def: 'Inhumanized', dlc: 'Anomaly', aptitudeCompleteness: 'complete',
+      aptitudes: [
+        { skillDefId: 'Animals', offset: -12, sourceOrder: 0 },
+        { skillDefId: 'Social', offset: -12, sourceOrder: 1 },
+        { skillDefId: 'Artistic', offset: -12, sourceOrder: 2 },
+      ],
+    }, {
+      def: 'C5_UnresolvedHediff', dlc: 'Anomaly', aptitudeCompleteness: 'partial',
+      aptitudes: [{ skillDefId: 'Mining', offset: null, sourceOrder: 0 }],
+    }];
+    const result = CE.collectPawnEvidence(mk('c5apt9', {
+      health: [
+        { def: 'Inhumanized', severity: 0.01, type: 'condition' },
+        { def: 'C5_UnresolvedHediff', severity: 0.9, type: 'condition' },
+      ],
+      dlcActiveFacts: { Anomaly: { state: 'known', value: true } },
+    }));
+    const inhumanized = result.skillOperations.filter(item =>
+      item.sourceDefId === 'Inhumanized' && item.kind === 'runtimeAptitudeOffset');
+    ok(inhumanized.length === 3
+      && inhumanized.map(item => item.skillDefId + ':' + item.value).join('|')
+        === 'Animals:-12|Social:-12|Artistic:-12'
+      && inhumanized.every(item => item.canonicalEligible),
+    'CE-C5APT-009 Inhumanized definition aptitude is exact and not stage conditional');
+    ok(result.skillOperations.some(item => item.sourceDefId === 'C5_UnresolvedHediff'
+      && item.skillDefId === 'Mining' && item.kind === 'unknownSkillOperation')
+      && inhumanized.every(item => item.skillDefId !== 'Mining'),
+    'CE-C5APT-010 relevant unknown aptitude is scoped to its own SkillDef');
+    App.state.hediffCatalog = [];
+  }
+
+  {
+    const traitFacts = App._parseTraitRuntimeFacts(
+      '<li><def>C5_Exact</def><degree>2</degree><suppressedBy>null</suppressedBy></li>'
+      + '<li><def>C5_Suppressed</def><suppressedBy>Trait_4</suppressedBy></li>'
+      + '<li><def>C5_Unknown</def></li>');
+    ok(traitFacts.length === 3
+      && traitFacts[0].degree === 2 && traitFacts[0].suppression.value === false
+      && traitFacts[1].suppression.value === true
+      && traitFacts[2].suppression.state === 'unknown',
+    'CE-C5APT-011 parser preserves exact trait degree and suppression states');
+    const geneFacts = App._parseGeneRuntimeFacts(
+      '<li><def>C5_Free</def><overriddenByGene>null</overriddenByGene></li>'
+      + '<li><def>C5_Overridden</def><overriddenByGene>Gene_7</overriddenByGene></li>'
+      + '<li><def>C5_NoMarker</def></li>');
+    ok(geneFacts.length === 3
+      && geneFacts[0].active.state === 'unknown'
+      && geneFacts[1].active.state === 'known' && geneFacts[1].active.value === false
+      && geneFacts[1].overriddenByGeneId === 'Gene_7'
+      && geneFacts[2].overrideState === 'unknown',
+    'CE-C5APT-012 parser preserves overrides without equating presence to Gene Active');
+  }
+
   return { name: 'capability evidence (C2 adapters)', failures, total };
 };

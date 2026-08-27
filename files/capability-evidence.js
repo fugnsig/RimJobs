@@ -516,9 +516,9 @@ function _normaliseSkillOperations(operations, unresolvedSources) {
   return { operations: normalised, conservation };
 }
 
-function _buildSkillOperations(effects, unresolvedSources) {
+function _buildSkillOperations(effects, unresolvedSources, exactOperations) {
   const source = Array.isArray(effects) ? effects : [];
-  const rawOperations = [];
+  const rawOperations = Array.isArray(exactOperations) ? exactOperations.slice() : [];
   const skillMetadataByEvidenceId = new Map();
   for (const effect of source) {
     if (!effect || effect.type !== 'skillOffset') continue;
@@ -593,6 +593,188 @@ function _buildSkillOperations(effects, unresolvedSources) {
       ? Object.assign({}, effect, skillMetadataByEvidenceId.get(effect.evidenceId))
       : effect),
   };
+}
+
+function _typedStateApplicability(dlcFact, sourceFact) {
+  if (!dlcFact || dlcFact.state !== 'known') return 'unknown';
+  if (dlcFact.value !== true) return 'inapplicable';
+  if (!sourceFact || sourceFact.state !== 'known') return 'unknown';
+  return sourceFact.value === true ? 'applicable' : 'inapplicable';
+}
+
+function _runtimeAptitudeOperation(args) {
+  const exactValue = Number.isInteger(args.value);
+  const exactTarget = typeof args.skillDefId === 'string' && args.skillDefId.length > 0;
+  const exactDefinition = args.definitionComplete === true;
+  const kind = exactValue && exactTarget && exactDefinition
+    ? SKILL_OPERATION_KIND.RUNTIME_APTITUDE : SKILL_OPERATION_KIND.UNKNOWN;
+  const complete = kind === SKILL_OPERATION_KIND.RUNTIME_APTITUDE
+    && args.applicability !== 'unknown';
+  return {
+    operationId: args.operationId,
+    sourceFactKey: args.sourceFactKey,
+    kind,
+    skillDefId: exactTarget ? args.skillDefId : null,
+    appSkillId: null,
+    candidateSkillDefIds: exactTarget ? [args.skillDefId] : [],
+    sourceDefId: args.sourceDefId,
+    sourceField: args.sourceField,
+    sourceOrder: args.sourceOrder,
+    value: exactValue ? args.value : null,
+    applicability: args.applicability,
+    applicabilityReason: args.applicability === 'unknown'
+      ? 'Runtime aptitude applicability is not proven' : null,
+    dlc: args.dlc,
+    compatibilityOnly: false,
+    superseded: args.superseded === true,
+    canonicalEligible: kind === SKILL_OPERATION_KIND.RUNTIME_APTITUDE
+      && args.applicability === 'applicable' && args.superseded !== true,
+    evidence: {
+      evidenceId: args.operationId + ':evidence',
+      sourceFactKey: args.sourceFactKey,
+      sourceKind: args.sourceKind,
+      sourceId: args.sourceDefId,
+      targetDefId: exactTarget ? args.skillDefId : null,
+      representation: kind === SKILL_OPERATION_KIND.RUNTIME_APTITUDE
+        ? 'canonicalExact' : 'rawObservation',
+      provenance: args.provenance || {},
+      confidence: args.confidence || 'verified',
+    },
+    confidence: args.confidence || 'verified',
+    completeness: complete ? 'complete' : 'partial',
+  };
+}
+
+function _definitionByExactId(collection, exactId, appId) {
+  if (!collection) return null;
+  const values = Array.isArray(collection) ? collection : Object.values(collection);
+  return values.find(definition => definition && (
+    definition.defName === exactId || definition.def === exactId || definition.id === exactId
+    || (appId && definition.id === appId))) || null;
+}
+
+function _aptitudeEntries(definition) {
+  if (!definition) return [];
+  if (Array.isArray(definition.aptitudes)) return definition.aptitudes;
+  if (Array.isArray(definition.aptitudesExact)) return definition.aptitudesExact;
+  return [];
+}
+
+function _buildRuntimeAptitudeOperations(pawn, unresolvedSources) {
+  const operations = [];
+  const unresolved = unresolvedSources || [];
+  if (!pawn) return operations;
+  const dlcFacts = pawn.dlcActiveFacts || {};
+  const customGenes = typeof App !== 'undefined' && App.state
+    ? App.state.customGenes || {} : {};
+  const genes = typeof GENES !== 'undefined' ? GENES : [];
+  const customTraits = typeof App !== 'undefined' && App.state
+    ? App.state.customTraits || {} : {};
+  const traits = typeof TRAITS !== 'undefined' ? TRAITS : [];
+  const hediffs = typeof App !== 'undefined' && App.state
+    && Array.isArray(App.state.hediffCatalog) ? App.state.hediffCatalog : [];
+
+  const emitEntries = (definition, fact, source) => {
+    const entries = _aptitudeEntries(definition);
+    const definitionComplete = definition && definition.aptitudeCompleteness === 'complete';
+    if (!definition || (entries.length === 0 && !definitionComplete)) {
+      const sourceFactKey = source.kind + ':' + source.defId + ':aptitudes:unknown:' + source.instanceOrder;
+      operations.push(_runtimeAptitudeOperation({
+        operationId: 'skill-operation:' + sourceFactKey,
+        sourceFactKey, sourceKind: source.kind, sourceDefId: source.defId,
+        sourceField: source.field, sourceOrder: source.instanceOrder,
+        skillDefId: null, value: null, definitionComplete: false,
+        applicability: source.applicability, dlc: source.dlc,
+        provenance: source.provenance, confidence: definition ? 'unknown' : 'unknown',
+      }));
+      unresolved.push(_makeUnresolved(source.kind, source.defId,
+        definition ? 'Runtime aptitude definition is incomplete'
+          : 'Runtime aptitude definition could not be resolved',
+        { rawTarget: source.field }));
+      return;
+    }
+    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+      const entry = entries[entryIndex] || {};
+      const skillDefId = entry.skillDefId || entry.skill || null;
+      const sourceOrder = Number.isInteger(entry.sourceOrder)
+        ? entry.sourceOrder : entryIndex;
+      const sourceFactKey = source.kind + ':' + source.defId + ':'
+        + source.instanceOrder + ':aptitudes:' + (skillDefId || 'unknown') + ':' + sourceOrder;
+      operations.push(_runtimeAptitudeOperation({
+        operationId: 'skill-operation:' + sourceFactKey,
+        sourceFactKey, sourceKind: source.kind, sourceDefId: source.defId,
+        sourceField: source.field, sourceOrder,
+        skillDefId, value: entry.offset, definitionComplete,
+        applicability: source.applicability, dlc: source.dlc,
+        provenance: Object.assign({}, source.provenance, {
+          sourceField: source.field, definitionSourceOrder: sourceOrder,
+        }),
+        confidence: definitionComplete ? 'verified' : 'unknown',
+      }));
+    }
+  };
+
+  const geneFacts = Array.isArray(pawn.geneRuntimeFacts) ? pawn.geneRuntimeFacts : [];
+  for (let index = 0; index < geneFacts.length; index++) {
+    const fact = geneFacts[index];
+    if (!fact || !fact.geneDefId) continue;
+    const definition = _definitionByExactId(genes, fact.geneDefId)
+      || _definitionByExactId(customGenes, fact.geneDefId);
+    const applicability = _typedStateApplicability(dlcFacts.Biotech, fact.active);
+    if (definition && definition.definitionKind !== 'GeneDef') {
+      emitEntries(null, fact, {
+        kind: 'gene', defId: fact.geneDefId, instanceOrder: fact.sourceOrder ?? index,
+        field: 'GeneTemplateDef.aptitudeOffset', dlc: 'Biotech', applicability,
+        provenance: fact.provenance,
+      });
+      continue;
+    }
+    emitEntries(definition, fact, {
+      kind: 'gene', defId: fact.geneDefId, instanceOrder: fact.sourceOrder ?? index,
+      field: 'GeneDef.aptitudes', dlc: 'Biotech', applicability,
+      provenance: fact.provenance,
+    });
+  }
+
+  const traitFacts = Array.isArray(pawn.traitRuntimeFacts) ? pawn.traitRuntimeFacts : [];
+  for (let index = 0; index < traitFacts.length; index++) {
+    const fact = traitFacts[index];
+    if (!fact || !fact.traitDefId) continue;
+    const definition = _definitionByExactId(traits, fact.traitDefId, fact.appTraitId)
+      || _definitionByExactId(customTraits, fact.traitDefId, fact.appTraitId);
+    const degree = definition && Array.isArray(definition.traitDegrees)
+      ? definition.traitDegrees.find(item => item && item.degree === fact.degree) : null;
+    const degreeDefinition = degree ? Object.assign({}, degree, {
+      aptitudeCompleteness: degree.aptitudeCompleteness
+        || definition.traitDegreeCompleteness || 'unknown',
+    }) : null;
+    const nonSuppressed = fact.suppression && fact.suppression.state === 'known'
+      ? { state: 'known', value: fact.suppression.value === false }
+      : { state: 'unknown', value: null };
+    const applicability = _typedStateApplicability(dlcFacts.Anomaly, nonSuppressed);
+    emitEntries(degreeDefinition, fact, {
+      kind: 'trait', defId: fact.traitDefId, instanceOrder: fact.sourceOrder ?? index,
+      field: 'TraitDegreeData.aptitudes', dlc: 'Anomaly', applicability,
+      provenance: fact.provenance,
+    });
+  }
+
+  const health = Array.isArray(pawn.health) ? pawn.health : [];
+  for (let index = 0; index < health.length; index++) {
+    const fact = health[index];
+    if (!fact || !fact.def) continue;
+    const definition = _definitionByExactId(hediffs, fact.def);
+    if (!definition || (!Array.isArray(definition.aptitudes)
+      && definition.aptitudeCompleteness !== 'complete')) continue;
+    const applicability = _typedStateApplicability(dlcFacts.Anomaly,
+      { state: 'known', value: true });
+    emitEntries(definition, fact, {
+      kind: 'hediffDef', defId: fact.def, instanceOrder: fact.sourceObservationIndex ?? index,
+      field: 'HediffDef.aptitudes', dlc: 'Anomaly', applicability,
+      provenance: { sourceKind: 'healthSnapshot', sourceField: 'health/hediffs' },
+    });
+  }
+  return operations;
 }
 
 function _rawSkillFactsFromPawn(pawn, unresolvedSources) {
@@ -1692,7 +1874,9 @@ const CapabilityEvidence = {
       confidence: 'verified',
     });
     const allNormalised = _normaliseEffects(normalised.concat(pawnPermissionEffects), allUnresolved);
-    const skillBundle = _buildSkillOperations(allNormalised, allUnresolved);
+    const exactAptitudeOperations = _buildRuntimeAptitudeOperations(pawn, allUnresolved);
+    const skillBundle = _buildSkillOperations(
+      allNormalised, allUnresolved, exactAptitudeOperations);
     const statBundle = _buildExactLearningStatOperations(
       skillBundle.legacyEffects, pawn, allUnresolved);
     const rawSkillFacts = _rawSkillFactsFromPawn(pawn, allUnresolved);
@@ -1759,6 +1943,7 @@ const CapabilityEvidence = {
   _normaliseEffects: _normaliseEffects,
   _normaliseSkillOperations: _normaliseSkillOperations,
   _buildSkillOperations: _buildSkillOperations,
+  _buildRuntimeAptitudeOperations: _buildRuntimeAptitudeOperations,
   _rawSkillFactsFromPawn: _rawSkillFactsFromPawn,
   _normaliseStatOperations: _normaliseStatOperations,
   _selectCanonicalStatOperations: _selectCanonicalStatOperations,
