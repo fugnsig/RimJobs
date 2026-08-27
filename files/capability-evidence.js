@@ -1830,20 +1830,15 @@ const CapabilityEvidence = {
 
     // --- UV sensitivity ---
     if (xeno.uvSensitivity) {
-      // Undergrounder exemption: engine.js suppresses UV penalty for undergrounders
-      const hasUndergrounder = Array.isArray(pawn.traits) &&
-        pawn.traits.indexOf('undergrounder') >= 0;
-      if (!hasUndergrounder) {
-        const eid = 'xeno:' + xenoId + ':uv';
-        effects.push(_makeEvidence(eid, 'avoidCondition', null, null,
-          provenance, baseConfidence, {
-            fields: {
-              condition: 'daylight',
-              fallbackHours: { start: 6, end: 18 },
-              weight: 4,
-            },
-          }));
-      }
+      const eid = 'xeno:' + xenoId + ':uv';
+      effects.push(_makeEvidence(eid, 'avoidCondition', null, null,
+        provenance, baseConfidence, {
+          fields: {
+            condition: 'daylight',
+            fallbackHours: { start: 6, end: 18 },
+            weight: 4,
+          },
+        }));
     }
 
     return { effects, unresolved };

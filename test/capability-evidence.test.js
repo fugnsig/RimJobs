@@ -1140,13 +1140,14 @@ module.exports = function run() {
       'CE-XN-010 UV provenance sourceKind');
   }
 
-  // CE-XN-011: Undergrounder + UV -> no UV evidence
+  // CE-XN-011: Undergrounder + UV -> UV evidence emitted (C6: scheduling interpretation moves to C7)
   {
     const pawn = mk('xn11', { xenotype: 'dirtmole', traits: ['undergrounder'] });
     const result = CE.fromXenotype(pawn);
 
     const uvEv = findEv(result.effects, 'xeno:dirtmole:uv');
-    ok(uvEv == null, 'CE-XN-011 undergrounder suppresses UV evidence');
+    ok(uvEv != null, 'CE-XN-011 undergrounder UV pawn emits UV evidence');
+    ok(uvEv && uvEv.condition === 'daylight', 'CE-XN-011 UV condition is daylight');
     // Skill aggregate should still work
     const mineEv = findEv(result.effects, 'xeno:dirtmole:skillMods:mine');
     ok(mineEv != null, 'CE-XN-011 skill aggregate still emitted');
