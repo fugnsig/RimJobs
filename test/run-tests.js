@@ -49,6 +49,7 @@ const tests = [
   './c6-temporal-coverage.test.js',
   './c6-undergrounder-uv.test.js',
   './temporal-profile-resolver.test.js',
+  './c6-static-gates.test.js',
 ];
 
 (async () => {
