@@ -40,6 +40,7 @@ const tests = [
   './effectiveness-registry.test.js',
   './structural-skill-passion.test.js',
   './structural-stat-resolver.test.js',
+  './structural-learning-resolver.test.js',
 ];
 
 (async () => {
