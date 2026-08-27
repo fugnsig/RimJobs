@@ -1021,6 +1021,276 @@ function _buildExactLearningStatOperations(effects, pawn, unresolvedSources) {
   };
 }
 
+const _C5_STAT_PHASES = Object.freeze({
+  trait: Object.freeze({ statOffset: ['traitOffset', 4, 'traitOffsets'], statFactor: ['traitFactor', 11, 'traitFactors'] }),
+  hediff: Object.freeze({ statOffset: ['hediffOffset', 5, 'hediffOffsets'], statFactor: ['hediffFactor', 12, 'hediffFactors'] }),
+  precept: Object.freeze({ statOffset: ['preceptOffset', 6, 'preceptOffsets'], statFactor: ['preceptFactor', 13, 'preceptFactors'] }),
+  role: Object.freeze({ statOffset: ['roleOffset', 7, 'roleOffsets'], statFactor: ['roleFactor', 14, 'roleFactors'] }),
+  gene: Object.freeze({ statOffset: ['geneOffset', 8, 'geneOffsets'], statFactor: ['geneFactor', 15, 'geneFactors'] }),
+  lifeStage: Object.freeze({ statOffset: ['lifeStageOffset', 9, 'lifeStageOffsets'], statFactor: ['lifeStageFactor', 16, 'lifeStageFactors'] }),
+  equipment: Object.freeze({ statOffset: ['equipmentOffset', 10, 'equipmentOffsets'], statFactor: ['requestThingOperation', 17, 'requestThingOperations'] }),
+  requestThing: Object.freeze({ statOffset: ['requestThingOperation', 17, 'requestThingOperations'], statFactor: ['requestThingOperation', 17, 'requestThingOperations'] }),
+  inspiration: Object.freeze({ statOffset: ['inspirationOperation', 18, 'inspirationOperations'], statFactor: ['inspirationOperation', 18, 'inspirationOperations'] }),
+});
+
+const _C5_SOURCE_FAMILIES = Object.freeze([
+  'traitOffsets', 'hediffOffsets', 'preceptOffsets', 'roleOffsets',
+  'geneOffsets', 'lifeStageOffsets', 'equipmentOffsets', 'traitFactors',
+  'hediffFactors', 'preceptFactors', 'roleFactors', 'geneFactors',
+  'lifeStageFactors', 'requestThingOperations', 'inspirationOperations',
+  'scenarioContext',
+]);
+
+function _cloneTypedFact(fact, fallbackValue, provenance) {
+  if (fact && (fact.state === 'known' || fact.state === 'unknown')) {
+    return {
+      state: fact.state,
+      value: fact.state === 'known' ? fact.value : null,
+      evidence: Array.isArray(fact.evidence)
+        ? fact.evidence.map(item => Object.assign({}, item)) : [],
+    };
+  }
+  if (fallbackValue !== undefined && fallbackValue !== null) {
+    return {
+      state: 'known', value: fallbackValue,
+      evidence: [{ sourceKind: 'savePawn', provenance: Object.assign({}, provenance || {}) }],
+    };
+  }
+  return { state: 'unknown', value: null, evidence: [] };
+}
+
+function _booleanApplicability(fact, invert) {
+  if (!fact || fact.state !== 'known') return 'unknown';
+  const applies = invert ? fact.value === false : fact.value === true;
+  return applies ? 'applicable' : 'inapplicable';
+}
+
+function _sourceFamilyCompleteness(input) {
+  const source = input && (input.sourceFamilyCompleteness || input.familyCompleteness) || {};
+  const output = {};
+  for (const family of _C5_SOURCE_FAMILIES) {
+    const entry = source[family];
+    const completeness = typeof entry === 'string' ? entry
+      : entry && entry.completeness;
+    output[family] = {
+      completeness: ['complete', 'partial', 'unknown'].includes(completeness)
+        ? completeness : 'unknown',
+      byStatDef: Object.assign({}, entry && entry.byStatDef || {}),
+      evidence: Array.isArray(entry && entry.evidence)
+        ? entry.evidence.map(item => Object.assign({}, item)) : [],
+    };
+  }
+  return output;
+}
+
+function _operationList(definition, kind) {
+  if (!definition) return [];
+  return Array.isArray(definition[kind === 'statOffset' ? 'statOffsets' : 'statFactors'])
+    ? definition[kind === 'statOffset' ? 'statOffsets' : 'statFactors'] : [];
+}
+
+function _bindDefinitionOperations(output, definition, source) {
+  if (!definition) return;
+  for (const kind of ['statOffset', 'statFactor']) {
+    const phase = _C5_STAT_PHASES[source.family] && _C5_STAT_PHASES[source.family][kind];
+    if (!phase) continue;
+    const list = _operationList(definition, kind);
+    for (let index = 0; index < list.length; index++) {
+      const raw = list[index] || {};
+      const statDefId = raw.statDefId || raw.target || null;
+      const value = typeof raw.value === 'number' && Number.isFinite(raw.value)
+        ? raw.value : null;
+      const sourceOrder = Number.isInteger(raw.sourceOrder) ? raw.sourceOrder : index;
+      const sourceFactKey = [source.family, source.defId, source.instanceOrder,
+        source.stageOrder == null ? 'definition' : 'stage-' + source.stageOrder,
+        kind, statDefId || 'unknown', sourceOrder].join(':');
+      const completeness = statDefId && value != null
+        && source.applicability !== 'unknown' ? 'complete' : 'partial';
+      output.push({
+        operationId: 'stat-operation:' + sourceFactKey,
+        sourceFactKey,
+        kind,
+        statDefId,
+        sourceDefId: source.defId,
+        sourceField: source.sourceField + '.' + (kind === 'statOffset' ? 'statOffsets' : 'statFactors'),
+        phase: phase[0], phaseOrder: phase[1], sourceFamily: phase[2],
+        sourceOrder,
+        sourceInstanceOrder: source.instanceOrder,
+        value,
+        applicability: source.applicability,
+        applicabilityReason: source.applicability === 'unknown'
+          ? 'Current-pawn source applicability is not proven' : null,
+        compatibilityOnly: false,
+        superseded: false,
+        canonicalEligible: source.applicability === 'applicable'
+          && statDefId != null && value != null,
+        confidence: completeness === 'complete' ? 'verified' : 'unknown',
+        completeness,
+        evidence: [{
+          evidenceId: 'evidence:' + sourceFactKey,
+          sourceFactKey,
+          sourceKind: source.family,
+          sourceId: source.defId,
+          targetDefId: statDefId,
+          representation: 'canonicalExact',
+          provenance: Object.assign({}, source.provenance || {}, {
+            sourceField: source.sourceField,
+            sourceOrder,
+          }),
+          confidence: completeness === 'complete' ? 'verified' : 'unknown',
+        }],
+      });
+    }
+  }
+}
+
+function _bindPawnStatOperations(pawn, options, unresolvedSources) {
+  const opts = options || {};
+  const providerInput = opts.effectivenessSourceCatalogues || null;
+  const catalogues = providerInput && providerInput.sourceOperations
+    ? providerInput.sourceOperations : (providerInput || {});
+  const operations = [];
+  const unresolved = unresolvedSources || [];
+  const missingDefinition = (family, defId) => {
+    if (!providerInput) return;
+    unresolved.push(_makeUnresolved(family, defId,
+      'Current-pawn source definition is absent from the effectiveness catalogue',
+      { rawTarget: defId }));
+  };
+
+  const traitFacts = Array.isArray(pawn && pawn.traitRuntimeFacts) ? pawn.traitRuntimeFacts : [];
+  for (let index = 0; index < traitFacts.length; index++) {
+    const fact = traitFacts[index] || {};
+    if (!fact.traitDefId) continue;
+    const definition = catalogues.traits && catalogues.traits[fact.traitDefId];
+    const degree = definition && Array.isArray(definition.traitDegrees)
+      ? definition.traitDegrees.find(item => item && item.degree === fact.degree) : null;
+    if (!degree) { missingDefinition('trait', fact.traitDefId); continue; }
+    _bindDefinitionOperations(operations, degree, {
+      family: 'trait', defId: fact.traitDefId, instanceOrder: fact.sourceOrder ?? index,
+      sourceField: 'TraitDegreeData', applicability: _booleanApplicability(fact.suppression, true),
+      provenance: fact.provenance,
+    });
+  }
+
+  const geneFacts = Array.isArray(pawn && pawn.geneRuntimeFacts) ? pawn.geneRuntimeFacts : [];
+  for (let index = 0; index < geneFacts.length; index++) {
+    const fact = geneFacts[index] || {};
+    if (!fact.geneDefId) continue;
+    const definition = catalogues.genes && catalogues.genes[fact.geneDefId];
+    if (!definition) { missingDefinition('gene', fact.geneDefId); continue; }
+    _bindDefinitionOperations(operations, definition, {
+      family: 'gene', defId: fact.geneDefId, instanceOrder: fact.sourceOrder ?? index,
+      sourceField: 'GeneDef', applicability: _booleanApplicability(fact.active, false),
+      provenance: fact.provenance,
+    });
+  }
+
+  const health = Array.isArray(pawn && pawn.health) ? pawn.health : [];
+  for (let index = 0; index < health.length; index++) {
+    const fact = health[index] || {};
+    if (!fact.def) continue;
+    const definition = catalogues.hediffs && catalogues.hediffs[fact.def];
+    if (!definition) { if (catalogues.hediffs) missingDefinition('hediff', fact.def); continue; }
+    const stages = Array.isArray(definition.stages) ? definition.stages : [];
+    const severityKnown = typeof fact.severity === 'number' && Number.isFinite(fact.severity);
+    const severity = severityKnown ? fact.severity : null;
+    let selected = [];
+    if (severityKnown) {
+      selected = stages.filter(stage => Number(stage.minSeverity || 0) <= severity)
+        .sort((a, b) => Number(b.minSeverity || 0) - Number(a.minSeverity || 0)).slice(0, 1);
+    } else {
+      selected = stages;
+    }
+    for (let stageIndex = 0; stageIndex < selected.length; stageIndex++) {
+      const stage = selected[stageIndex];
+      _bindDefinitionOperations(operations, stage, {
+        family: 'hediff', defId: fact.def,
+        instanceOrder: fact.sourceObservationIndex ?? index,
+        stageOrder: stage.sourceOrder ?? stageIndex,
+        sourceField: 'HediffStage',
+        applicability: severityKnown ? 'applicable' : 'unknown',
+        provenance: { sourceKind: 'healthSnapshot', sourceField: 'health/hediffs' },
+      });
+    }
+  }
+
+  const bindFactDefinitions = (facts, collection, family, idField, sourceField) => {
+    const list = Array.isArray(facts) ? facts : (facts ? [facts] : []);
+    for (let index = 0; index < list.length; index++) {
+      const fact = list[index] || {};
+      const defId = fact[idField];
+      if (!defId) continue;
+      const definition = collection && collection[defId];
+      if (!definition) { missingDefinition(family, defId); continue; }
+      _bindDefinitionOperations(operations, definition, {
+        family, defId, instanceOrder: fact.sourceOrder ?? index, sourceField,
+        applicability: _booleanApplicability(fact.applicability, false),
+        provenance: fact.provenance,
+      });
+    }
+  };
+  bindFactDefinitions(pawn && pawn.preceptRuntimeFacts, catalogues.precepts,
+    'precept', 'preceptDefId', 'PreceptDef');
+  bindFactDefinitions(pawn && pawn.roleRuntimeFacts, catalogues.roles,
+    'role', 'roleDefId', 'PreceptRoleDef');
+  bindFactDefinitions(pawn && pawn.lifeStageRuntimeFact, catalogues.lifeStages,
+    'lifeStage', 'lifeStageDefId', 'LifeStageDef');
+
+  for (const [field, family] of [['equipmentStatOperations', 'equipment'],
+    ['requestThingStatOperations', 'requestThing'], ['inspirationStatOperations', 'inspiration']]) {
+    const direct = pawn && Array.isArray(pawn[field]) ? pawn[field] : [];
+    for (let index = 0; index < direct.length; index++) {
+      const item = direct[index] || {};
+      _bindDefinitionOperations(operations, {
+        statOffsets: item.kind === 'statOffset' ? [item] : [],
+        statFactors: item.kind === 'statFactor' ? [item] : [],
+      }, {
+        family, defId: item.sourceDefId || field, instanceOrder: item.sourceOrder ?? index,
+        sourceField: field, applicability: item.applicability || 'unknown',
+        provenance: item.provenance,
+      });
+    }
+  }
+
+  operations.sort((a, b) => a.phaseOrder - b.phaseOrder
+    || a.sourceInstanceOrder - b.sourceInstanceOrder || a.sourceOrder - b.sourceOrder
+    || String(a.operationId).localeCompare(String(b.operationId)));
+  return {
+    operations,
+    sourceFamilyCompleteness: _sourceFamilyCompleteness(providerInput),
+  };
+}
+
+function _buildStructuralContextFacts(pawn, options) {
+  const opts = options || {};
+  const raceDef = _cloneTypedFact(pawn && pawn.raceDefFact,
+    pawn && pawn.raceDefName, { sourceField: 'race/def' });
+  const providers = opts.structuralPropertyProviders || {};
+  const raceProvider = raceDef.state === 'known' && providers.races
+    ? providers.races[raceDef.value] : null;
+  const humanlike = _cloneTypedFact(raceProvider && raceProvider.humanlike,
+    raceProvider && typeof raceProvider.humanlike === 'boolean'
+      ? raceProvider.humanlike : null,
+    { sourceField: 'ThingDef.race.intelligence' });
+  const scenarioSource = opts.scenarioProvider && (opts.scenarioProvider.fact
+    || opts.scenarioProvider.scenarioContext || opts.scenarioProvider);
+  return {
+    biologicalAge: _cloneTypedFact(pawn && pawn.biologicalAgeFact,
+      pawn && pawn.bioAge, { sourceField: 'ageTracker.ageBiologicalTicks' }),
+    lifeStageDef: _cloneTypedFact(pawn && pawn.lifeStageDefFact,
+      pawn && pawn.lifeStage, { sourceField: 'ageTracker.curLifeStageIndex' }),
+    slaveStatus: _cloneTypedFact(pawn && pawn.slaveStatusFact,
+      null, { sourceField: 'guestTracker.guestStatus' }),
+    pawnKindDef: _cloneTypedFact(pawn && pawn.pawnKindDefFact,
+      pawn && pawn.kindDef, { sourceField: 'kindDef' }),
+    raceDef,
+    raceProperties: { humanlike },
+    scenarioContext: _cloneTypedFact(scenarioSource, null,
+      { sourceField: 'scenarioProvider' }),
+  };
+}
+
 // ─── Body semantic lookup helper ───────────────────────────────────────────────
 // BODY-EVID-001: Human body fallback is compatibility-gated. Never map an
 // unknown alien partIdx to a human arm/leg by coincidence. Only use
@@ -1834,12 +2104,15 @@ const CapabilityEvidence = {
     return { effects, unresolved };
   },
 
-  collectPawnEvidence(pawn) {
+  collectPawnEvidence(pawn, options) {
     if (!pawn) {
       return {
         effects: [],
         skillOperations: [],
         statOperations: [],
+        sourceFamilyCompleteness: _sourceFamilyCompleteness(
+          options && options.effectivenessSourceCatalogues),
+        structuralContextFacts: _buildStructuralContextFacts(null, options),
         conservation: [],
         bodyEvidence: [],
         permissionEvidence: { rawSources: [], legacyIncapable: [] },
@@ -1879,7 +2152,39 @@ const CapabilityEvidence = {
       allNormalised, allUnresolved, exactAptitudeOperations);
     const statBundle = _buildExactLearningStatOperations(
       skillBundle.legacyEffects, pawn, allUnresolved);
+    const pawnStatBundle = _bindPawnStatOperations(pawn, options, allUnresolved);
+    const providerKeys = new Set(pawnStatBundle.operations.map(operation => [
+      operation.evidence && operation.evidence[0] && operation.evidence[0].sourceKind,
+      operation.sourceDefId, operation.statDefId, operation.kind,
+    ].join('|')));
+    const legacyExactOperations = statBundle.operations.map(operation => {
+      const sourceKind = operation.evidence && operation.evidence[0]
+        && operation.evidence[0].sourceKind;
+      const key = [sourceKind, operation.sourceDefId, operation.statDefId, operation.kind].join('|');
+      return providerKeys.has(key)
+        ? Object.assign({}, operation, { canonicalEligible: false, superseded: true })
+        : operation;
+    });
+    const allStatOperations = _normaliseStatOperations(
+      legacyExactOperations.concat(pawnStatBundle.operations), allUnresolved);
+    const statConservation = new Map(allStatOperations.conservation.map(record =>
+      [record.sourceFactKey, Object.assign({}, record, {
+        representations: record.representations.slice(),
+      })]));
+    for (const record of statBundle.conservation) {
+      const legacy = record.representations.filter(item =>
+        item.representation === 'legacyCompatibility');
+      if (!legacy.length) continue;
+      if (!statConservation.has(record.sourceFactKey)) {
+        statConservation.set(record.sourceFactKey, {
+          sourceFactKey: record.sourceFactKey, representations: [],
+          eligibleCanonicalOperationIds: [],
+        });
+      }
+      statConservation.get(record.sourceFactKey).representations.unshift(...legacy);
+    }
     const rawSkillFacts = _rawSkillFactsFromPawn(pawn, allUnresolved);
+    const structuralContextFacts = _buildStructuralContextFacts(pawn, options);
 
     const skills = pawn.skills || {};
     const baseSkills = {};
@@ -1909,8 +2214,10 @@ const CapabilityEvidence = {
     return {
       effects: statBundle.legacyEffects,
       skillOperations: skillBundle.operations,
-      statOperations: statBundle.operations,
-      conservation: skillBundle.conservation.concat(statBundle.conservation),
+      statOperations: allStatOperations.operations,
+      sourceFamilyCompleteness: pawnStatBundle.sourceFamilyCompleteness,
+      structuralContextFacts,
+      conservation: skillBundle.conservation.concat(Array.from(statConservation.values())),
       bodyEvidence,
       permissionEvidence: {
         rawSources: Array.isArray(pawn.permissionSources)
@@ -1948,6 +2255,8 @@ const CapabilityEvidence = {
   _normaliseStatOperations: _normaliseStatOperations,
   _selectCanonicalStatOperations: _selectCanonicalStatOperations,
   _buildExactLearningStatOperations: _buildExactLearningStatOperations,
+  _bindPawnStatOperations: _bindPawnStatOperations,
+  _buildStructuralContextFacts: _buildStructuralContextFacts,
   _skillDefIdForAppSkill: _skillDefIdForAppSkill,
   _skillOperationKindForEffect: _skillOperationKindForEffect,
   _resolveXenoStrict: _resolveXenoStrict,
