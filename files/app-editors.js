@@ -533,6 +533,27 @@ Object.assign(App, {
           : { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['providerUnavailable'] };
         this.state.definitionSources = c3Sources;
         this.state.definitionUncertainty = c3Uncertainty;
+        if (typeof parseEffectivenessProviderFromXML === 'function') {
+          const combineDefs = values => '<Defs>' + values.map(value => String(value || '')
+            .replace(/^\s*<Defs>\s*/i, '').replace(/\s*<\/Defs>\s*$/i, '')).join('\n') + '</Defs>';
+          this.state.effectivenessProvider = parseEffectivenessProviderFromXML({
+            skillDefsXml: result.skillDefsXml,
+            traitsXml: result.traitsXml,
+            genesXml: combineDefs([result.genesXml, result.geneTemplateDefsXml]),
+            allHediffsXml: result.allHediffsXml,
+            statDefsXml: result.statDefsXml,
+            facetDefsXml: combineDefs([
+              result.workGiverDefsXml, result.recipeDefsXml, result.jobDefsXml,
+            ]),
+            passionDefsXml: result.passionDefsXml,
+          }, {
+            sourceMap: c3Sources,
+            activePackageResolution: this.state.activePackageResolution,
+            uncertainty: result.effectivenessUncertainty || { byType: {}, dataset: {} },
+            providerFingerprint: result.providerFingerprint || null,
+            runtimeFingerprint: result.runtimeFingerprint || null,
+          });
+        }
       } catch (_) {
         this.state.scannedBodyDefs = this.state.scannedBodyDefs || {};
         this.state.scannedBodyPartDefs = this.state.scannedBodyPartDefs || {};
@@ -541,6 +562,7 @@ Object.assign(App, {
         this.state.scannedWorkTypeDefs = this.state.scannedWorkTypeDefs || {};
         this.state.scannedWorkGiverDefs = this.state.scannedWorkGiverDefs || {};
         this.state.scannedRaceWorkPolicies = this.state.scannedRaceWorkPolicies || {};
+        this.state.effectivenessProvider = this.state.effectivenessProvider || null;
       }
 
       // Build the full trait CATALOG (def + degree + conflicts) for the per-pawn trait

@@ -3835,6 +3835,504 @@ function parseRaceWorkSettingsFromXML(xmlString, options) {
   return result;
 }
 
+// ── C5: focused structural-effectiveness definition provider ────────────────
+// This parser deliberately records XML/data facts only. It does not interpret
+// arbitrary workers, StatParts, JobDrivers, WorkGivers, or PatchOperations.
+
+function parseEffectivenessProviderFromXML(parts, options) {
+  const input = parts || {};
+  const opts = options || {};
+  const active = opts.activePackageResolution || {
+    ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['missingActivePackages'],
+  };
+  const activeIds = new Set(Array.isArray(active.ids) ? active.ids.map(id => String(id).toLowerCase()) : []);
+  const uncertainty = opts.uncertainty || { byType: {}, dataset: {} };
+  const sourceMap = opts.sourceMap || {};
+  const supportedStats = new Set([
+    'GlobalLearningFactor', 'AnimalsLearningFactor', 'WorkSpeedGlobal',
+    'MiningSpeed', 'CookSpeed',
+  ]);
+  const supportedParts = new Set([
+    'StatPart_Glow', 'StatPart_Slave', 'StatPart_OverseerStatOffset',
+    'StatPart_Age', 'StatPart_Trainable',
+  ]);
+  const appSkillByDef = {
+    Shooting: 'shoot', Construction: 'construct', Cooking: 'cook', Animals: 'animal',
+    Artistic: 'art', Social: 'social', Melee: 'melee', Mining: 'mine', Plants: 'plant',
+    Crafting: 'craft', Medicine: 'medicine', Intellectual: 'intel',
+  };
+
+  const docFor = xml => _parseXmlDoc(typeof xml === 'string' ? xml : '');
+  const directList = (scope, field) => {
+    const list = _directChild(scope, field);
+    if (!list) return { present: false, inheritFalse: false, values: [] };
+    const lis = _directChildren(list, 'li');
+    const values = lis.length
+      ? lis.map(li => String(li.textContent || '').trim()).filter(Boolean)
+      : String(list.textContent || '').split(',').map(value => value.trim()).filter(Boolean);
+    return {
+      present: true,
+      inheritFalse: _boolAttribute(list, 'Inherit') === false,
+      values,
+    };
+  };
+  const mergeList = (parent, child) => {
+    if (!child || !child.present) return parent || { present: false, inheritFalse: false, values: [] };
+    if (child.inheritFalse) return child;
+    return Object.assign({}, child, {
+      values: (parent && parent.values || []).concat(child.values || []),
+    });
+  };
+  const sourceForOccurrence = (type, defName, occurrence) => {
+    const records = sourceMap[type] && sourceMap[type][defName];
+    return Array.isArray(records) && records[occurrence] ? records[occurrence] : null;
+  };
+  const activeNodeRecords = (doc, tagName, type) => {
+    if (!doc) return [];
+    const counts = {};
+    const result = [];
+    for (const node of doc.querySelectorAll(tagName)) {
+      const defName = _textDirect(node, 'defName');
+      const abstractName = node.getAttribute('Name') || null;
+      const key = defName || (abstractName ? '@' + abstractName : null);
+      const occurrence = key ? (counts[key] || 0) : 0;
+      if (key) counts[key] = occurrence + 1;
+      const source = defName ? sourceForOccurrence(type, defName, occurrence) : null;
+      const modId = source && source.modId ? String(source.modId).toLowerCase() : null;
+      if (active.completeness === 'complete' && modId && !activeIds.has(modId)) continue;
+      result.push({ node, defName, abstractName, source, occurrence });
+    }
+    return result;
+  };
+  const provenanceFor = record => record.source
+    ? { modId: record.source.modId || null, sources: [Object.assign({}, record.source)] }
+    : _definitionProvenance(opts, record.occurrence, record.defName || ('@' + record.abstractName));
+  const reasonsFor = (type, defName, dimension) => {
+    const typed = uncertainty.byType && uncertainty.byType[type]
+      && uncertainty.byType[type][defName];
+    let values = [];
+    if (Array.isArray(typed)) values = values.concat(typed);
+    else if (typed && dimension && Array.isArray(typed[dimension])) values = values.concat(typed[dimension]);
+    const dataset = uncertainty.dataset && uncertainty.dataset[type];
+    if (Array.isArray(dataset)) values = values.concat(dataset);
+    else if (dataset && dimension && Array.isArray(dataset[dimension])) values = values.concat(dataset[dimension]);
+    return _uniqueStrings(values);
+  };
+  const parseTargetMap = (scope, field, valueName) => {
+    const container = _directChild(scope, field);
+    if (!container) return { present: false, inheritFalse: false, values: [] };
+    const values = [];
+    const children = _elementChildren(container);
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index];
+      let target = child.tagName === 'li'
+        ? (_textDirect(child, 'skill') || _textDirect(child, 'stat') || null)
+        : child.tagName;
+      const raw = child.tagName === 'li'
+        ? (_textDirect(child, valueName) || _textDirect(child, 'value') || _textDirect(child, 'level'))
+        : String(child.textContent || '').trim();
+      const number = raw == null || raw === '' ? null : Number(raw);
+      values.push({ target, value: Number.isFinite(number) ? number : null, sourceOrder: index });
+    }
+    return {
+      present: true,
+      inheritFalse: _boolAttribute(container, 'Inherit') === false,
+      values,
+    };
+  };
+  const publicAptitudes = parsed => (parsed && parsed.values || []).map(item => ({
+    skillDefId: item.target, offset: item.value, sourceOrder: item.sourceOrder,
+  }));
+  const publicStatOperations = (parsed, kind) => (parsed && parsed.values || []).map(item => ({
+    kind, statDefId: item.target, value: item.value, sourceOrder: item.sourceOrder,
+  }));
+
+  const skillDefs = {};
+  const skillDoc = docFor(input.skillDefsXml);
+  const skillRaw = [];
+  for (const record of activeNodeRecords(skillDoc, 'SkillDef', 'SkillDef')) {
+    const node = record.node;
+    const tags = directList(node, 'disablingWorkTags');
+    const neverDisabled = _boolDirect(node, 'neverDisabledBasedOnWorkTypes');
+    const reasons = [];
+    if (_directChild(node, 'neverDisabledBasedOnWorkTypes') && neverDisabled == null) {
+      reasons.push('unparseableRelevantField');
+    }
+    skillRaw.push({
+      defName: record.defName || null,
+      abstractName: record.abstractName,
+      parentName: node.getAttribute('ParentName') || null,
+      isAbstract: _boolAttribute(node, 'Abstract') === true,
+      rawFields: { tags, neverDisabled, neverDisabledPresent: !!_directChild(node, 'neverDisabledBasedOnWorkTypes') },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: reasons,
+      _provenance: provenanceFor(record),
+    });
+  }
+  const resolvedSkills = _resolveInheritance(skillRaw, (parent, child) => ({
+    tags: mergeList(parent.tags, child.tags),
+    neverDisabled: child.neverDisabledPresent ? child.neverDisabled : parent.neverDisabled,
+    neverDisabledPresent: child.neverDisabledPresent || parent.neverDisabledPresent,
+  }));
+  for (const definition of resolvedSkills) {
+    const reasons = _uniqueStrings((definition._completenessReasons || [])
+      .concat(reasonsFor('SkillDef', definition.defName, 'fields')));
+    _storeDefinition(skillDefs, definition.defName, {
+      defName: definition.defName,
+      appSkillId: appSkillByDef[definition.defName] || null,
+      disablingWorkTags: (definition.tags && definition.tags.values || []).slice(),
+      disablingWorkTagsCompleteness: reasons.length ? 'partial' : 'complete',
+      neverDisabledBasedOnWorkTypes: definition.neverDisabled,
+      activePackage: definition._provenance.modId || null,
+      _completeness: reasons.length ? 'partial' : definition._completeness,
+      _completenessReasons: reasons,
+      _provenance: definition._provenance,
+    });
+  }
+
+  const sourceOperations = { traits: {}, genes: {}, geneTemplates: {}, hediffs: {} };
+  const traitDoc = docFor(input.traitsXml);
+  for (const record of activeNodeRecords(traitDoc, 'TraitDef', 'TraitDef')) {
+    if (!record.defName || _boolAttribute(record.node, 'Abstract') === true) continue;
+    const degreeContainer = _directChild(record.node, 'degreeDatas');
+    const degreeNodes = degreeContainer ? _directChildren(degreeContainer, 'li') : [];
+    const traitDegrees = degreeNodes.map((degree, degreeOrder) => {
+      const skillGains = parseTargetMap(degree, 'skillGains', 'value');
+      const aptitudes = parseTargetMap(degree, 'aptitudes', 'level');
+      const statOffsets = parseTargetMap(degree, 'statOffsets', 'value');
+      const statFactors = parseTargetMap(degree, 'statFactors', 'value');
+      return {
+        degree: _numberDirect(degree, 'degree') ?? 0,
+        sourceOrder: degreeOrder,
+        skillGains: (skillGains.values || []).map(item => ({
+          skillDefId: item.target, value: item.value, sourceOrder: item.sourceOrder,
+        })),
+        aptitudes: publicAptitudes(aptitudes),
+        statOffsets: publicStatOperations(statOffsets, 'statOffset'),
+        statFactors: publicStatOperations(statFactors, 'statFactor'),
+        applicability: { kind: 'traitNotSuppressed', degreeRequired: true },
+        aptitudeCompleteness: aptitudes.present ? 'complete' : 'complete',
+      };
+    });
+    _storeDefinition(sourceOperations.traits, record.defName, {
+      defName: record.defName, traitDegrees,
+      traitDegreeCompleteness: degreeContainer ? 'complete' : 'complete',
+      _completeness: 'complete', _completenessReasons: [],
+      _provenance: provenanceFor(record),
+    });
+  }
+
+  const geneDoc = docFor(input.genesXml);
+  for (const record of activeNodeRecords(geneDoc, 'GeneDef', 'GeneDef')) {
+    if (!record.defName || _boolAttribute(record.node, 'Abstract') === true) continue;
+    const aptitudes = parseTargetMap(record.node, 'aptitudes', 'level');
+    const statOffsets = parseTargetMap(record.node, 'statOffsets', 'value');
+    const statFactors = parseTargetMap(record.node, 'statFactors', 'value');
+    _storeDefinition(sourceOperations.genes, record.defName, {
+      id: record.defName, defName: record.defName, definitionKind: 'GeneDef',
+      geneClassId: _textDirect(record.node, 'geneClass') || 'Gene',
+      aptitudes: publicAptitudes(aptitudes),
+      aptitudeCompleteness: aptitudes.present ? 'complete' : 'complete',
+      statOffsets: publicStatOperations(statOffsets, 'statOffset'),
+      statFactors: publicStatOperations(statFactors, 'statFactor'),
+      activeStateRequirement: 'Gene.Active',
+      _completeness: 'complete', _completenessReasons: [],
+      _provenance: provenanceFor(record),
+    });
+  }
+  for (const record of activeNodeRecords(geneDoc, 'GeneTemplateDef', 'GeneTemplateDef')) {
+    if (!record.defName || _boolAttribute(record.node, 'Abstract') === true) continue;
+    const aptitudeOffset = _numberDirect(record.node, 'aptitudeOffset');
+    _storeDefinition(sourceOperations.geneTemplates, record.defName, {
+      defName: record.defName, definitionKind: 'GeneTemplateDef', aptitudeOffset,
+      generatedGeneRequired: true, aptitudeCompleteness: 'partial',
+      _completeness: aptitudeOffset == null ? 'partial' : 'complete',
+      _completenessReasons: aptitudeOffset == null ? ['missingAptitudeOffset'] : [],
+      _provenance: provenanceFor(record),
+    });
+  }
+
+  const hediffDoc = docFor(input.allHediffsXml);
+  for (const record of activeNodeRecords(hediffDoc, 'HediffDef', 'HediffDef')) {
+    if (!record.defName || _boolAttribute(record.node, 'Abstract') === true) continue;
+    const aptitudes = parseTargetMap(record.node, 'aptitudes', 'level');
+    const stagesContainer = _directChild(record.node, 'stages');
+    const stageNodes = stagesContainer ? _directChildren(stagesContainer, 'li') : [];
+    const stages = stageNodes.map((stage, stageOrder) => ({
+      minSeverity: _numberDirect(stage, 'minSeverity') ?? 0,
+      sourceOrder: stageOrder,
+      statOffsets: publicStatOperations(parseTargetMap(stage, 'statOffsets', 'value'), 'statOffset'),
+      statFactors: publicStatOperations(parseTargetMap(stage, 'statFactors', 'value'), 'statFactor'),
+      statOffsetEffectMultiplier: _textDirect(stage, 'statOffsetEffectMultiplier') || null,
+      statFactorEffectMultiplier: _textDirect(stage, 'statFactorEffectMultiplier') || null,
+    }));
+    _storeDefinition(sourceOperations.hediffs, record.defName, {
+      def: record.defName, defName: record.defName,
+      aptitudes: publicAptitudes(aptitudes),
+      aptitudeCompleteness: aptitudes.present ? 'complete' : 'complete',
+      stages,
+      _completeness: 'complete', _completenessReasons: [],
+      _provenance: provenanceFor(record),
+    });
+  }
+
+  const parseNeedList = (scope, field) => {
+    const container = _directChild(scope, field);
+    if (!container) return { present: false, inheritFalse: false, values: [] };
+    return {
+      present: true, inheritFalse: _boolAttribute(container, 'Inherit') === false,
+      values: _directChildren(container, 'li').map((item, sourceOrder) => ({
+        skillDefId: _textDirect(item, 'skill'),
+        baseValue: _numberDirect(item, 'baseValue'),
+        factorPerLevel: _numberDirect(item, 'factorPerLevel'),
+        sourceOrder,
+      })),
+    };
+  };
+  const parseCapacityList = (scope, field) => {
+    const container = _directChild(scope, field);
+    if (!container) return { present: false, inheritFalse: false, values: [] };
+    return {
+      present: true, inheritFalse: _boolAttribute(container, 'Inherit') === false,
+      values: _directChildren(container, 'li').map((item, sourceOrder) => ({
+        capacityDefId: _textDirect(item, 'capacity'),
+        scale: _numberDirect(item, 'scale'),
+        weight: _numberDirect(item, 'weight'),
+        max: _numberDirect(item, 'max'),
+        allowedDefect: _numberDirect(item, 'allowedDefect'),
+        setMax: _boolDirect(item, 'setMax'),
+        sourceOrder,
+      })),
+    };
+  };
+  const parseDependencyList = (scope, field) => directList(scope, field);
+  const parseCurve = scope => {
+    const curve = _directChild(scope, 'postProcessCurve');
+    if (!curve) return { present: false, value: null };
+    const points = _directChild(curve, 'points');
+    const values = points ? _directChildren(points, 'li').map((point, sourceOrder) => {
+      const numbers = String(point.textContent || '').match(/-?\d*\.?\d+(?:[eE][+-]?\d+)?/g) || [];
+      return { x: numbers.length > 0 ? Number(numbers[0]) : null,
+        y: numbers.length > 1 ? Number(numbers[1]) : null, sourceOrder };
+    }) : [];
+    return { present: true, value: { points: values } };
+  };
+  const parseParts = scope => {
+    const container = _directChild(scope, 'parts');
+    if (!container) return { present: false, inheritFalse: false, values: [] };
+    return {
+      present: true, inheritFalse: _boolAttribute(container, 'Inherit') === false,
+      values: _directChildren(container, 'li').map((item, sourceOrder) => {
+        const classId = item.getAttribute('Class') || _textDirect(item, 'class') || null;
+        const rawParameters = {};
+        for (const child of _elementChildren(item)) {
+          rawParameters[child.tagName] = String(child.textContent || '').trim();
+        }
+        return {
+          classId, priority: _numberDirect(item, 'priority'), sourceOrder,
+          support: supportedParts.has(classId) ? 'supported' : 'unsupported',
+          rawParameters,
+        };
+      }),
+    };
+  };
+  const statDoc = docFor(input.statDefsXml);
+  const statRaw = [];
+  const scalarFields = [
+    'workerClass', 'defaultBaseValue', 'noSkillOffset', 'noSkillFactor',
+    'minValue', 'maxValue', 'roundToFiveOver', 'roundValue', 'scenarioRandomizable',
+  ];
+  for (const record of activeNodeRecords(statDoc, 'StatDef', 'StatDef')) {
+    const node = record.node;
+    const fields = { _present: {} };
+    for (const field of scalarFields) {
+      const element = _directChild(node, field);
+      fields._present[field] = !!element;
+      if (field === 'workerClass') fields[field] = _textDirect(node, field);
+      else if (field === 'roundValue' || field === 'scenarioRandomizable') {
+        fields[field] = _boolDirect(node, field);
+      } else fields[field] = _numberDirect(node, field);
+    }
+    fields.skillNeedOffsets = parseNeedList(node, 'skillNeedOffsets');
+    fields.skillNeedFactors = parseNeedList(node, 'skillNeedFactors');
+    fields.capacityOffsets = parseCapacityList(node, 'capacityOffsets');
+    fields.capacityFactors = parseCapacityList(node, 'capacityFactors');
+    fields.statFactors = parseDependencyList(node, 'statFactors');
+    fields.postProcessStatFactors = parseDependencyList(node, 'postProcessStatFactors');
+    fields.postProcessCurve = parseCurve(node);
+    fields.parts = parseParts(node);
+    statRaw.push({
+      defName: record.defName || null,
+      abstractName: record.abstractName,
+      parentName: node.getAttribute('ParentName') || null,
+      isAbstract: _boolAttribute(node, 'Abstract') === true,
+      rawFields: fields,
+      _completeness: 'complete', _completenessReasons: [],
+      _provenance: provenanceFor(record),
+    });
+  }
+  const resolvedStats = _resolveInheritance(statRaw, (parent, child) => {
+    const merged = { _present: Object.assign({}, parent._present || {}, child._present || {}) };
+    for (const field of scalarFields) {
+      merged[field] = child._present && child._present[field] ? child[field] : parent[field];
+    }
+    for (const field of ['skillNeedOffsets', 'skillNeedFactors', 'capacityOffsets',
+      'capacityFactors', 'statFactors', 'postProcessStatFactors', 'parts']) {
+      merged[field] = mergeList(parent[field], child[field]);
+    }
+    merged.postProcessCurve = child.postProcessCurve && child.postProcessCurve.present
+      ? child.postProcessCurve : parent.postProcessCurve;
+    return merged;
+  });
+  const statDefs = {};
+  for (const definition of resolvedStats) {
+    const dependencyUncertainty = reasonsFor('StatDef', definition.defName, 'dependencies');
+    const capacityUncertainty = reasonsFor('StatDef', definition.defName, 'capacities');
+    const skillUncertainty = reasonsFor('StatDef', definition.defName, 'skillNeeds');
+    const finalizationUncertainty = reasonsFor('StatDef', definition.defName, 'finalization');
+    const dependencies = (definition.statFactors && definition.statFactors.values || [])
+      .map((statDefId, sourceOrder) => ({
+        statDefId, phase: 'statFactorDependency', sourceOrder,
+        uncertainty: dependencyUncertainty.slice(),
+      }));
+    const postDependencies = (definition.postProcessStatFactors
+      && definition.postProcessStatFactors.values || []).map((statDefId, sourceOrder) => ({
+        statDefId, phase: 'postProcessStatFactorDependency', sourceOrder,
+        uncertainty: dependencyUncertainty.slice(),
+      }));
+    const generalReasons = reasonsFor('StatDef', definition.defName, 'fields');
+    _storeDefinition(statDefs, definition.defName, {
+      defName: definition.defName,
+      supported: supportedStats.has(definition.defName),
+      recordOnly: !supportedStats.has(definition.defName),
+      workerClassId: definition.workerClass || null,
+      defaultBaseValue: definition.defaultBaseValue,
+      noSkillOffset: definition.noSkillOffset,
+      noSkillFactor: definition.noSkillFactor,
+      minValue: definition.minValue,
+      maxValue: definition.maxValue,
+      roundToFiveOver: definition.roundToFiveOver,
+      roundValue: definition.roundValue,
+      scenarioRandomizable: definition.scenarioRandomizable,
+      skillNeedOffsets: (definition.skillNeedOffsets && definition.skillNeedOffsets.values || []).slice(),
+      skillNeedFactors: (definition.skillNeedFactors && definition.skillNeedFactors.values || []).slice(),
+      capacityOffsets: (definition.capacityOffsets && definition.capacityOffsets.values || []).slice(),
+      capacityFactors: (definition.capacityFactors && definition.capacityFactors.values || []).slice(),
+      dependencies,
+      postProcessStatFactors: postDependencies.map(item => item.statDefId),
+      postProcessDependencies: postDependencies,
+      postProcessCurve: definition.postProcessCurve && definition.postProcessCurve.value,
+      parts: (definition.parts && definition.parts.values || []).slice(),
+      phaseCompleteness: {
+        base: generalReasons.length ? 'partial' : 'complete',
+        skillNeeds: skillUncertainty.length ? 'partial' : 'complete',
+        capacities: capacityUncertainty.length ? 'partial' : 'complete',
+        dependencies: dependencyUncertainty.length ? 'partial' : 'complete',
+        finalization: generalReasons.length || finalizationUncertainty.length ? 'partial' : 'complete',
+      },
+      _completeness: generalReasons.length || dependencyUncertainty.length
+        || capacityUncertainty.length || skillUncertainty.length
+        || finalizationUncertainty.length ? 'partial' : definition._completeness,
+      _completenessReasons: _uniqueStrings((definition._completenessReasons || [])
+        .concat(generalReasons, dependencyUncertainty, capacityUncertainty,
+          skillUncertainty, finalizationUncertainty)),
+      _provenance: definition._provenance,
+    });
+  }
+
+  const facets = { workGivers: {}, recipes: {}, jobDefs: {} };
+  const facetDoc = docFor(input.facetDefsXml);
+  for (const record of activeNodeRecords(facetDoc, 'WorkGiverDef', 'WorkGiverDef')) {
+    if (!record.defName || _boolAttribute(record.node, 'Abstract') === true) continue;
+    _storeDefinition(facets.workGivers, record.defName, {
+      defName: record.defName,
+      workTypeDefId: _textDirect(record.node, 'workType'),
+      giverClassId: _textDirect(record.node, 'giverClass'),
+      jobDefId: _textDirect(record.node, 'jobDef'),
+      semanticBinding: null,
+      _completeness: 'complete', _completenessReasons: [],
+      _provenance: provenanceFor(record),
+    });
+  }
+  for (const record of activeNodeRecords(facetDoc, 'RecipeDef', 'RecipeDef')) {
+    if (!record.defName || _boolAttribute(record.node, 'Abstract') === true) continue;
+    const statDefIds = _uniqueStrings([
+      _textDirect(record.node, 'workSpeedStat'),
+      _textDirect(record.node, 'efficiencyStat'),
+      _textDirect(record.node, 'workTableEfficiencyStat'),
+    ]);
+    const workSkillDefIds = _uniqueStrings([_textDirect(record.node, 'workSkill')]);
+    _storeDefinition(facets.recipes, record.defName, {
+      defName: record.defName,
+      workerClassId: _textDirect(record.node, 'workerClass'),
+      statDefIds, workSkillDefIds, semanticBinding: null,
+      _completeness: 'complete', _completenessReasons: [],
+      _provenance: provenanceFor(record),
+    });
+  }
+  for (const record of activeNodeRecords(facetDoc, 'JobDef', 'JobDef')) {
+    if (!record.defName || _boolAttribute(record.node, 'Abstract') === true) continue;
+    _storeDefinition(facets.jobDefs, record.defName, {
+      defName: record.defName,
+      driverClassId: _textDirect(record.node, 'driverClass'),
+      semanticBinding: null,
+      _completeness: 'complete', _completenessReasons: [],
+      _provenance: provenanceFor(record),
+    });
+  }
+
+  const passions = {};
+  const passionDoc = docFor(input.passionDefsXml);
+  const passionNodes = passionDoc && passionDoc.getElementsByTagName
+    ? passionDoc.getElementsByTagName('VSE.Passions.PassionDef') : [];
+  for (let index = 0; index < passionNodes.length; index++) {
+    const node = passionNodes[index];
+    if (_boolAttribute(node, 'Abstract') === true) continue;
+    const defName = _textDirect(node, 'defName');
+    if (!defName) continue;
+    const rawFields = {};
+    for (const child of _elementChildren(node)) {
+      if (child.tagName === 'defName') continue;
+      rawFields[child.tagName] = String(child.textContent || '').trim();
+    }
+    _storeDefinition(passions, defName, {
+      defName, providerClassId: node.tagName,
+      rawFields, semantics: null,
+      providerFingerprint: opts.providerFingerprint || null,
+      runtimeFingerprint: opts.runtimeFingerprint || null,
+      _completeness: opts.providerFingerprint ? 'partial' : 'unknown',
+      _completenessReasons: ['unsupportedPassionSemantics'],
+      _provenance: _definitionProvenance(opts, index, defName),
+    });
+  }
+
+  const activeComplete = active.completeness === 'complete';
+  const skillDatasetReasons = reasonsFor('SkillDef', null, 'catalogue');
+  return {
+    schemaVersion: 1,
+    pawnIndependent: true,
+    runtimeFingerprint: opts.runtimeFingerprint || null,
+    providerFingerprint: opts.providerFingerprint || null,
+    activePackageResolution: {
+      ids: Array.from(activeIds), completeness: active.completeness || 'unknown',
+      reasons: Array.isArray(active.reasons) ? active.reasons.slice() : [],
+    },
+    catalogueCompleteness: {
+      skillDefs: activeComplete && !skillDatasetReasons.length ? 'complete' : 'partial',
+      statDefs: activeComplete ? 'complete' : 'partial',
+      sourceOperations: activeComplete ? 'complete' : 'partial',
+      facets: activeComplete ? 'complete' : 'partial',
+      passions: activeComplete && opts.providerFingerprint ? 'partial' : 'unknown',
+    },
+    skillDefs,
+    sourceOperations,
+    statDefs,
+    facets,
+    passions,
+    relevantPatchNotApplied: JSON.parse(JSON.stringify(uncertainty)),
+  };
+}
+
 function resolveC4ActivePackageIds(importMeta) {
   if (!importMeta || !Array.isArray(importMeta.modIds)) {
     return { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['missingTargetSaveModList'] };
