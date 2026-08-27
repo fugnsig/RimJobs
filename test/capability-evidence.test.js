@@ -2698,5 +2698,35 @@ module.exports = function run() {
     'CE-C5APT-012 parser preserves overrides without equating presence to Gene Active');
   }
 
+  {
+    const result = CE.collectPawnEvidence(mk('c5pawnbridge', {
+      bioAge: 29, raceDefName: 'SyntheticRace',
+      biologicalAgeFact: { state: 'known', value: 29.75, evidence: [{ sourceKind: 'savePawn' }] },
+      raceDefFact: { state: 'known', value: 'SyntheticRace', evidence: [{ sourceKind: 'savePawn' }] },
+    }));
+    ok(result.structuralContextFacts.biologicalAge.value === 29.75
+      && result.structuralContextFacts.raceDef.value === 'SyntheticRace'
+      && result.structuralContextFacts.raceProperties.humanlike.state === 'unknown',
+    'CE-C5STAT-001 one-argument collection preserves typed structural facts without identity inference');
+  }
+
+  {
+    const result = CE.collectPawnEvidence(mk('c5statconservation', {
+      traits: ['fast_learner'],
+      traitRuntimeFacts: [{ traitDefId: 'fast_learner', degree: 0, sourceOrder: 0,
+        suppression: { state: 'known', value: false, evidence: [] } }],
+      traitSuppressionFacts: { fast_learner: { state: 'known', value: false } },
+    }), { effectivenessSourceCatalogues: {
+      sourceOperations: { traits: { fast_learner: { traitDegrees: [{ degree: 0,
+        statOffsets: [{ kind: 'statOffset', statDefId: 'GlobalLearningFactor',
+          value: 0.75, sourceOrder: 0 }], statFactors: [] }] } } },
+    } });
+    const glf = result.statOperations.filter(operation =>
+      operation.statDefId === 'GlobalLearningFactor' && operation.kind === 'statOffset');
+    ok(glf.length === 2 && glf.filter(operation => operation.canonicalEligible).length === 1
+      && glf.some(operation => operation.superseded),
+    'CE-C5STAT-002 provider-bound GLF operation supersedes the legacy exact bridge once');
+  }
+
   return { name: 'capability evidence (C2 adapters)', failures, total };
 };

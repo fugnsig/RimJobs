@@ -1323,12 +1323,21 @@ Object.assign(App, {
       const thingIDNumber = thingIDMatch ? parseInt(thingIDMatch[1]) : 999999;
 
       // Parse age - LAST entry for carrier, first for non-carrier
-      let bioYears = null, chronoYears = null;
+      let bioYears = null, chronoYears = null, biologicalAgeFact = null;
       const allBioTicks = [...block.matchAll(/<ageBiologicalTicks>(\d+)<\/ageBiologicalTicks>/g)];
       const allChronoTicks = [...block.matchAll(/<ageChronologicalTicks>(\d+)<\/ageChronologicalTicks>/g)];
       if (allBioTicks.length > 0) {
         const idx = hasNestedPawn ? allBioTicks.length - 1 : 0;
-        bioYears = Math.floor(parseInt(allBioTicks[idx][1]) / 3600000);
+        const biologicalTicks = parseInt(allBioTicks[idx][1], 10);
+        bioYears = Math.floor(biologicalTicks / 3600000);
+        biologicalAgeFact = {
+          state: 'known', value: biologicalTicks / 3600000,
+          evidence: [{
+            sourceKind: 'savePawn', sourceId: loadID || null,
+            sourceField: 'ageTracker.ageBiologicalTicks',
+            rawValue: allBioTicks[idx][1],
+          }],
+        };
       }
       if (allChronoTicks.length > 0) {
         const idx = hasNestedPawn ? allChronoTicks.length - 1 : 0;
@@ -1485,7 +1494,15 @@ Object.assign(App, {
         firstName: first || '',
         lastName: last || '',
         kindDef,
+        pawnKindDefFact: kindDef ? {
+          state: 'known', value: kindDef,
+          evidence: [{ sourceKind: 'savePawn', sourceId: loadID || null, sourceField: 'kindDef' }],
+        } : { state: 'unknown', value: null, evidence: [] },
         raceDefName,
+        raceDefFact: raceDefName ? {
+          state: 'known', value: raceDefName,
+          evidence: [{ sourceKind: 'savePawn', sourceId: loadID || null, sourceField: 'race/def' }],
+        } : { state: 'unknown', value: null, evidence: [] },
         gender,
         skills,
         passions,
@@ -1514,6 +1531,15 @@ Object.assign(App, {
         rawHediffs,
         relations,
         bioAge: bioYears,
+        biologicalAgeFact: biologicalAgeFact
+          || { state: 'unknown', value: null, evidence: [] },
+        lifeStageDefFact: (() => {
+          const lifeStageDef = _tag(block, 'lifeStageDef');
+          return lifeStageDef ? {
+            state: 'known', value: lifeStageDef,
+            evidence: [{ sourceKind: 'savePawn', sourceId: loadID || null, sourceField: 'ageTracker.lifeStageDef' }],
+          } : { state: 'unknown', value: null, evidence: [] };
+        })(),
         chronoAge: chronoYears,
         favColorDef: favColorDef,
         displayOrder,
@@ -1578,7 +1604,11 @@ Object.assign(App, {
         factionName: factionNameMap[factionMatch[1]] || '',
         ideoName: ideoNameMap[fields.ideoRef] || '',
         royalTitle: royalTitleStr(fields.royaltyTitles),
-        guestStatus: guestStatus || ''
+        guestStatus: guestStatus || '',
+        slaveStatusFact: guestMatch ? {
+          state: 'known', value: guestStatus === 'Slave',
+          evidence: [{ sourceKind: 'savePawn', sourceId: loadID || null, sourceField: 'guestTracker.guestStatus' }],
+        } : { state: 'unknown', value: null, evidence: [] },
       });
     }
 
@@ -2047,6 +2077,17 @@ Object.assign(App, {
       // a later import shows them recovered, or the user clears the flag by hand.
       if (p.downed) pawn.downed = true;
       pawn.currentStatusSources = p.currentStatusSources || null;
+      pawn.biologicalAgeFact = p.biologicalAgeFact
+        ? JSON.parse(JSON.stringify(p.biologicalAgeFact)) : { state: 'unknown', value: null, evidence: [] };
+      pawn.lifeStageDefFact = p.lifeStageDefFact
+        ? JSON.parse(JSON.stringify(p.lifeStageDefFact)) : { state: 'unknown', value: null, evidence: [] };
+      pawn.slaveStatusFact = p.slaveStatusFact
+        ? JSON.parse(JSON.stringify(p.slaveStatusFact)) : { state: 'unknown', value: null, evidence: [] };
+      pawn.pawnKindDefFact = p.pawnKindDefFact
+        ? JSON.parse(JSON.stringify(p.pawnKindDefFact)) : { state: 'unknown', value: null, evidence: [] };
+      pawn.raceDefFact = p.raceDefFact
+        ? JSON.parse(JSON.stringify(p.raceDefFact)) : { state: 'unknown', value: null, evidence: [] };
+      pawn.kindDef = p.kindDef || null;
 
       // Store gene def IDs for romance/orientation estimation
       if (p.geneDefIds && p.geneDefIds.length) pawn.geneDefIds = p.geneDefIds;
@@ -2701,6 +2742,13 @@ Object.assign(App, {
         match.lastName = incoming.lastName || match.lastName;
         match.bioAge = incoming.bioAge;
         match.chronoAge = incoming.chronoAge;
+        for (const factField of ['biologicalAgeFact', 'lifeStageDefFact',
+          'slaveStatusFact', 'pawnKindDefFact', 'raceDefFact']) {
+          match[factField] = incoming[factField]
+            ? JSON.parse(JSON.stringify(incoming[factField]))
+            : { state: 'unknown', value: null, evidence: [] };
+        }
+        match.kindDef = incoming.kindDef || null;
         match.gender = incoming.gender || match.gender;
         match.childhood = incoming.childhood || match.childhood;
         match.adulthood = incoming.adulthood || match.adulthood;

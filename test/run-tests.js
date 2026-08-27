@@ -36,6 +36,7 @@ const tests = [
   './c4-compatibility.test.js',
   './c5-audit-contract.test.js',
   './effectiveness-scanner.test.js',
+  './c5-pawn-stat-evidence.test.js',
 ];
 
 (async () => {
