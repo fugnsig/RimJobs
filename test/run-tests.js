@@ -43,6 +43,7 @@ const tests = [
   './structural-learning-resolver.test.js',
   './structural-effectiveness-resolver.test.js',
   './c5-compatibility.test.js',
+  './c6-rest-stat-registration.test.js',
 ];
 
 (async () => {
