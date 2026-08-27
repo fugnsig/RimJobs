@@ -975,6 +975,7 @@ function _buildExactLearningStatOperations(effects, pawn, unresolvedSources) {
       phase,
       phaseOrder,
       sourceOrder: 0,
+      durability: 'durable',
       value: descriptor.value,
       applicability,
       applicabilityReason: applicability === 'unknown'
@@ -1030,7 +1031,7 @@ const _C5_STAT_PHASES = Object.freeze({
   lifeStage: Object.freeze({ statOffset: ['lifeStageOffset', 9, 'lifeStageOffsets'], statFactor: ['lifeStageFactor', 16, 'lifeStageFactors'] }),
   equipment: Object.freeze({ statOffset: ['equipmentOffset', 10, 'equipmentOffsets'], statFactor: ['requestThingOperation', 17, 'requestThingOperations'] }),
   requestThing: Object.freeze({ statOffset: ['requestThingOperation', 17, 'requestThingOperations'], statFactor: ['requestThingOperation', 17, 'requestThingOperations'] }),
-  inspiration: Object.freeze({ statOffset: ['inspirationOperation', 18, 'inspirationOperations'], statFactor: ['inspirationOperation', 18, 'inspirationOperations'] }),
+  inspiration: Object.freeze({ statOffset: ['inspiration', 21, 'inspirationOperations'], statFactor: ['inspiration', 21, 'inspirationOperations'] }),
 });
 
 const _C5_SOURCE_FAMILIES = Object.freeze([
@@ -1114,6 +1115,7 @@ function _bindDefinitionOperations(output, definition, source) {
         sourceDefId: source.defId,
         sourceField: source.sourceField + '.' + (kind === 'statOffset' ? 'statOffsets' : 'statFactors'),
         phase: phase[0], phaseOrder: phase[1], sourceFamily: phase[2],
+        durability: source.durability || 'unknown',
         sourceOrder,
         sourceInstanceOrder: source.instanceOrder,
         value,
@@ -1169,6 +1171,7 @@ function _bindPawnStatOperations(pawn, options, unresolvedSources) {
     _bindDefinitionOperations(operations, degree, {
       family: 'trait', defId: fact.traitDefId, instanceOrder: fact.sourceOrder ?? index,
       sourceField: 'TraitDegreeData', applicability: _booleanApplicability(fact.suppression, true),
+      durability: 'durable',
       provenance: fact.provenance,
     });
   }
@@ -1182,6 +1185,7 @@ function _bindPawnStatOperations(pawn, options, unresolvedSources) {
     _bindDefinitionOperations(operations, definition, {
       family: 'gene', defId: fact.geneDefId, instanceOrder: fact.sourceOrder ?? index,
       sourceField: 'GeneDef', applicability: _booleanApplicability(fact.active, false),
+      durability: 'durable',
       provenance: fact.provenance,
     });
   }
@@ -1210,6 +1214,8 @@ function _bindPawnStatOperations(pawn, options, unresolvedSources) {
         stageOrder: stage.sourceOrder ?? stageIndex,
         sourceField: 'HediffStage',
         applicability: severityKnown ? 'applicable' : 'unknown',
+        durability: fact.permanent === true ? 'durable'
+          : fact.permanent === false ? 'current' : 'unknown',
         provenance: { sourceKind: 'healthSnapshot', sourceField: 'health/hediffs' },
       });
     }
@@ -1226,6 +1232,7 @@ function _bindPawnStatOperations(pawn, options, unresolvedSources) {
       _bindDefinitionOperations(operations, definition, {
         family, defId, instanceOrder: fact.sourceOrder ?? index, sourceField,
         applicability: _booleanApplicability(fact.applicability, false),
+        durability: fact.durability || 'durable',
         provenance: fact.provenance,
       });
     }
@@ -1248,6 +1255,7 @@ function _bindPawnStatOperations(pawn, options, unresolvedSources) {
       }, {
         family, defId: item.sourceDefId || field, instanceOrder: item.sourceOrder ?? index,
         sourceField: field, applicability: item.applicability || 'unknown',
+        durability: item.durability || 'current',
         provenance: item.provenance,
       });
     }

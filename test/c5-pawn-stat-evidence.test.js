@@ -104,6 +104,11 @@ module.exports = function run() {
     ok(result.statOperations.every((operation, index, list) =>
       index === 0 || list[index - 1].phaseOrder <= operation.phaseOrder),
     'C5-PS-003 operations preserve StatWorker phase order');
+    ok(result.statOperations.filter(operation => ['trait', 'gene', 'precept', 'role', 'lifeStage']
+      .includes(operation.evidence[0].sourceKind)).every(operation => operation.durability === 'durable')
+      && result.statOperations.filter(operation => operation.evidence[0].sourceKind === 'hediff')
+        .every(operation => operation.durability === 'unknown'),
+    'C5-PS-003B durability stays typed without promoting uncertain hediff persistence');
   }
 
   // C5-PS-004: inapplicable operations remain visible but cannot be canonical.
