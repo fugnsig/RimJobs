@@ -53,6 +53,7 @@ const tests = [
   './c7-evaluation-coordinator.test.js',
   './c7-static-gates.test.js',
   './c7-grid-parity.test.js',
+  './c7-consumer-parity.test.js',
 ];
 
 (async () => {
