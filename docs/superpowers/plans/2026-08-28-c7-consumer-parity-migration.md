@@ -1244,24 +1244,27 @@ git commit -m "C7: migrate analyser and Work Planner to coordinator, eliminate d
 
 **Files:**
 - Modify: `files/engine.js:317-447` (`runMinMaxAssignment`)
+- Modify: `files/app-priorities.js:230-238` (`autoAssignAll` request context)
+- Modify: `files/app-pawns.js:2824-2828` (`setPawnMoodPreset` request context)
 - Create: `test/c7-ranking-parity.test.js`
 - Modify: `test/run-tests.js`
 
 **Acceptance Criteria:**
-- [ ] Full priority matrix matches C1 for the capability corpus test colonies
-- [ ] Named C4 delta pawns gain eligibility and receive appropriate priority assignments
-- [ ] Scoring formula `(realSpeed * 100) + (passion * 25) + role/xeno/gene/trait/mood bonuses` preserved verbatim
-- [ ] Tie-breaking order unchanged (sort stability)
-- [ ] Skillless job handling unchanged
-- [ ] Mood preset overrides (panic/chill/night) unchanged
-- [ ] `evaluatePawnJob()` no longer called by `runMinMaxAssignment()`
-- [ ] Idempotence: running auto-assign twice produces the same matrix
+- [x] Full priority matrix matches C1 for the capability corpus test colonies
+- [x] Named C4 delta pawns gain eligibility and receive appropriate priority assignments
+- [x] Scoring formula `(realSpeed * 100) + (passion * 25) + role/xeno/gene/trait/mood bonuses` preserved verbatim
+- [x] Tie-breaking order unchanged (sort stability)
+- [x] Skillless job handling unchanged
+- [x] Mood preset overrides (panic/chill/night) unchanged
+- [x] `evaluatePawnJob()` no longer called by `runMinMaxAssignment()`
+- [x] Both production auto-assign entry points forward request-scoped C7 context maps
+- [x] Idempotence: running auto-assign twice produces the same matrix
 
 **Verify:** `node test/run-tests.js` - all suites pass, new ranking parity suite has 20+ checks.
 
 **Steps:**
 
-- [ ] **Step 1: Write ranking parity tests**
+- [x] **Step 1: Write ranking parity tests**
 
 Create `test/c7-ranking-parity.test.js`. Build test colonies and compare full priority matrices:
 
@@ -1281,7 +1284,7 @@ Create `test/c7-ranking-parity.test.js`. Build test colonies and compare full pr
 // C7-RANK-010: Tie-breaking stability
 ```
 
-- [ ] **Step 2: Migrate runMinMaxAssignment to coordinator**
+- [x] **Step 2: Migrate runMinMaxAssignment to coordinator**
 
 Replace `evaluatePawnJob` at engine.js:332:
 
@@ -1323,7 +1326,7 @@ Note: During C7 parity migration, the ranking inputs continue using the legacy h
 
 The function signature changes to accept `contextMap`.
 
-- [ ] **Step 3: Update autoAssignAll caller**
+- [x] **Step 3: Update autoAssignAll caller**
 
 At `app-priorities.js:234`, build contextMap before calling:
 
@@ -1334,10 +1337,19 @@ this.state.pawns.forEach(p => contextMap.set(p.id,
 Engine.runMinMaxAssignment(this.state.pawns, this.state.roles, this.state.priorities, this._visibleJobs(), contextMap);
 ```
 
-- [ ] **Step 4: Run tests and commit**
+The mood-preset entry point in `app-pawns.js` is also a production caller. It must
+build the same request-scoped context map and pass it as the fifth argument. This
+caller was discovered during the Task 6 pre-edit architecture search and is owned
+by Task 6 so no production auto-assign path bypasses C7 eligibility.
+
+- [x] **Step 4: Run tests and commit**
+
+Actual verification before commit: focused 8 suites / 431 checks / 0 failures;
+full 51 suites / 35,313 checks / 0 skipped / 0 failures. Syntax checks,
+static C7 gates, architecture searches, and `git diff --check` passed.
 
 ```
-git add files/engine.js files/app-priorities.js test/c7-ranking-parity.test.js test/run-tests.js
+git add files/engine.js files/app-priorities.js files/app-pawns.js test/c7-ranking-parity.test.js test/run-tests.js
 git commit -m "C7: migrate auto-assign to coordinator with full priority-matrix parity"
 ```
 

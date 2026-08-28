@@ -56,6 +56,7 @@ const tests = [
   './c7-consumer-parity.test.js',
   './c5-production-contract.test.js',
   './c7-skill-display-parity.test.js',
+  './c7-ranking-parity.test.js',
 ];
 
 (async () => {

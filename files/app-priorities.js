@@ -243,7 +243,11 @@ Object.assign(App, {
   autoAssignAll() {
     if (!this._guardPriorityEdit('use Auto-Assign', true)) return false;
     // Only assign the columns currently visible in the table.
-    Engine.runMinMaxAssignment(this.state.pawns, this.state.roles, this.state.priorities, this._visibleJobs());
+    const contextMap = this._c7PawnContextMap(
+      this.state.pawns, this._c7EvidenceOptionsByPawn);
+    Engine.runMinMaxAssignment(
+      this.state.pawns, this.state.roles, this.state.priorities,
+      this._visibleJobs(), contextMap);
     this.renderTable();
     this.toast('Auto-assigned visible columns, weighing skills, passions and xenotype/gene effects.');
     this.triggerAutoSave();

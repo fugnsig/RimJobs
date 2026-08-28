@@ -213,10 +213,12 @@ const Engine = {
     catch (_) { return ((p.passions || {})[skillId] | 0); }
   },
 
-  runMinMaxAssignment(pawns, roles, priorities, jobs) {
+  runMinMaxAssignment(pawns, roles, priorities, jobs, contextMap) {
     if (pawns.length === 0) return;
     // Scope to the provided job set (the table's visible columns) when given.
     const jobList = jobs && jobs.length ? jobs : JOBS;
+    const assignmentPriorityScale = typeof PriorityScale !== 'undefined'
+      ? PriorityScale : { highest: 1, lowestAuto: () => 4 };
 
     // 1. Reset priorities for the jobs we're assigning
     pawns.forEach(p => {
@@ -227,19 +229,21 @@ const Engine = {
 
     // 2. Iterate through every job to ensure colony-wide coverage
     jobList.forEach(j => {
-      const capable = pawns.filter(p => !App.isIncapable(p, j));
+      const capable = pawns.filter(p => this._c7AnalyserEligible(
+        p, j, contextMap && contextMap.get(p.id)));
       if (capable.length === 0) return;
 
       // Mandatory Emergency Handlers (Everyone capable does these at P1)
       if (['firefight', 'patient', 'bed_rest'].includes(j.id)) {
-        capable.forEach(p => priorities[p.id][j.id] = 1);
+        capable.forEach(p => priorities[p.id][j.id] = assignmentPriorityScale.highest);
         return;
       }
 
       // Calculate "Aptitude Scores" using real RimWorld work speed formulas + growth potential
       const rankings = capable.map(p => {
-        const skill = j.skill ? App.effectiveSkill(p, j.skill) : 0;
-        const passion = Engine.passionBucket(p, j.skill);
+        const hasSkill = !!j.skill;
+        const skill = hasSkill ? App.effectiveSkill(p, j.skill) : 0;
+        const passion = hasSkill ? this.passionBucket(p, j.skill) : 0;
         const roleDef = App.getRole(p.role || 'none');
         const isRoleSkill = j.skill && (roleDef.skillMods || {})[j.skill];
         const xenoDef = App.getXeno(p.xenotype);
@@ -300,7 +304,7 @@ const Engine = {
 
         // --- Mood Overrides (Phase 0) ---
         if (rank.mood === 'panic' && !['firefight', 'patient', 'bed_rest'].includes(j.id)) {
-          if (index === 0 && pawns.length === 1) pLevel = 4;
+          if (index === 0 && pawns.length === 1) pLevel = assignmentPriorityScale.lowestAuto();
           else pLevel = null;
         } else {
           // Use real work speed for smarter thresholds
@@ -325,7 +329,7 @@ const Engine = {
           }
           // --- PRIORITY 4: The Fallback ---
           else if (index === 0 || ['hauling', 'cleaning', 'basic_work', 'plant_cut'].includes(j.id)) {
-            pLevel = 4;
+            pLevel = assignmentPriorityScale.lowestAuto();
           }
         }
 
@@ -339,7 +343,7 @@ const Engine = {
       // give it to the best person at P4.
       const isJobAssigned = capable.some(p => priorities[p.id][j.id] !== null);
       if (!isJobAssigned) {
-        priorities[rankings[0].pId][j.id] = 4;
+        priorities[rankings[0].pId][j.id] = assignmentPriorityScale.lowestAuto();
       }
     });
   },
