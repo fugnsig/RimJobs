@@ -183,6 +183,9 @@ Object.assign(App, {
     return true;
   },
 
+  // @deprecated C7: retained only for context-free legacy API compatibility and
+  // historical C1 parity evidence. Production C7 request paths use Permission
+  // and Availability peer facts; do not add new consumers.
   isIncapable(pawn, job) {
     // Downed (from save import): the pawn is incapacitated in bed - a wound, missing
     // organ or modded part (e.g. an android awaiting a reactor) keeps them down for an

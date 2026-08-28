@@ -1,8 +1,10 @@
 /**
- * C4 shadow-only compatibility surface.
+ * @deprecated C7 closure: test-only C4 migration evidence.
  *
  * Legacy truth delegates to the frozen C1 production functions. Canonical
  * reports are compared without changing, replacing, or feeding those callers.
+ * This module is not loaded by the packaged application; retain it through C7
+ * closure so the historical parity corpus stays executable.
  */
 const C4LegacyCompatibility = (() => {
   function evaluateLegacyPermission(pawn, job) {

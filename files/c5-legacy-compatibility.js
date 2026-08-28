@@ -1,4 +1,8 @@
-/** C5 isolated shadow-only delegation to frozen C1 effectiveness surfaces. */
+/**
+ * @deprecated for canonical calculation. Retained through C8 as the explicit
+ * owner of frozen C7 numeric ranking/work-speed compatibility projections and
+ * as executable C5 migration evidence. Do not add canonical consumers.
+ */
 const C5LegacyCompatibility = (() => {
   const namedDeltaCodes = Object.freeze([
     'creationGainAlreadyPersisted',

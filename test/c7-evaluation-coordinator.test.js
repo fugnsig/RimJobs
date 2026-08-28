@@ -35,7 +35,7 @@ module.exports = function run() {
     'availability-resolver.js', 'capacity-resolver.js',
     'c4-evaluation-context.js', 'c5-evaluation-context.js',
     'structural-stat-resolver.js', 'temporal-profile-resolver.js',
-    'c4-legacy-compatibility.js', 'c7-evaluation-coordinator.js',
+    'c7-evaluation-coordinator.js',
   ], { App });
   const Coordinator = ctx.C7EvaluationCoordinator;
 
@@ -134,13 +134,9 @@ module.exports = function run() {
   }
 
   {
-    const pawnContext = Coordinator.createPawnContext(mkPawn('shadow-1'), options);
-    const shadow = pawnContext.legacyShadow({ id: 'mining' });
-    ok(shadow && typeof shadow === 'object', 'C7-COORD-011 legacy shadow resolves');
-    ok(typeof shadow.sameIncapable === 'boolean', 'C7-COORD-011 shadow compares incapability');
-    ok(typeof shadow.deltaCode === 'string', 'C7-COORD-011 shadow names its delta');
-    ok(shadow.legacy && shadow.legacy.permission,
-      'C7-COORD-011 shadow includes actual legacy permission report');
+    const pawnContext = Coordinator.createPawnContext(mkPawn('closed-1'), options);
+    ok(!Object.prototype.hasOwnProperty.call(pawnContext, 'legacyShadow'),
+      'C7-COORD-011 production context exposes canonical facts only');
   }
 
   {
@@ -189,11 +185,6 @@ module.exports = function run() {
       PermissionResolver: { resolve() { return { state: 'allowed' }; } },
       AvailabilityResolver: { resolve() { return { state: 'available' }; } },
       TemporalProfileResolver: { resolve() { c6Calls++; return Object.freeze({}); } },
-      C4LegacyCompatibility: {
-        evaluateLegacyPermission() { return { status: 'allowed' }; },
-        evaluateLegacyIncapable() { return false; },
-        compare(input) { return input; },
-      },
     }).C7EvaluationCoordinator;
     const pawnContext = isolated.createPawnContext({ id: 'instrumented' });
     ok(c2Calls === 1, 'C7-COORD-013 C2 runs exactly once per context');

@@ -7,7 +7,8 @@ Lookup table mapping features to files, entry points, state and tests.
 ## Work Priorities
 
 **Primary files:**
-- `files/engine.js` - capability evaluation (`evaluatePawnJob`, `evaluateJobPermission`), temporal coverage (`calculateTemporalCoverage`, `analyzeTemporalResilience`), temporal proposals (`proposeTemporalAdjustments`), auto-assign (`runMinMaxAssignment`), optimiser (`analyzeColony`), work speed (`calculateRealWorkSpeed`), best-pawn selection (`_bestPawnForJob`)
+- `files/c7-evaluation-coordinator.js` - request-scoped canonical C2-C6 pawn context used by migrated work consumers
+- `files/engine.js` - explicit C7 policy projections, temporal coverage (`calculateTemporalCoverage`, `analyzeTemporalResilience`), temporal proposals (`proposeTemporalAdjustments`), auto-assign (`runMinMaxAssignment`), optimiser (`analyzeColony`), legacy-compatible work speed (`calculateRealWorkSpeed`), best-pawn selection (`_bestPawnForJob`)
 - `files/app-priorities.js` - UI: priority click/wheel/key handlers, manual/simple mode, Work Planner modal (`openWorkPlanner`), optimiser panel (`_optimizerHTML`)
 - `files/app-render.js` - priorities table rendering (`renderTable`, `_renderTableHorizontal`, `_renderTableVertical`), managed columns (`_visibleJobs`, `_ensureJobOrder`, `addJobColumn`)
 
@@ -55,11 +56,11 @@ Lookup table mapping features to files, entry points, state and tests.
 ## Pawn Management
 
 **Primary files:**
-- `files/app-pawns.js` - `effectiveSkill`, `isIncapable`, `_resolveGeneDef`, pawn CRUD, skill/trait/health/relationship editors, `showXenoDetails`, gene display helpers, drag/drop, sort
+- `files/app-pawns.js` - legacy numeric `effectiveSkill`, deprecated context-free `isIncapable`, `_resolveGeneDef`, pawn CRUD, skill/trait/health/relationship editors, `showXenoDetails`, gene display helpers, drag/drop, sort
 
 **Key functions:**
-- `effectiveSkill(pawn, skillId)` - base + xenotype + gene + trait skill mods
-- `isIncapable(pawn, job)` - checks incapBlocks against backstory/trait/gene work disables
+- `effectiveSkill(pawn, skillId)` - frozen legacy numeric projection retained for C7 ranking compatibility until C8; C5-backed display paths do not use it
+- `isIncapable(pawn, job)` - deprecated C1 boolean projection retained for context-free compatibility and historical tests; packaged C7 request paths use C4 Permission and Availability
 - `_resolveGeneDef(gId)` - bridges raw gene defNames to scanned/curated gene definitions
 
 **Tests:**
@@ -272,7 +273,7 @@ Lookup table mapping features to files, entry points, state and tests.
 - `files/permission-resolver.js` - emits schema-version-1 structural `PermissionReport` values (`allowed`, `blocked`, `unknown`) from C2 evidence, C3 structural capacity facts, and the requirement snapshot. It evaluates exact namespaces, conditional persistent restrictions, race work gates, strict capacity thresholds, and WorkGiver alternatives. Structured target ambiguity resolves only when every supplied candidate has the same outcome.
 - `files/c4-evaluation-context.js` - creates one deeply immutable request-scoped context per pawn evaluation batch, with exactly one C2 evidence collection and one C3 capacity resolution. It forwards the full C3 capability-definition bundle and holds no revision cache or invalidation state.
 - `files/availability-resolver.js` - independently emits schema-version-1 current `AvailabilityReport` values (`available`, `unavailable`, `unknown`) from tri-state current statuses, C3 current capacity facts, temporary/current-only restrictions, and the same requirement snapshot. It never reads Permission.
-- `files/c4-legacy-compatibility.js` - shadow-only adapter. Legacy truth delegates unchanged to `Engine.evaluateJobPermission()` and `App.isIncapable()`; `compare()` names canonical-versus-legacy differences. Canonical unknown never projects to incapable.
+- `files/c4-legacy-compatibility.js` - deprecated, test-only shadow adapter retained as migration evidence. It is no longer loaded by `files/rimjobs.html`; canonical unknown never projects to incapable.
 
 **Dependency and load order:**
 
@@ -282,11 +283,11 @@ data
   -> C3 capacity resolver
   -> C4 requirement registry
   -> C4 Permission / immutable context / Availability
-  -> existing Engine and App legacy surfaces
-  -> C4 legacy compatibility shadow adapter
+  -> C7 request-scoped coordinator
+  -> explicit UI, analyser, assignment, and temporal policy projections
 ```
 
-`files/rimjobs.html` loads the pure modules in that order. No production planner, assignment, viability, bottleneck, scheduling, summary, priority, or renderer consumer invokes C4 yet. Consumer and UI migration is reserved for C7; smarter assignment behaviour is reserved for C8.
+`files/rimjobs.html` loads the canonical modules before the C7 coordinator. Priority cells, summaries, viability, bottlenecks, analyser/Work Planner, auto-assign, scheduler, and temporal coverage/resilience/proposals consume C4 through request-scoped C7 contexts. Permission and Availability remain peer reports. Smarter assignment behaviour remains reserved for C8.
 
 **Tests:**
 - `test/fixtures/c4-runtime-audit-1.6.4871.json` and `test/c4-audit-contract.test.js` - exact audited WorkTags, job partition, race gates, and WorkGiver path truths (25 checks).
@@ -313,7 +314,8 @@ data
 **Evidence and definition inputs:**
 - `files/app-save.js` and `files/capability-evidence.js` preserve raw SkillRecord presence as `present`, `absent`, or `unknown`, including independent level and passion field presence. Only the skill and passion resolvers may derive `runtimeDefaulted`, and only after a complete active SkillDef catalogue proves an absent record.
 - `files/capability-evidence.js` exposes exact canonical skill and stat operations, source-fact conservation, per-source-family completeness, and typed pawn context facts. Trait, gene, hediff, precept, role, and life-stage definition operations are joined to the current pawn at request time. A complete empty family proves no operation; a partial or unknown family opens an evaluation frontier.
-- `files/effectiveness-registry.js` builds a deeply immutable, pawn-independent definition snapshot. It contains exact SkillDef policies, passion providers, source-operation catalogues, job policies, phase templates, and five evaluated StatDefs: `GlobalLearningFactor`, `AnimalsLearningFactor`, `WorkSpeedGlobal`, `MiningSpeed`, and `CookSpeed`. Other evidenced facet stats remain `recordOnly`. The final registry search's `hediffs` match is this definition catalogue, not pawn evidence.
+- `files/c5-runtime-contract.js` packages the audited RimWorld `1.6.4871 rev590` runtime contract; `files/c5-definition-snapshot-factory.js` combines it with the current scanner/provider output through the registry and preserves unknown/partial semantics on incompatible runtime evidence.
+- `files/effectiveness-registry.js` builds a deeply immutable, pawn-independent definition snapshot. It contains exact SkillDef policies, passion providers, source-operation catalogues, job policies, phase templates, and seven evaluated StatDefs: `GlobalLearningFactor`, `AnimalsLearningFactor`, `WorkSpeedGlobal`, `MiningSpeed`, `CookSpeed`, `RestFallRateFactor`, and `RestRateMultiplier`. Other evidenced facet stats remain `recordOnly`. The final registry search's `hediffs` match is this definition catalogue, not pawn evidence.
 
 **Canonical modules:**
 - `files/c5-evaluation-context.js` reuses supplied C2 and C3 facts with zero additional work, or performs one C2 collection and one C3 resolution in standalone mode. The context is immutable and request-scoped.
@@ -321,7 +323,7 @@ data
 - `files/structural-stat-resolver.js` merges definition templates with the current pawn's canonical C2 stat operations in the audited 28-phase order. It stops at the first relevant frontier, retains a contiguous numeric prefix, marks later operations `notEvaluated`, handles dependency cycles, and uses only request-local memoisation.
 - `files/structural-learning-resolver.js` keeps direct passion-only learning separate from ordinary learning. Ordinary learning uses `GlobalLearningFactor` and, only for the exact Animals SkillDef, `AnimalsLearningFactor`. Current saturation and debug learning remain `notEvaluated`.
 - `files/structural-effectiveness-resolver.js` assembles duplicate-free plural `skillFacts`, `passionFacts`, and `learningRateFacts`, independent `globalWorkSpeed`, and top-level plural facets. A wholly skillless job has three empty arrays. Facets retain zero, one, or many StatDefs and never collapse to a job scalar.
-- `files/c5-legacy-compatibility.js` is shadow-only. It delegates unchanged C1 skill, passion, global-speed, and job-speed surfaces and retains the 14 reviewed differences by name. Legacy numbers never enter canonical calculation.
+- `files/c5-legacy-compatibility.js` is deprecated for canonical calculation but remains production-loaded as the explicit owner of frozen C7 numeric ranking/work-speed policy until C8. It also retains the reviewed named differences as executable migration evidence. Legacy numbers never enter canonical C5 calculation.
 
 **Dependency and load order:**
 
@@ -336,11 +338,11 @@ data
   -> C5 ordered stat resolver
   -> C5 learning resolver
   -> C5 plural report assembler
-  -> unchanged Engine and App C1 surfaces
-  -> C5 legacy shadow adapter
+  -> C7 request-scoped coordinator and C5 display projection
+  -> explicit C7 legacy ranking compatibility policy
 ```
 
-`files/rimjobs.html` loads the modules in this order and invokes none. No planner, renderer, assignment, priority, viability, bottleneck, optimiser, chart, or scheduler consumes C5. C7 owns parity-proven consumer migration and any durable caching boundary. C8 owns weighting, recommendations, ranking, and assignment intelligence.
+`files/rimjobs.html` loads the packaged contract, snapshot factory, registries, contexts, and resolvers before the C7 coordinator. C7 skill/stat displays consume exact requested C5 facts and preserve plural SkillDefs/facets; no primary skill is fabricated. Ranking, analyser, viability, and auto-assign deliberately retain their frozen legacy numeric projection until C8. There is no durable pawn-result cache.
 
 **Precision, state, and confidence:**
 - C3 exposes rounded structural capacity values. C5 Option A evaluates the audited capacity formulas against those public values and emits `capacityInputRoundedByC3`; the result is partial with `exactAgainstRoundedC3CapacityInput`, even when no semantic frontier exists. It never claims an interval or bit-exact runtime parity.
@@ -363,13 +365,13 @@ data
 - Current glow, inspiration, equipment, map, target, building, recipe, quest, training, and learning-saturation inputs remain current, mixed, unresolved, or `notEvaluated` as appropriate.
 - Missing applicability, active-package, trait suppression, gene activity, hediff persistence, scenario, or source-family completeness opens only the affected frontier.
 - Unsupported app/custom jobs and unsupported facet bindings remain explicit unknowns. There is no closest analogue, arbitrary PatchOperation interpreter, or arbitrary C# interpreter.
-- C5 emits no effectiveness score, primary skill, ranking proxy, assignment change, long-lived cache, or consumer migration. Production C1 output remains unchanged.
+- C5 emits no effectiveness score, primary skill, ranking proxy, assignment change, or long-lived cache. C7 consumes its structural facts without changing that C5 boundary.
 
 ### C6 Temporal Profile Resolution
 
 | File | Purpose |
 |------|---------|
-| `files/temporal-profile-resolver.js` | Shadow-only temporal profile resolver - resolves mechanism-based rest, recreation, window, condition, and activity facts from C2 evidence and C5 stat evaluations |
+| `files/temporal-profile-resolver.js` | Canonical mechanism resolver consumed through C7 - resolves rest, recreation, window, condition, and activity facts from C2 evidence and C5 stat evaluations |
 
 **API:** `TemporalProfileResolver.resolve(c5Context)` -> `TemporalProfile`
 
@@ -377,7 +379,7 @@ data
 
 **Output dimensions:** rest (need state + stat evaluations), recreation (recommendations only), windows (avoid/prefer hours), conditions (avoid conditions), activities (obligation + satisfiesNeeds overlap)
 
-**Shadow-only:** No production consumer. C7 owns migration.
+**Production boundary:** C7 consumes the profile through `pawnContext.temporalProfile()`. C6 still owns no sleep/joy-hour choice, break-risk rule, workload budget, child/baby policy, Undergrounder interpretation, or schedule-slot construction; those remain explicit C7 policy.
 
 **Tests:**
 - `test/c6-rest-stat-registration.test.js` - RestFallRateFactor and RestRateMultiplier fixture verification and registry presence (12 checks).
@@ -393,6 +395,46 @@ data
 - Modded activity composition stays unresolved rather than defaulted.
 - No life-stage temporal classification in v1 (bioAge thresholds are human-specific).
 - C6 emits no schedule, work budget, break-risk metadata, or hour assignment. Production scheduling remains unchanged.
+
+---
+
+## C7 Consumer Parity Migration
+
+**Primary module and API:**
+- `files/c7-evaluation-coordinator.js` exposes `C7EvaluationCoordinator.createPawnContext(pawn, options)`.
+- Each call creates one frozen request-scoped context, collects C2 evidence once, resolves C3 capacities once, and shares those exact objects with C4 and C5. Per-job Permission/Availability and the lazy C6 profile are memoised only inside that context; no pawn result, revision, or invalidation cache survives the request.
+
+**Context surface:**
+
+| Member | Meaning |
+|--------|---------|
+| `permission(job)` | C4 structural `allowed | blocked | unknown` report |
+| `availability(job)` | Independent C4 current `available | unavailable | unknown` report |
+| `c5Context` | Frozen C5 context for exact, plural structural facts |
+| `temporalProfile()` | Lazy `TemporalProfileResolver.resolve(c5Context)` result with provider-derived coverage unchanged |
+
+The production coordinator exposes canonical facts only. The deprecated C4 shadow adapter is test-only. C5 legacy compatibility remains loaded solely for explicitly frozen C7 numeric ranking/work-speed projections until C8.
+
+**Consumers and policy boundary:**
+- Priority cells use Permission for structural blocking and Availability for temporary/current markers. Permission `unknown` stays editable and participates only under the explicit C7 "not proven blocked" policy; Priority Lock alone disables editing.
+- Summary, viability, bottleneck, analyser/Work Planner, and auto-assign reuse request-scoped contexts. Current Availability exclusions are deliberately limited to each consumer's reviewed C1 parity boundary.
+- Skill displays resolve the exact requested SkillDef through C5. Multiple SkillDefs and facets stay plural; C7 creates neither a `primarySkill` nor a canonical scalar effectiveness score.
+- Scheduler Phase 1 consumes C6 rest quality, windows, conditions, and activity composition. Sleep/joy/meditation hours, children/babies, break risk, Undergrounder interpretation, workload budgets, staggering, and slot construction remain C7 policy.
+- Temporal coverage, resilience, and proposals keep Permission and Availability separate, apply proposals one at a time, and preserve stale-precondition, inferred-schedule, ordering, and no-regression rules.
+
+**Reviewed C7 behavioral deltas:**
+
+| Delta | Scope and affected consumers |
+|-------|------------------------------|
+| Firefight + Violent | C4 corrects the legacy tag mapping. Affected Firefight priority cells, derived summary/viability/bottleneck and analyser/auto-assign eligibility, plus Firefight temporal coverage/resilience/proposal inputs; no unrelated job changes. |
+| Human Fishing age | C4 uses the audited Human minimum age for Fishing. Affected Fishing priority/eligibility projections and exact downstream consumers of that job only. |
+| Hauling + zero Manipulation | C4 uses the audited Hauling capacity requirement. Affected Hauling priority/eligibility projections and exact downstream consumers of that job only. |
+| Downed Permission/Availability decomposition | Downed is `Permission != blocked` plus `Availability = unavailable`: the grid remains editable with a current marker, while aggregate, ranking, assignment, scheduler, and temporal current-state consumers exclude it under their frozen projections. |
+| `creationGainAlreadyPersisted` | C5 skill display only: stored level 10 displays as 10 instead of legacy 12 because the +2 creation gain is already persisted. Analyser, viability, ranking, and assignment retain legacy numeric inputs. |
+
+All other consumer output is parity-frozen. C8 owns any new weighting, ranking, assignment, or scheduling intelligence.
+
+**Regression evidence:** `test/c7-evaluation-coordinator.test.js`, `test/c7-static-gates.test.js`, `test/c7-grid-parity.test.js`, `test/c7-consumer-parity.test.js`, `test/c7-skill-display-parity.test.js`, `test/c7-ranking-parity.test.js`, `test/c7-scheduler-parity.test.js`, and `test/c7-temporal-parity.test.js`.
 
 ---
 
@@ -437,6 +479,7 @@ data
 | C5 structural learning | `test/structural-learning-resolver.test.js` | 16 | Direct and ordinary learning with current inputs excluded |
 | C5 structural effectiveness reports | `test/structural-effectiveness-resolver.test.js` | 20 | Plural skills and top-level facets without scalar aggregation |
 | C5 legacy effectiveness shadow | `test/c5-compatibility.test.js` | 27 | Exact C1 delegation and 14 named canonical differences |
+| C5 packaged production contract | `test/c5-production-contract.test.js` | 23 | Immutable runtime authority, snapshot factory, production C5 resolution, package/load order |
 | C6 rest stat registration | `test/c6-rest-stat-registration.test.js` | 12 | RestFallRateFactor and RestRateMultiplier fixture and registry verification |
 | C6 need-suppression evidence | `test/c6-need-suppression-evidence.test.js` | 14 | Generic need-suppression from disablesNeeds definitions |
 | C6 activity provider semantics | `test/c6-activity-provider-semantics.test.js` | 18 | Typed obligation, satisfiesNeeds, and composition fields |
@@ -444,5 +487,13 @@ data
 | C6 Undergrounder UV | `test/c6-undergrounder-uv.test.js` | 10 | UV evidence for all UV-sensitive pawns including Undergrounders |
 | C6 TemporalProfileResolver | `test/temporal-profile-resolver.test.js` | 109 | Full 5-dimension resolver with three-way needState, stat routing, and coverage |
 | C6 static architecture gates | `test/c6-static-gates.test.js` | 22 | No forbidden references, identity strings, or policy leaks |
+| C7 coordinator | `test/c7-evaluation-coordinator.test.js` | 35 | Request scope, C2/C3 sharing, C4 peers, C5 context, lazy C6 |
+| C7 static closure gates | `test/c7-static-gates.test.js` | 18 | Canonical prohibitions, adapter removal, script order, packaging, shadow evidence |
+| C7 priority grid parity | `test/c7-grid-parity.test.js` | 36 | Cell states, editability, markers, tooltips, named C4 deltas |
+| C7 summary/dashboard parity | `test/c7-consumer-parity.test.js` | 54 | Counts, viability, bottlenecks, work capacity, analyser/Work Planner |
+| C7 skill/stat display parity | `test/c7-skill-display-parity.test.js` | 26 | Exact requested SkillDef display and creation-gain correction |
+| C7 auto-assign parity | `test/c7-ranking-parity.test.js` | 25 | Full matrix, frozen ranking, named deltas, idempotence |
+| C7 scheduler parity | `test/c7-scheduler-parity.test.js` | 65 | C6 mechanism consumption and exact schedule-policy parity |
+| C7 temporal parity | `test/c7-temporal-parity.test.js` | 32 | Coverage, resilience, proposals, Availability and unknown policy |
 
-The verified suite runs 44 suites, 0 skipped, 0 failures. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.
+The final C7 closure gate measured 53 suites, 35,412 checks, 0 skipped, and 0 failures. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.
