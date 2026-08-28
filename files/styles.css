@@ -1131,6 +1131,40 @@ body.light-theme .cat-label-input:hover { background: rgba(0,0,0,0.03); }
   box-shadow: none !important;
 }
 
+/* C7 Permission unknown: priority remains editable and visibly unverified. */
+.prio-box.unknown {
+  border-style: dashed !important;
+  opacity: 0.85;
+  position: relative;
+}
+.prio-box.unknown::before {
+  content: '?';
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  color: var(--warn, #e8a838);
+  font-size: 0.65em;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* C7 allowed but currently unavailable: preserve the editable priority. */
+.prio-box.unavailable {
+  opacity: 0.5;
+  position: relative;
+}
+.prio-box.unavailable::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: repeating-linear-gradient(
+    45deg, transparent, transparent 3px,
+    var(--border) 3px, var(--border) 4px
+  );
+  pointer-events: none;
+}
+
 body.light-theme .prio-box { background: rgba(0,0,0,0.07) !important; border-color: var(--border-med) !important; }
 body.light-theme .prio-box:hover { background: rgba(142,78,0,0.12) !important; border-color: var(--accent) !important; }
 body.light-theme .prio-box.empty { background: rgba(0,0,0,0.04) !important; border-color: var(--border-med) !important; }
