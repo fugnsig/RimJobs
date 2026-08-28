@@ -3,6 +3,8 @@
  * Handles algebraic simulations, efficiency predictions, and survival probabilities.
  */
 
+const TEMPORAL_CRITICAL = new Set(['doctoring', 'firefight']);
+
 const Engine = {
   /**
    * Calculates a pawn's real work speed for a specific job using RimWorld's actual formulas.
@@ -894,6 +896,34 @@ const Engine = {
     };
   },
 
+  _c7TemporalAvailabilityBlocks(availability) {
+    if (!availability || availability.state !== 'unavailable') return false;
+    const blockers = Array.isArray(availability.blockers) ? availability.blockers : [];
+    if (blockers.length === 0) return true;
+    return blockers.some(blocker => {
+      const isNonLegacyGlobalStatus = blocker
+        && blocker.scope === 'availability.global'
+        && blocker.requirementId !== 'currentStatus:downed';
+      return !isNonLegacyGlobalStatus;
+    });
+  },
+
+  _c7TemporalParticipates(pawn, job, contextMap) {
+    const pawnContext = contextMap && contextMap.get(pawn.id);
+    if (!pawnContext) {
+      const directTags = Array.isArray(pawn.incapable) ? pawn.incapable : [];
+      const jobTags = job && Array.isArray(job.incapBlocks) ? job.incapBlocks : [];
+      return !App.isIncapable(pawn, job)
+        && !jobTags.some(tag => directTags.includes(tag));
+    }
+    const permission = pawnContext.permission(job);
+    if (!permission
+        || (permission.state !== 'allowed' && permission.state !== 'unknown')) return false;
+    const availability = pawnContext.availability(job);
+    if (!availability) return false;
+    return !this._c7TemporalAvailabilityBlocks(availability);
+  },
+
   calculateTemporalCoverage(pawns, schedules, job, contextMap) {
     const types = App.state.shiftTypes || [];
     const idxSleep = types.indexOf('Sleep');
@@ -901,26 +931,7 @@ const Engine = {
     const capable = [];
     for (let i = 0; i < pawns.length; i++) {
       const p = pawns[i];
-      const pawnContext = contextMap && contextMap.get(p.id);
-      if (pawnContext) {
-        const permission = pawnContext.permission(job);
-        const permissionParticipates = permission
-          && (permission.state === 'allowed' || permission.state === 'unknown');
-        if (!permissionParticipates) continue;
-        const availability = pawnContext.availability(job);
-        const availabilityParticipates = availability
-          && (availability.state === 'available' || availability.state === 'unknown');
-        if (!availabilityParticipates) continue;
-      } else {
-        // Compatibility for callers not migrated until Task 8. The C7 path above
-        // always uses canonical Permission plus Availability.
-        const legacyPermission = typeof this.evaluateJobPermission === 'function'
-          ? this.evaluateJobPermission(p, job) : null;
-        const legacyParticipates = legacyPermission
-          ? (legacyPermission.status === 'allowed' || legacyPermission.status === 'uncertain')
-          : !App.isIncapable(p, job);
-        if (!legacyParticipates) continue;
-      }
+      if (!this._c7TemporalParticipates(p, job, contextMap)) continue;
       capable.push(p);
     }
 
@@ -944,6 +955,299 @@ const Engine = {
     }
 
     return hours;
+  },
+
+  analyzeTemporalResilience(pawns, jobs, schedules, contextMap) {
+    const criticalJobs = jobs.filter(j => TEMPORAL_CRITICAL.has(j.id));
+    if (criticalJobs.length === 0) return { jobs: [], gaps: 0, fragileHours: 0 };
+
+    const schedMap = schedules || {};
+    if (!schedules) {
+      pawns.forEach(p => { if (Array.isArray(p.schedule)) schedMap[p.id] = p.schedule; });
+    }
+
+    const jobResults = [];
+    let totalGaps = 0;
+    let totalFragile = 0;
+
+    for (let i = 0; i < criticalJobs.length; i++) {
+      const job = criticalJobs[i];
+      const coverage = this.calculateTemporalCoverage(pawns, schedMap, job, contextMap);
+      const gapHours = [];
+      const fragileHours = [];
+
+      for (let h = 0; h < 24; h++) {
+        if (coverage[h].status === 'gap') gapHours.push(h);
+        else if (coverage[h].status === 'fragile') fragileHours.push(h);
+      }
+
+      totalGaps += gapHours.length;
+      totalFragile += fragileHours.length;
+
+      jobResults.push({
+        jobId: job.id,
+        jobName: job.name,
+        coverage,
+        gapHours,
+        fragileHours,
+        healthyHours: 24 - gapHours.length - fragileHours.length
+      });
+    }
+
+    return { jobs: jobResults, gaps: totalGaps, fragileHours: totalFragile };
+  },
+
+  verifyProposalPrecondition(proposal, currentSchedule) {
+    if (!proposal || !proposal.precondition || !Array.isArray(proposal.precondition.schedule)) return false;
+    if (!Array.isArray(currentSchedule) || currentSchedule.length !== 24) return false;
+    const expected = proposal.precondition.schedule;
+    if (expected.length !== 24) return false;
+    for (let h = 0; h < 24; h++) {
+      if (currentSchedule[h] !== expected[h]) return false;
+    }
+    return true;
+  },
+
+  _extractSleepBlock(schedule, sleepIdx) {
+    const sleepHours = [];
+    for (let h = 0; h < 24; h++) {
+      if (schedule[h] === sleepIdx) sleepHours.push(h);
+    }
+    if (sleepHours.length === 0) return null;
+    sleepHours.sort((a, b) => a - b);
+    let start = sleepHours[0];
+    for (let i = 1; i < sleepHours.length; i++) {
+      if (sleepHours[i] !== sleepHours[i - 1] + 1) {
+        start = sleepHours[i];
+        break;
+      }
+    }
+    return { start, count: sleepHours.length };
+  },
+
+  _shiftPenalties(pawn, schedule, sleepIdx) {
+    const traits = Array.isArray(pawn.traits) ? pawn.traits : [];
+    const isNightOwl = traits.includes('night_owl');
+    const xeno = App.getXeno(pawn.xenotype);
+    const isUV = (xeno.uvSensitivity || 0) >= 1 && !traits.includes('undergrounder');
+    let nightOwl = 0;
+    let uv = 0;
+    for (let h = 0; h < 24; h++) {
+      if (schedule[h] === sleepIdx) continue;
+      if (isNightOwl && h >= 11 && h < 18) nightOwl++;
+      if (isUV && h >= 6 && h < 18) uv++;
+    }
+    return { nightOwlPenaltyHours: nightOwl, uvPenaltyHours: uv };
+  },
+
+  proposeTemporalAdjustments(pawns, jobs, schedules, resilience, contextMap) {
+    const types = App.state.shiftTypes || [];
+    const idxSleep = types.indexOf('Sleep');
+    const idxAny = Math.max(0, types.indexOf('Anything'));
+    const proposals = [];
+    const usedPawns = new Set();
+    const maxShift = 4;
+
+    const gapJobs = resilience.jobs.filter(j => j.gapHours.length > 0);
+
+    for (const jobR of gapJobs) {
+      const job = jobs.find(j => j.id === jobR.jobId);
+      if (!job) continue;
+      const capable = pawns.filter(p =>
+        this._c7TemporalParticipates(p, job, contextMap));
+
+      const remainingGaps = new Set(jobR.gapHours);
+
+      for (const gapHour of jobR.gapHours) {
+        if (!remainingGaps.has(gapHour)) continue;
+
+        const candidates = [];
+        for (const p of capable) {
+          if (usedPawns.has(p.id)) continue;
+          const sched = schedules[p.id];
+          if (!Array.isArray(sched) || sched.length !== 24) continue;
+          if (sched[gapHour] !== idxSleep) continue;
+          if (p.moodPreset === 'panic' || p.moodPreset === 'chill' || p.moodPreset === 'night') continue;
+
+          const sleepInfo = this._extractSleepBlock(sched, idxSleep);
+          if (!sleepInfo) continue;
+          const origPen = this._shiftPenalties(p, sched, idxSleep);
+
+          for (let shift = -maxShift; shift <= maxShift; shift++) {
+            if (shift === 0) continue;
+            const newStart = ((sleepInfo.start + shift) % 24 + 24) % 24;
+            const hypo = [...sched];
+            for (let h = 0; h < 24; h++) if (hypo[h] === idxSleep) hypo[h] = idxAny;
+            for (let h = 0; h < sleepInfo.count; h++) hypo[(newStart + h) % 24] = idxSleep;
+
+            if (hypo[gapHour] === idxSleep) continue;
+
+            const newPen = this._shiftPenalties(p, hypo, idxSleep);
+            if (newPen.nightOwlPenaltyHours > origPen.nightOwlPenaltyHours) continue;
+            if (newPen.uvPenaltyHours > origPen.uvPenaltyHours) continue;
+
+            const testScheds = {};
+            for (const k in schedules) testScheds[k] = schedules[k];
+            testScheds[p.id] = hypo;
+            const testRes = this.analyzeTemporalResilience(
+              pawns, jobs, testScheds, contextMap);
+            let createsNew = false;
+            for (const jr of testRes.jobs) {
+              const origJr = resilience.jobs.find(oj => oj.jobId === jr.jobId);
+              if (!origJr) continue;
+              for (const gh of jr.gapHours) {
+                if (!origJr.gapHours.includes(gh)) { createsNew = true; break; }
+              }
+              if (createsNew) break;
+            }
+            if (createsNew) continue;
+
+            const newJobR = testRes.jobs.find(j => j.jobId === jobR.jobId);
+            const fixed = jobR.gapHours.filter(h => !newJobR || !newJobR.gapHours.includes(h));
+            const fragileUp = jobR.fragileHours.filter(h => !newJobR || !newJobR.fragileHours.includes(h));
+
+            candidates.push({
+              pawn: p, shift, newStart, sleepInfo, hypo,
+              penalties: newPen, gapsFixed: fixed, fragileUp: fragileUp.length,
+              testRes
+            });
+          }
+        }
+
+        if (!candidates.length) continue;
+
+        candidates.sort((a, b) => {
+          if (a.gapsFixed.length !== b.gapsFixed.length) return b.gapsFixed.length - a.gapsFixed.length;
+          const aPen = a.penalties.nightOwlPenaltyHours + a.penalties.uvPenaltyHours;
+          const bPen = b.penalties.nightOwlPenaltyHours + b.penalties.uvPenaltyHours;
+          if (aPen !== bPen) return aPen - bPen;
+          if (Math.abs(a.shift) !== Math.abs(b.shift)) return Math.abs(a.shift) - Math.abs(b.shift);
+          return b.fragileUp - a.fragileUp;
+        });
+
+        const best = candidates[0];
+        usedPawns.add(best.pawn.id);
+        best.gapsFixed.forEach(h => remainingGaps.delete(h));
+
+        const origSched = schedules[best.pawn.id];
+        proposals.push({
+          pawnId: best.pawn.id,
+          pawnName: best.pawn.nickname || best.pawn.name,
+          jobId: jobR.jobId,
+          jobName: jobR.jobName,
+          type: 'gap',
+          gap: { hours: best.gapsFixed },
+          currentSleep: { start: best.sleepInfo.start, hours: best.sleepInfo.count },
+          proposedSleep: { start: best.newStart, hours: best.sleepInfo.count },
+          benefit: { gapsRemoved: best.gapsFixed.length, fragileHoursImproved: best.fragileUp },
+          costs: {
+            nightOwlPenaltyHours: best.penalties.nightOwlPenaltyHours,
+            uvPenaltyHours: best.penalties.uvPenaltyHours,
+            sleepShiftHours: Math.abs(best.shift)
+          },
+          createsNewCriticalGap: false,
+          proposedSchedule: best.hypo,
+          precondition: { schedule: [...origSched] }
+        });
+      }
+    }
+
+    // Free fragile-to-healthy improvements (zero-cost only)
+    const proposedScheds = {};
+    for (const k in schedules) proposedScheds[k] = schedules[k];
+    proposals.forEach(pr => { proposedScheds[pr.pawnId] = pr.proposedSchedule; });
+    const postGapRes = proposals.length > 0
+      ? this.analyzeTemporalResilience(pawns, jobs, proposedScheds, contextMap)
+      : resilience;
+
+    for (const jobR of postGapRes.jobs) {
+      if (jobR.fragileHours.length === 0) continue;
+      const job = jobs.find(j => j.id === jobR.jobId);
+      if (!job) continue;
+      const capable = pawns.filter(p =>
+        !usedPawns.has(p.id) && this._c7TemporalParticipates(p, job, contextMap));
+
+      for (const fragileHour of jobR.fragileHours) {
+        const candidates = [];
+        for (const p of capable) {
+          const sched = proposedScheds[p.id];
+          if (!Array.isArray(sched) || sched.length !== 24) continue;
+          if (sched[fragileHour] !== idxSleep) continue;
+          if (p.moodPreset === 'panic' || p.moodPreset === 'chill' || p.moodPreset === 'night') continue;
+
+          const sleepInfo = this._extractSleepBlock(sched, idxSleep);
+          if (!sleepInfo) continue;
+          const origPen = this._shiftPenalties(p, sched, idxSleep);
+
+          for (let shift = -maxShift; shift <= maxShift; shift++) {
+            if (shift === 0) continue;
+            const newStart = ((sleepInfo.start + shift) % 24 + 24) % 24;
+            const hypo = [...sched];
+            for (let h = 0; h < 24; h++) if (hypo[h] === idxSleep) hypo[h] = idxAny;
+            for (let h = 0; h < sleepInfo.count; h++) hypo[(newStart + h) % 24] = idxSleep;
+            if (hypo[fragileHour] === idxSleep) continue;
+
+            const newPen = this._shiftPenalties(p, hypo, idxSleep);
+            if (newPen.nightOwlPenaltyHours > origPen.nightOwlPenaltyHours) continue;
+            if (newPen.uvPenaltyHours > origPen.uvPenaltyHours) continue;
+
+            const testScheds2 = {};
+            for (const k in proposedScheds) testScheds2[k] = proposedScheds[k];
+            testScheds2[p.id] = hypo;
+            const testRes = this.analyzeTemporalResilience(
+              pawns, jobs, testScheds2, contextMap);
+            let anyNewGap = false;
+            for (const jr of testRes.jobs) {
+              const origJr = postGapRes.jobs.find(oj => oj.jobId === jr.jobId);
+              if (!origJr) continue;
+              for (const gh of jr.gapHours) {
+                if (!origJr.gapHours.includes(gh)) { anyNewGap = true; break; }
+              }
+              if (anyNewGap) break;
+            }
+            if (anyNewGap) continue;
+
+            candidates.push({ pawn: p, shift, newStart, sleepInfo, hypo, penalties: newPen });
+          }
+        }
+
+        if (!candidates.length) continue;
+        candidates.sort((a, b) => {
+          const aPen = a.penalties.nightOwlPenaltyHours + a.penalties.uvPenaltyHours;
+          const bPen = b.penalties.nightOwlPenaltyHours + b.penalties.uvPenaltyHours;
+          if (aPen !== bPen) return aPen - bPen;
+          return Math.abs(a.shift) - Math.abs(b.shift);
+        });
+
+        const best = candidates[0];
+        usedPawns.add(best.pawn.id);
+        proposedScheds[best.pawn.id] = best.hypo;
+
+        const fragOrigSched = proposedScheds[best.pawn.id];
+        proposals.push({
+          pawnId: best.pawn.id,
+          pawnName: best.pawn.nickname || best.pawn.name,
+          jobId: jobR.jobId,
+          jobName: jobR.jobName,
+          type: 'fragile',
+          gap: { hours: [fragileHour] },
+          currentSleep: { start: best.sleepInfo.start, hours: best.sleepInfo.count },
+          proposedSleep: { start: best.newStart, hours: best.sleepInfo.count },
+          benefit: { gapsRemoved: 0, fragileHoursImproved: 1 },
+          costs: {
+            nightOwlPenaltyHours: best.penalties.nightOwlPenaltyHours,
+            uvPenaltyHours: best.penalties.uvPenaltyHours,
+            sleepShiftHours: Math.abs(best.shift)
+          },
+          createsNewCriticalGap: false,
+          proposedSchedule: best.hypo,
+          precondition: { schedule: [...fragOrigSched] }
+        });
+        break;
+      }
+    }
+
+    return proposals;
   },
 
   calculateWorkSpeedMod(p) {

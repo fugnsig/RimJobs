@@ -84,11 +84,11 @@
     {
       "id": "40",
       "subject": "Task 8: Temporal Coverage and Resilience Migration",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": ["39"],
-      "files": ["files/engine.js", "files/app-pawns.js", "test/c7-temporal-parity.test.js", "test/run-tests.js"],
+      "files": ["files/engine.js", "files/app-schedule.js", "files/app-pawns.js", "test/c7-temporal-parity.test.js", "test/run-tests.js"],
       "verifyCommand": "node test/run-tests.js",
-      "acceptanceCriteria": ["coverage arrays match C1", "Availability filtered for temporal coverage", "gap/fragile/healthy thresholds unchanged", "resilience output matches C1", "proposal output matches C1", "52+ suites 0 failures"]
+      "acceptanceCriteria": ["coverage arrays match C1", "Permission unknown participates as not proven blocked", "downed and legacy-equivalent job-current Availability excluded without broadening unrelated global status filtering", "gap/fragile/healthy thresholds unchanged", "resilience output matches C1", "complete proposal output and ordering match C1", "stale rejection, inferred exclusion, one-at-a-time application and no-regression checks preserved", "one request-scoped context map reused by resilience and proposals", "per-pawn reset remains provider-derived and never fabricates temporal completeness", "no temporal caller of deprecated evaluators", "focused 9 suites 494 checks 0 failures", "full 53 suites 35410 checks 0 skipped 0 failures"]
     },
     {
       "id": "41",

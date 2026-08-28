@@ -1600,25 +1600,28 @@ git commit -m "C7: split scheduler Phase 1 into C6 mechanism consumption and C7 
 - Modify: `files/engine.js:848-881` (`calculateTemporalCoverage` - if not already migrated in Task 4)
 - Modify: `files/engine.js:883-921` (`analyzeTemporalResilience`)
 - Modify: `files/engine.js:966-1040+` (`proposeTemporalAdjustments`)
-- Modify: `files/app-pawns.js:2660` (per-pawn schedule reset)
+- Modify: `files/app-schedule.js` (one request context for resilience and proposals)
+- Verify: `files/app-pawns.js:2660` (per-pawn schedule reset, migrated in Task 7)
 - Create: `test/c7-temporal-parity.test.js`
 - Modify: `test/run-tests.js`
 
 **Acceptance Criteria:**
-- [ ] Coverage array matches C1 for all supported cases
-- [ ] Downed pawn excluded from coverage via Availability (not Permission) - same combined effect as C1
-- [ ] Unknown permission pawns counted as potential coverage (PD-3)
-- [ ] Gap/fragile/healthy thresholds unchanged (C7 policy constants)
-- [ ] Resilience analysis output unchanged
-- [ ] Proposal preconditions, improvements, and no-regression checks unchanged
-- [ ] `evaluateJobPermission()` no longer called by temporal functions
-- [ ] Per-pawn schedule reset uses coordinator for its schedule portion
+- [x] Coverage array matches C1 for all supported cases
+- [x] Downed pawn excluded from coverage via Availability (not Permission) - same combined effect as C1
+- [x] Unknown permission pawns counted as potential coverage (PD-3)
+- [x] Gap/fragile/healthy thresholds unchanged (C7 policy constants)
+- [x] Resilience analysis output unchanged
+- [x] Proposal preconditions, improvements, ordering, one-at-a-time application, and no-regression checks unchanged
+- [x] `evaluateJobPermission()` is no longer called by temporal functions
+- [x] Unrelated global current-state Availability does not broaden the frozen C1 incapability set; downed and job-current blockers retain the legacy combined effect
+- [x] The schedule UI builds one request-scoped context map and reuses it for resilience and proposals
+- [x] Per-pawn schedule reset uses coordinator for its schedule portion
 
 **Verify:** `node test/run-tests.js` - all suites pass, new temporal parity suite has 20+ checks.
 
 **Steps:**
 
-- [ ] **Step 1: Write temporal parity tests**
+- [x] **Step 1: Write temporal parity tests**
 
 Create `test/c7-temporal-parity.test.js`:
 
@@ -1632,7 +1635,7 @@ Create `test/c7-temporal-parity.test.js`:
 // C7-TEMP-007: Named delta - Violent pawn counts in Firefight coverage
 ```
 
-- [ ] **Step 2: Ensure temporal functions accept and use contextMap**
+- [x] **Step 2: Ensure temporal functions accept and use contextMap**
 
 If `calculateTemporalCoverage` was already migrated in Task 4, verify the Availability filter is correct. If not, apply the migration now.
 
@@ -1657,31 +1660,41 @@ const capable = pawns.filter(p =>
 After:
 ```javascript
 const capable = pawns.filter(p =>
-  contextMap.get(p.id).permission(job).state !== 'blocked');
+  this._c7TemporalParticipates(p, job, contextMap));
 ```
 
-- [ ] **Step 3: Migrate per-pawn schedule reset**
+The actual implementation centralises the explicit C7 participation policy so
+coverage and both proposal phases use the same Permission/Availability result.
+Permission `unknown` participates. Availability blocks only the downed and
+job-current cases represented by the frozen C1 combined incapability path;
+unrelated global mental/deactivation/unconscious state is not silently promoted
+to a new temporal-coverage delta.
 
-At `app-pawns.js:2660`, the single-pawn `optimizeSchedules([p])` call needs a coordinator context:
+- [x] **Step 3: Migrate per-pawn schedule reset**
+
+Task 7 already migrated the actual `setPawnMoodPreset()` single-pawn reset. It
+builds one map through `_c7PawnContextMap(this.state.pawns,
+this._c7EvidenceOptionsByPawn)`, passes it to `optimizeSchedules([p],
+{ contextMap })`, and reuses it for auto-assign. Task 8 retains an executable
+source regression for this boundary and does not rebuild the context.
 
 ```javascript
-var singleCtxMap = new Map();
-var evidenceOptions = App._c7EvidenceOptionsByPawn
-  ? (App._c7EvidenceOptionsByPawn.get(p.id) || {})
-  : {};
-singleCtxMap.set(p.id, C7EvaluationCoordinator.createPawnContext(p, {
-  definitionSnapshot: App._c4DefinitionSnapshot(),
-  evidenceOptions: evidenceOptions,
-}));
-Engine.optimizeSchedules([p], singleCtxMap);
+const contextMap = this._c7PawnContextMap(
+  this.state.pawns, this._c7EvidenceOptionsByPawn);
+Engine.optimizeSchedules([p], { contextMap });
 ```
 
 `App._c7EvidenceOptionsByPawn` is the optional request-scoped hand-off from the real C2/provider collection path. When it is absent, `{}` deliberately preserves unknown temporal coverage; it must never be replaced with a synthesized complete object.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
+
+Actual verification before commit: focused 9 suites / 494 checks / 0 failures;
+full 53 suites / 35,410 checks / 0 skipped / 0 failures. The Task 8 suite has
+32 checks. Syntax, static architecture, deprecated-caller searches,
+request-context caller checks, and `git diff --check` passed.
 
 ```
-git add files/engine.js files/app-pawns.js test/c7-temporal-parity.test.js test/run-tests.js
+git add files/engine.js files/app-schedule.js test/c7-temporal-parity.test.js test/run-tests.js
 git commit -m "C7: migrate temporal coverage, resilience, and proposals to coordinator"
 ```
 
