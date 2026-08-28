@@ -50,6 +50,8 @@ const tests = [
   './c6-undergrounder-uv.test.js',
   './temporal-profile-resolver.test.js',
   './c6-static-gates.test.js',
+  './c7-evaluation-coordinator.test.js',
+  './c7-static-gates.test.js',
 ];
 
 (async () => {
