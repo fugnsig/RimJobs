@@ -66,11 +66,11 @@
     {
       "id": "38",
       "subject": "Task 6: Auto-Assign Parity Migration",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": ["37"],
-      "files": ["files/engine.js", "test/c7-ranking-parity.test.js", "test/run-tests.js"],
+      "files": ["files/engine.js", "files/app-priorities.js", "files/app-pawns.js", "test/c7-ranking-parity.test.js", "test/run-tests.js"],
       "verifyCommand": "node test/run-tests.js",
-      "acceptanceCriteria": ["runMinMaxAssignment uses coordinator Permission+Availability dual filter", "downed pawns excluded via Availability filter", "ranking formula (speed*100 + passion*25) unchanged", "full priority-matrix parity except named deltas with causal fixtures", "unknown pawns participate in candidate set", "no plural C5 intelligence in ranking", "50+ suites 0 failures"]
+      "acceptanceCriteria": ["runMinMaxAssignment uses coordinator Permission+Availability dual filter", "both production auto-assign entry points forward request-scoped C7 context maps", "downed pawns excluded via Availability filter", "ranking formula (speed*100 + passion*25) unchanged", "full priority-matrix parity except named deltas with causal fixtures", "unknown pawns participate in candidate set", "no plural C5 intelligence in ranking", "focused 8 suites 431 checks 0 failures", "full 51 suites 35313 checks 0 skipped 0 failures"]
     },
     {
       "id": "39",

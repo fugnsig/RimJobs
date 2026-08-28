@@ -2822,7 +2822,11 @@ Object.assign(App, {
     }
 
     // Auto-update priorities based on new mood
-    Engine.runMinMaxAssignment(this.state.pawns, this.state.roles, this.state.priorities);
+    const contextMap = this._c7PawnContextMap(
+      this.state.pawns, this._c7EvidenceOptionsByPawn);
+    Engine.runMinMaxAssignment(
+      this.state.pawns, this.state.roles, this.state.priorities,
+      undefined, contextMap);
     
     this.renderAll();
     this.triggerAutoSave();
