@@ -1156,18 +1156,22 @@ git commit -m "C7: decompose evaluatePawnJob consumers to coordinator inputs"
 - Modify: `test/c7-consumer-parity.test.js` (add analyser parity tests)
 
 **Acceptance Criteria:**
-- [ ] `analyzeColony()` gaps, recommendations, and singlePoints output matches C1 except named deltas
-- [ ] `_bestPawnForJob()` ranking unchanged: same pawn selected for same inputs
-- [ ] No duplicate `evaluatePawnJob()` call - `_bestPawnForJob` reuses coordinator context
-- [ ] Work Planner actions (Apply one, Apply all) use coordinator contexts
-- [ ] `(speed * 100) + (passion * 25)` formula preserved verbatim in policy code
-- [ ] No `primarySkill` or scalar canonical effectiveness score introduced
+- [x] `analyzeColony()` gaps, recommendations, and singlePoints output matches C1 except named deltas
+- [x] `_bestPawnForJob()` ranking and stable input-order tie break remain unchanged
+- [x] One per-job evaluation map resolves each pawn's Permission, Availability, and ranking projection once and is reused by `_bestPawnForJob()`
+- [x] `analyzeColony()` and `_bestPawnForJob()` do not call `evaluatePawnJob()`
+- [x] Permission participation is explicitly `allowed | unknown`; Availability participation is explicitly `available | unknown`
+- [x] Work Planner entry points and Apply One/Apply All refreshes create and forward request-scoped coordinator maps
+- [x] `(realSpeed * 100) + (passion * 25)` formula preserved verbatim in policy code
+- [x] Skill and speed remain explicit frozen compatibility inputs; C5 passion uses only the exact requested SkillDef with legacy fallback
+- [x] Skillless jobs remain skillless
+- [x] No `primarySkill` or scalar canonical effectiveness score introduced
 
 **Verify:** `node test/run-tests.js` - all suites pass.
 
 **Steps:**
 
-- [ ] **Step 1: Add analyser parity tests**
+- [x] **Step 1: Add analyser parity tests**
 
 Add to `test/c7-consumer-parity.test.js`:
 
@@ -1179,7 +1183,7 @@ Add to `test/c7-consumer-parity.test.js`:
 // C7-ANA-005: No duplicate evaluation - evMap built once per job
 ```
 
-- [ ] **Step 2: Migrate analyzeColony to use coordinator**
+- [x] **Step 2: Migrate analyzeColony to use coordinator**
 
 Replace the `evMap` construction at engine.js:1213-1214:
 
@@ -1201,7 +1205,7 @@ const capable = pawns.filter(p => {
 
 The ranking data comes from the coordinator's C5 reports and legacy compatibility projections during migration.
 
-- [ ] **Step 3: Migrate _bestPawnForJob to accept contextMap**
+- [x] **Step 3: Migrate _bestPawnForJob to accept contextMap**
 
 Before:
 ```javascript
@@ -1219,11 +1223,13 @@ _bestPawnForJob(capable, job) {
 
 After: Accept `contextMap` and extract skill/passion/speed from coordinator-mediated sources. The scoring formula `(speed * 100) + (passion * 25)` remains verbatim. The coordinator provides the inputs; policy code owns the formula.
 
-- [ ] **Step 4: Migrate Work Planner UI**
+- [x] **Step 4: Migrate Work Planner UI**
 
 At `app-priorities.js:260,362`, `Engine.analyzeColony()` is called. Pass the coordinator contextMap built at the UI boundary.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
+
+Actual verification before commit: focused 7 suites / 267 checks / 0 failures; full 50 suites / 35,288 checks / 0 skipped / 0 failures.
 
 ```
 git add files/engine.js files/app-priorities.js test/c7-consumer-parity.test.js

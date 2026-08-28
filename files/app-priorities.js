@@ -269,7 +269,10 @@ Object.assign(App, {
 
   runOptimizer() {
     // Analyse only the columns currently visible in the table.
-    this._optimizerResult = Engine.analyzeColony(this.state.pawns, this.state.priorities, this._visibleJobs());
+    const contextMap = this._c7PawnContextMap(
+      this.state.pawns, this._c7EvidenceOptionsByPawn);
+    this._optimizerResult = Engine.analyzeColony(
+      this.state.pawns, this.state.priorities, this._visibleJobs(), contextMap);
     this.renderOptimizer();
   },
 
@@ -371,7 +374,10 @@ Object.assign(App, {
   // column management, and the colony analysis with apply buttons.
   openWorkPlanner() {
     const visible = this._visibleJobs();
-    const r = Engine.analyzeColony(this.state.pawns, this.state.priorities, visible);
+    const contextMap = this._c7PawnContextMap(
+      this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const r = Engine.analyzeColony(
+      this.state.pawns, this.state.priorities, visible, contextMap);
     this._optimizerResult = r; // so Apply-All uses the same result
     const pawns = this.state.pawns;
     const analysis = pawns.length
