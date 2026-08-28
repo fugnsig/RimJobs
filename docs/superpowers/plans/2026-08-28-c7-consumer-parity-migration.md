@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate all C1 production consumers (priority grid, summary counts, viability, bottlenecks, auto-assign, analyser, skill displays, scheduler, temporal coverage) from legacy `isIncapable()`/`evaluatePawnJob()`/`effectiveSkill()` to canonical C4 Permission/Availability, C5 structural effectiveness reports, and C6 temporal profiles - maintaining exact output parity except for three approved C4 corrections and the downed semantic decomposition.
+**Goal:** Migrate all C1 production consumers (priority grid, summary counts, viability, bottlenecks, auto-assign, analyser, skill displays, scheduler, temporal coverage) from legacy `isIncapable()`/`evaluatePawnJob()`/`effectiveSkill()` to canonical C4 Permission/Availability, C5 structural effectiveness reports, and C6 temporal profiles - maintaining exact output parity except for the approved C4 corrections, the downed semantic decomposition, and the narrowly approved `creationGainAlreadyPersisted` C5 skill-display correction.
 
 **Architecture:** A request-scoped C7 evaluation coordinator builds one shared C2/C3 evidence set per pawn, provides memoised C4 Permission and Availability per job, accesses C5 effectiveness reports, and lazily resolves C6 temporal profiles. Each top-level UI or engine entry point creates coordinator contexts for its pawns, uses them for the duration of that call, and discards them. No long-lived cache, no revision counter, no cross-request memoisation. The coordinator is a thin orchestration layer; all domain logic remains in the existing C2-C6 resolvers. Consumer migration is sequential: each task replaces one consumer group, adds parity tests, and commits. Legacy shadow adapters remain until all consumers pass parity and are removed in the final task.
 
@@ -16,6 +16,7 @@
 - C5 plurality boundary: C7 display migrations consume plural C5 facts; auto-assign/ranking preserve frozen C1 policy; C8 owns redesigned ranking exploiting plurality
 - Scheduler gate cleared: C6 temporal profile API verified; `TemporalProfileResolver.resolve(c5Context)` is the production entry point
 - Three approved C4 corrections ONLY: Firefight+Violent, Human Fishing age, Hauling+zero Manipulation
+- Approved C5 display correction ONLY: `creationGainAlreadyPersisted` may change canonical C5 skill-display projections, but no ranking, assignment, analyser, viability, or other frozen C1 policy calculation
 - No other unnamed behavioural delta is allowed without stopping and reporting it
 
 **Regression baseline (measured 2026-08-28):** 44 suites, 35,098 checks, 0 failures.
@@ -30,7 +31,7 @@
 
 ---
 
-## Named C4 Deltas (Exhaustive)
+## Named C7 Deltas (Exhaustive)
 
 These are the ONLY permitted behavioural differences between C1 and C7 output:
 
@@ -40,11 +41,12 @@ These are the ONLY permitted behavioural differences between C1 and C7 output:
 | `legacyBlockedCanonicalNotBlocked` | Human Fishing at age < 7: X cell | Editable priority cell | Child gains Fishing eligibility |
 | `legacyBlockedCanonicalNotBlocked` | Hauling+zero Manipulation: X cell | Editable priority cell | Pawn gains Hauling via zero-capacity path |
 | `legacyPermissionBlockCanonicalAvailabilityBlock` | Downed pawn: X on every cell | Priority preserved with unavailable marker | Structural eligibility visible while incapacitated |
+| `creationGainAlreadyPersisted` | Saved `levelInt` 10 plus childhood creation gain +2 is displayed as 12 because C1 re-adds the gain | Canonical C5 skill display remains 10 because the gain is already embodied in `levelInt` | Skill-display projections only; frozen ranking/assignment/policy calculations remain unchanged |
 
 Any other divergence from C1 output is a regression and must be reported before proceeding.
 
 **Causal fixture requirement:** Each parity test that references a named delta must construct a causal fixture proving the specific cascade, not use the delta code as a blanket exemption. Each fixture must:
-1. Construct a pawn with the exact trait/gene/age/status that triggers the delta
+1. Construct a pawn with the exact source fact, trait, gene, age, or status that triggers the delta
 2. Assert the SPECIFIC cells/counts/scores that change (by pawn ID and job ID)
 3. Assert that all OTHER cells/counts/scores remain unchanged
 4. Name the delta code in the test label for traceability
@@ -933,7 +935,7 @@ git commit -m "C5: package audited runtime contract for production consumers"
 
 ### Task 3: C5 Skill and Stat Display Migration
 
-**Goal:** Migrate `App.effectiveSkill()` consumers in pawn cards, pawn manager, spotlight, and colony radar to C5 SkillFact projections. Preserve numeric parity. Add precision notices and partial/unknown annotations in tooltips. Do not introduce a `primarySkill`.
+**Goal:** Migrate `App.effectiveSkill()` consumers in pawn cards, pawn manager, spotlight, and colony radar to C5 SkillFact projections. Preserve numeric parity except for the exact approved `creationGainAlreadyPersisted` display fixture. Add precision notices and partial/unknown annotations in tooltips. Do not introduce a `primarySkill`.
 
 **Files:**
 - Modify: `files/app-pawns.js:1343` (pawn manager skill grid)
@@ -945,13 +947,14 @@ git commit -m "C5: package audited runtime contract for production consumers"
 - Modify: `test/run-tests.js`
 
 **Acceptance Criteria:**
-- [ ] Displayed skill numbers match `App.effectiveSkill()` output for complete C5 reports
+- [ ] Displayed skill numbers match `App.effectiveSkill()` output for complete C5 reports except the exact `creationGainAlreadyPersisted` fixture, where canonical C5 `10` replaces legacy double-counted `12`
 - [ ] Passion glyphs and colours unchanged - raw passion identity preserved
-- [ ] Colony radar values match C1 for complete skills
+- [ ] Colony radar values match C1 for complete skills except when an axis contains the exact approved `creationGainAlreadyPersisted` display correction
 - [ ] Partial/unknown C5 reports add tooltip annotation without changing the displayed number
 - [ ] Option A rounded-C3-capacity precision notices appear in affected stat tooltips
 - [ ] No `primarySkill` selection in any code path
 - [ ] `App.effectiveSkill()` remains available as a legacy adapter until Task 9
+- [ ] The display correction does not alter auto-assign, `_bestPawnForJob`, analyser ranking, viability, or other frozen C1 policy calculations
 
 **Verify:** `node test/run-tests.js` - all suites pass, new skill parity suite has 15+ checks.
 
@@ -959,7 +962,7 @@ git commit -m "C5: package audited runtime contract for production consumers"
 
 - [ ] **Step 1: Write skill display parity tests**
 
-Create `test/c7-skill-display-parity.test.js`. Test that C5 SkillFact projection returns the same value as `effectiveSkill()` for known test pawns:
+Create `test/c7-skill-display-parity.test.js`. Test that C5 SkillFact projection returns the same value as `effectiveSkill()` for known test pawns, except for the causal `creationGainAlreadyPersisted` fixture:
 
 ```javascript
 const { loadScripts } = require('./_harness');
@@ -978,6 +981,7 @@ module.exports = function run() {
   // C7-SKILL-003: Colony radar average from C5 matches effectiveSkill average
   // C7-SKILL-004: No primarySkill in C5 report structure
   // C7-SKILL-005: Partial C5 report preserves numeric value with annotation flag
+  // C7-SKILL-DELTA-CREATION: stored 10 + persisted childhood gain 2 => C1 12, C5 display 10
 
   return { name: 'C7 skill display parity', total, failures };
 };
@@ -1012,13 +1016,15 @@ Add to `files/app-pawns.js`. This uses the actual `StructuralSkillResolver.resol
 **Actual SkillFact shape** (from `structural-skill-resolver.js:172`):
 - `state`: `'resolved'|'partial'|'unknown'`
 - `completeness`: `'complete'|'partial'|'unknown'`
-- `runtimeGetLevelProjection`: effective level (stored + aptitude, clamped, zeroed if disabled) - matches `effectiveSkill()` for complete reports
+- `runtimeGetLevelProjection`: effective level (stored + aptitude, clamped, zeroed if disabled) - matches `effectiveSkill()` for complete reports except explicitly approved C5 display deltas such as `creationGainAlreadyPersisted`
 - `runtimeGetLevelForUIProjection`: same but using permanent disablement only (shows level for temporarily disabled skills)
 - `storedLevelInt`: `{state, value}` - the raw stored level
 - `runtimeAptitude`: `{state, value, contributions, unresolved}` - gene/xenotype offsets
 - `unresolved`: array of unresolved factors
 
 This is a UI projection for a known display location, not canonical primarySkill selection. When `completeness` is not `'complete'`, the tooltip shows a precision notice. When `level` is null (unknown), fall back to `effectiveSkill()` for migration safety.
+
+The `creationGainAlreadyPersisted` approval is display-only. It does not authorise any change to auto-assign, `_bestPawnForJob`, analyser ranking, viability, or another consumer that still uses its frozen C1 compatibility projection. Any other complete supported C5 display difference must stop Task 3 for individual review.
 
 - [ ] **Step 3: Migrate pawn manager skill display**
 

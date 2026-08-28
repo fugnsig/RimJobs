@@ -7,7 +7,7 @@ const Charts = {
   /**
    * Renders a simple SVG Radar (Spider) chart for colony-wide skill levels.
    */
-  renderColonyRadar(pawns, size = 400) {
+  renderColonyRadar(pawns, size = 400, radarCtxMap) {
     // Guard inputs so the SVG can never contain NaN coordinates.
     size = (Number.isFinite(Number(size)) && Number(size) > 0) ? Number(size) : 400;
     const list = Array.isArray(pawns) ? pawns : [];
@@ -17,8 +17,18 @@ const Charts = {
     const angleStep = (Math.PI * 2) / categories.length;
 
     // Calculate colony averages
+    const canonicalUnknownCounts = [];
     const averages = categories.map(s => {
-      const total = list.reduce((sum, p) => sum + App.effectiveSkill(p, s.id), 0);
+      let canonicalUnknown = 0;
+      const total = list.reduce((sum, p) => {
+        const pawnCtx = radarCtxMap && radarCtxMap.get(p.id);
+        const projection = pawnCtx && App._c5SkillProjection
+          ? App._c5SkillProjection(pawnCtx, s.id) : null;
+        if (projection && projection.level != null) return sum + projection.level;
+        canonicalUnknown++;
+        return sum + App.effectiveSkill(p, s.id);
+      }, 0);
+      canonicalUnknownCounts.push(canonicalUnknown);
       const v = (total / (list.length || 1)) / 20; // 0.0 to 1.0
       return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
     });
@@ -59,7 +69,10 @@ const Charts = {
       const dx = center + sin * radius * averages[i], dy = center - cos * radius * averages[i]; // dot
       const lx = center + sin * (radius + size * 0.085), ly = center - cos * (radius + size * 0.085); // label
       const shown = (averages[i] * 20).toFixed(1);
-      return `<g class="radar-axis" title="${s.name}: ${shown} / 20 colony average">
+      const notice = canonicalUnknownCounts[i]
+        ? ` · Canonical C5 skill evidence incomplete for ${canonicalUnknownCounts[i]} pawn${canonicalUnknownCounts[i] === 1 ? '' : 's'}; legacy-compatible values shown.`
+        : '';
+      return `<g class="radar-axis" title="${s.name}: ${shown} / 20 colony average${notice}">
           <!-- title attribute (not an SVG <title> child) so it uses the app-wide styled tooltip -->
           <line class="radar-spoke" x1="${center}" y1="${center}" x2="${ex}" y2="${ey}" stroke="var(--border)" stroke-opacity="0.55" />
           <circle class="radar-dot" cx="${dx}" cy="${dy}" r="${dotR}" fill="var(--accent)" stroke="var(--surface)" stroke-width="${dotStroke}" />
@@ -108,5 +121,4 @@ const Charts = {
     `;
   }
 };
-
 
