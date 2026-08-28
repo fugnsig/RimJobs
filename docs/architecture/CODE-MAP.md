@@ -420,7 +420,7 @@ data
 | 4D stress | `test/stress-4d.fuzz.test.js` | 36 | Blueprints |
 | Logo date line | `test/logo-date.test.js` | 12 | UI |
 | Capability corpus (C1 freeze) | `test/capability-corpus.test.js` | 140 | Capability evaluation, skill calc, work speed, scheduling, temporal coverage/resilience - frozen regression fixtures for all capability-related production functions |
-| Capability evidence (C2) | `test/capability-evidence.test.js` | 499 | Canonical evidence adapters, body evidence, permission targets, status facts, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
+| Capability evidence (C2) | `test/capability-evidence.test.js` | 500 | Canonical evidence adapters, body evidence, permission targets, status facts, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
 | Capacity resolver (C3) | `test/capacity-resolver.test.js` | 122 | Body identity, raw-index joins, audited workers, capMods, dependency graph, dual snapshots, Human parity and XML parser fixtures |
 | C4 audit contract | `test/c4-audit-contract.test.js` | 25 | Runtime WorkTags, job policy partition, race ages and WorkGiver path truths |
 | C4 requirement scanner | `test/requirement-scanner.test.js` | 21 | Work/race extraction, completeness, package activation and patch uncertainty |
