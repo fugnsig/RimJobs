@@ -14,11 +14,13 @@ Lookup table mapping features to files, entry points, state and tests.
 **State:**
 - `App.state.priorities` - `{pawnId: {jobId: 1-N or null}}`
 - `App.state.settings.manualPriorities` - manual (1-4) vs simple (checkboxes) mode
+- `App.state.settings.priorityLocked` - persisted priorities edit lock; blocks cell/assignment mutations without blocking normal scrolling
 - `App.state.settings.jobOrder` - column order array
 - `App.state.customJobs` - user-added job columns
 
 **Tests:**
-- `test/engine.optimiser.test.js` - optimiser + maths (22 checks)
+- `test/engine.optimiser.test.js` - optimiser + maths (87 checks)
+- `test/priority-lock.test.js` - persistent priority edit lock (25 checks)
 
 **Invariants:**
 - `skill: null` means skillless. Never substitute another skill. See INVARIANTS.md WORK-001.
@@ -363,6 +365,35 @@ data
 - Unsupported app/custom jobs and unsupported facet bindings remain explicit unknowns. There is no closest analogue, arbitrary PatchOperation interpreter, or arbitrary C# interpreter.
 - C5 emits no effectiveness score, primary skill, ranking proxy, assignment change, long-lived cache, or consumer migration. Production C1 output remains unchanged.
 
+### C6 Temporal Profile Resolution
+
+| File | Purpose |
+|------|---------|
+| `files/temporal-profile-resolver.js` | Shadow-only temporal profile resolver - resolves mechanism-based rest, recreation, window, condition, and activity facts from C2 evidence and C5 stat evaluations |
+
+**API:** `TemporalProfileResolver.resolve(c5Context)` -> `TemporalProfile`
+
+**Depends on:** C2 evidence (`c5Context.pawnEvidence.effects`, `c5Context.pawnEvidence.temporalCoverage`), C5 stat resolver (`StructuralStatResolver.resolve()` for RestFallRateFactor/RestRateMultiplier)
+
+**Output dimensions:** rest (need state + stat evaluations), recreation (recommendations only), windows (avoid/prefer hours), conditions (avoid conditions), activities (obligation + satisfiesNeeds overlap)
+
+**Shadow-only:** No production consumer. C7 owns migration.
+
+**Tests:**
+- `test/c6-rest-stat-registration.test.js` - RestFallRateFactor and RestRateMultiplier fixture verification and registry presence (12 checks).
+- `test/c6-need-suppression-evidence.test.js` - generic need-suppression evidence from disablesNeeds definitions (14 checks).
+- `test/c6-activity-provider-semantics.test.js` - typed obligation, satisfiesNeeds, and composition fields via C2 paths (18 checks).
+- `test/c6-temporal-coverage.test.js` - 5-family temporalCoverage structure and completeness semantics (84 checks).
+- `test/c6-undergrounder-uv.test.js` - UV evidence emits for all UV-sensitive pawns including Undergrounders (10 checks).
+- `test/temporal-profile-resolver.test.js` - full TemporalProfileResolver test matrix across all 5 dimensions (101 checks).
+- `test/c6-static-gates.test.js` - static architecture gate proving no forbidden references (22 checks).
+
+**Known conservative unknowns:**
+- Arbitrary mod C# need-suppression, activity, and temporal semantics remain unknown without a reviewed versioned provider.
+- Modded activity composition stays unresolved rather than defaulted.
+- No life-stage temporal classification in v1 (bioAge thresholds are human-specific).
+- C6 emits no schedule, work budget, break-risk metadata, or hour assignment. Production scheduling remains unchanged.
+
 ---
 
 ## Test Suite Summary
@@ -370,6 +401,7 @@ data
 | Suite | File | Checks | Subsystem |
 |-------|------|--------|-----------|
 | Engine optimiser + maths | `test/engine.optimiser.test.js` | 87 | Priorities, work speed, capability evaluation, matrix parity, CAP corpus, temporal coverage, proposals, acceptance |
+| Priority edit lock | `test/priority-lock.test.js` | 25 | Click, wheel, keyboard, assignment guards, persistence, unlock and scrolling behavior |
 | Save parser fuzz | `test/save-parser.fuzz.test.js` | 30 | Save import |
 | Save export fuzz | `test/save-export.fuzz.test.js` | 22,689 | Save round-trip |
 | Trait editor fuzz | `test/trait-editor.fuzz.test.js` | 4,287 | Pawn editing |
@@ -388,7 +420,7 @@ data
 | 4D stress | `test/stress-4d.fuzz.test.js` | 36 | Blueprints |
 | Logo date line | `test/logo-date.test.js` | 12 | UI |
 | Capability corpus (C1 freeze) | `test/capability-corpus.test.js` | 140 | Capability evaluation, skill calc, work speed, scheduling, temporal coverage/resilience - frozen regression fixtures for all capability-related production functions |
-| Capability evidence (C2) | `test/capability-evidence.test.js` | 492 | Canonical evidence adapters, body evidence, permission targets, status facts, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
+| Capability evidence (C2) | `test/capability-evidence.test.js` | 499 | Canonical evidence adapters, body evidence, permission targets, status facts, hediff definitions, aggregate orchestrator, evidence identity/supersession, source-fact conservation |
 | Capacity resolver (C3) | `test/capacity-resolver.test.js` | 122 | Body identity, raw-index joins, audited workers, capMods, dependency graph, dual snapshots, Human parity and XML parser fixtures |
 | C4 audit contract | `test/c4-audit-contract.test.js` | 25 | Runtime WorkTags, job policy partition, race ages and WorkGiver path truths |
 | C4 requirement scanner | `test/requirement-scanner.test.js` | 21 | Work/race extraction, completeness, package activation and patch uncertainty |
@@ -405,5 +437,12 @@ data
 | C5 structural learning | `test/structural-learning-resolver.test.js` | 16 | Direct and ordinary learning with current inputs excluded |
 | C5 structural effectiveness reports | `test/structural-effectiveness-resolver.test.js` | 20 | Plural skills and top-level facets without scalar aggregation |
 | C5 legacy effectiveness shadow | `test/c5-compatibility.test.js` | 27 | Exact C1 delegation and 14 named canonical differences |
+| C6 rest stat registration | `test/c6-rest-stat-registration.test.js` | 12 | RestFallRateFactor and RestRateMultiplier fixture and registry verification |
+| C6 need-suppression evidence | `test/c6-need-suppression-evidence.test.js` | 14 | Generic need-suppression from disablesNeeds definitions |
+| C6 activity provider semantics | `test/c6-activity-provider-semantics.test.js` | 18 | Typed obligation, satisfiesNeeds, and composition fields |
+| C6 temporal-family coverage | `test/c6-temporal-coverage.test.js` | 84 | 5-family temporalCoverage structure and completeness |
+| C6 Undergrounder UV | `test/c6-undergrounder-uv.test.js` | 10 | UV evidence for all UV-sensitive pawns including Undergrounders |
+| C6 TemporalProfileResolver | `test/temporal-profile-resolver.test.js` | 101 | Full 5-dimension resolver with three-way needState, stat routing, and coverage |
+| C6 static architecture gates | `test/c6-static-gates.test.js` | 22 | No forbidden references, identity strings, or policy leaks |
 
-The verified suite runs 37 suites, 0 skipped, 0 failures, and 34,821 checks. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.
+The verified suite runs 44 suites, 0 skipped, 0 failures. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.

@@ -37,15 +37,17 @@ Simple mode "enabled" is always `PriorityScale.defaultEnabled()` (3), regardless
 
 **Regression coverage:** `test/engine.optimiser.test.js` (extended-scale, overwrite-p5, cycling, isValid checks)
 
-### WORK-003: evaluatePawnJob is the canonical capability evaluation
+### WORK-003: evaluatePawnJob remains the production C1 aggregation until C7
 
-`Engine.evaluatePawnJob(pawn, job)` is the single source of truth for what a pawn can do in a job. It returns structured facts (permission, skill, work speed, advantages, penalties, confidence, evidence) - not a suitability score.
+`Engine.evaluatePawnJob(pawn, job)` remains the single production C1 aggregation surface for what a pawn can do in a job. It returns structured legacy facts (permission, skill, work speed, advantages, penalties, confidence, evidence) - not a suitability score.
 
 `Engine.evaluateJobPermission(pawn, job)` decomposes incapability into structured blocks with provenance (backstory, gene, trait, hediff, etc.) and tracks uncertainty from unresolvable modded genes.
 
 Decision engines (`_bestPawnForJob`, `analyzeColony`, `runMinMaxAssignment`, `calculateWorkCapacity`, `getBottlenecks`, `calculateViability`) consume the facts and apply their own scoring/objective. No consumer should duplicate the capability lookup inline.
 
 Three-valued permission: `allowed`, `blocked`, `uncertain`. The existing `isIncapable()` boolean contract is preserved; the richer semantics live only in `evaluateJobPermission`.
+
+C4 Permission/Availability and C5 structural effectiveness are the canonical shadow fact layers. They do not replace this production surface until the parity-proven C7 consumer migration. New canonical evidence or resolver work must not be routed back through C1 aggregation merely because C1 remains the current production caller.
 
 **Origin:** Intelligence architecture refactor - single source of truth before new reasoning.
 
@@ -255,6 +257,104 @@ C7 owns parity-proven consumer migration and any durable report cache. C8 owns w
 
 ---
 
+## C6 Temporal Profile Resolution Invariants
+
+### C6-001: No fixed sleep-hour output
+
+No fixed sleep-hour output (8/6/3). Mechanism-based rest facts only.
+
+**Regression coverage:** `test/temporal-profile-resolver.test.js`, `test/c6-static-gates.test.js`
+
+### C6-002: Rest facts expose needState + stat evaluations via C5 resolver
+
+Rest facts expose needState + RestFallRateFactor + RestRateMultiplier via C5 resolver. The resolver does not hardcode stat values.
+
+**Regression coverage:** `test/temporal-profile-resolver.test.js`
+
+### C6-003: Independent rest mechanisms composed by C5, not selected by authority
+
+Independent rest mechanisms are composed by C5 stat evaluation, not selected by authority ranking or identity branching.
+
+**Regression coverage:** `test/temporal-profile-resolver.test.js`, `test/c6-static-gates.test.js`
+
+### C6-004: No canonical recreation baseline
+
+No canonical recreation baseline. Recreation emits recommendations only.
+
+**Regression coverage:** `test/temporal-profile-resolver.test.js`
+
+### C6-005: All hour adjustments are C7 policy
+
+All hour adjustments (depressive/neurotic/child/break-risk/work budget) are C7 policy, not C6 facts.
+
+**Regression coverage:** `test/c6-static-gates.test.js`
+
+### C6-006: No break-risk metadata in TemporalProfile
+
+Break-risk metadata is scheduler policy and belongs in C7, not C6.
+
+**Regression coverage:** `test/c6-static-gates.test.js`
+
+### C6-007: UV/daylight evidence emitted regardless of Undergrounder trait
+
+UV/daylight evidence is emitted for all UV-sensitive pawns. The Undergrounder trait does not suppress UV evidence; it is a scheduling preference (C7 policy), not a biological fact.
+
+**Regression coverage:** `test/c6-undergrounder-uv.test.js`, `test/capability-evidence.test.js`
+
+### C6-008: Canonical facts separated from policy/compatibility metadata
+
+Canonical facts are separated from policy/compatibility metadata in the TemporalProfile output. Legacy compatibility fields (sleepHoursOverride) are nested under `compatibility`.
+
+**Regression coverage:** `test/temporal-profile-resolver.test.js`
+
+### C6-009: Activity semantics from typed provider data, not activity-name branching
+
+Activity semantics (obligation, satisfiesNeeds, composition) come from typed provider data on C2 evidence, not activity-name branching.
+
+**Regression coverage:** `test/c6-activity-provider-semantics.test.js`, `test/c6-static-gates.test.js`
+
+### C6-010: No life-stage temporal classification in v1
+
+No life-stage temporal classification in v1. BioAge thresholds are human-specific and do not belong in a generic temporal resolver.
+
+**Regression coverage:** `test/c6-static-gates.test.js`
+
+### C6-011: (Reserved - consolidated into C6-010)
+
+### C6-012: Per-dimension confidence and completeness
+
+Per-dimension confidence (verified/derived/inferred/unknown) and completeness (complete/partial/unknown) propagated from C2 temporalCoverage and C5 stat evaluation state.
+
+**Regression coverage:** `test/temporal-profile-resolver.test.js`, `test/c6-temporal-coverage.test.js`
+
+### C6-013: Unknown activity composition stays unresolved, not defaulted
+
+Unknown activity composition stays unresolved (`compositionResolved: false`), not defaulted. This degrades completeness to partial.
+
+**Regression coverage:** `test/temporal-profile-resolver.test.js`, `test/c6-activity-provider-semantics.test.js`
+
+### C6-014: Rest stats extend the generic C5/C2 stat-provider path
+
+RestFallRateFactor and RestRateMultiplier are registered as supported StatDefs and resolved through the generic C5 stat evaluation pipeline. No special-case stat handling.
+
+**Regression coverage:** `test/c6-rest-stat-registration.test.js`, `test/temporal-profile-resolver.test.js`
+
+### C6-015: Independent of C4 Availability, work budget, and scheduling
+
+C6 has no dependency on C4, work budget calculations, or scheduling policy. It consumes only C2 evidence and C5 stat evaluations.
+
+**Regression coverage:** `test/c6-static-gates.test.js`
+
+### C6-016: No identity-based branching
+
+No identity-based branching on trait, gene, hediff, race, or activity names. All resolution is driven by typed evidence fields.
+
+Design contract: `docs/superpowers/specs/2026-08-27-c6-temporal-profile-resolution-design.md`
+
+**Regression coverage:** `test/c6-static-gates.test.js`
+
+---
+
 ## Save Editing
 
 ### SAVE-001: Never mutate the original save file
@@ -285,13 +385,17 @@ Modded passion frameworks (Alpha Skills, Vanilla Skills Expanded) use custom pas
 
 ## Mod Scanning
 
-### MOD-001: Scanned stats are best-effort, not verified
+### MOD-001: Verification is scoped to audited scanner/provider subsets
 
-The mod scanner does not apply PatchOperation XML, cannot read C#-driven stats, is wrong for Combat Extended, and approximates stuff-based stats. Quality defaults to Normal. Do not treat scanned values as ground truth.
+Audited canonical scanner/provider subsets may be treated as verified only where the active definition, supported semantic, provenance, completeness, package applicability, and relevant patch uncertainty are all proven. C5's focused SkillDef, StatDef, source-operation, and facet inputs use this scoped contract; verification never extends automatically to adjacent fields or definitions.
 
-### MOD-002: Gene skill effects are inferred, not complete
+Unaudited or unsupported scanner data remains best-effort or unknown. The scanner does not execute arbitrary PatchOperation XML or arbitrary C#, does not establish Combat Extended semantics, and may approximate equipment, stuff, and quality-dependent values. Quality defaults to Normal in legacy approximate paths. Relevant unapplied patches or unsupported runtime semantics prevent a verified canonical claim rather than being guessed.
 
-Only `<aptitudeOffset>` (skill inferred from defName pattern) and `<disabledWorkTags>` are read from scanned genes. C#-driven or non-inferrable gene effects do not reach the auto-assigner.
+### MOD-002: Legacy and canonical gene skill paths have different coverage
+
+The frozen legacy C1 and auto-assign path remains limited to its existing curated or defName-inferred gene skill modifiers and disabled WorkTags until C7. C#-driven or otherwise unresolved gene effects still do not reach that production path.
+
+Canonical C2/C5 evidence is richer and must not be described by that legacy limitation. It preserves exact typed gene, trait, and hediff aptitude operations, current-pawn applicability joins, source-family completeness, source-fact conservation, and supported exact stat operations from the audited scanner/provider subset. Unsupported identities, inactive or unknown gene state, incomplete catalogues, unapplied patches, and arbitrary C# semantics remain unknown rather than falling back to the legacy inference.
 
 ---
 
