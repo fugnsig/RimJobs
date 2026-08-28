@@ -1,0 +1,94 @@
+{
+  "tasks": [
+    {
+      "id": "32",
+      "subject": "Task 0: C7 Evaluation Coordinator",
+      "status": "completed",
+      "blockedBy": [],
+      "files": ["files/c7-evaluation-coordinator.js", "files/rimjobs.html", "test/c7-evaluation-coordinator.test.js", "test/c7-static-gates.test.js", "test/run-tests.js", "test/_harness.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["createPawnContext returns frozen context", "permission/availability/c5Context/temporalProfile/legacyShadow methods present", "C4 results memoised within context", "no state survives between createPawnContext calls", "shared C2 evidence (one collectPawnEvidence call)", "shared C3 capacities (one resolvePawnCapacities call)", "statusFacts derived via C4EvaluationContext._deriveAwakeFacts not raw booleans", "C5 context built via StructuralEffectivenessContext.fromResolved", "static gate tests pass (coordinator only)", "46+ suites 0 failures"]
+    },
+    {
+      "id": "33",
+      "subject": "Task 1: Priority Grid C4 Migration",
+      "status": "pending",
+      "blockedBy": ["32"],
+      "files": ["files/app-render.js", "files/styles.css", "test/c7-grid-parity.test.js", "test/run-tests.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["every C1 X cell remains X except 3 named deltas", "3 named deltas change from X to editable", "downed cells show priority with unavailable marker and remain editable", "unknown cells show ? indicator and remain editable (no pointer-events:none)", "structured tooltips with provenance", "both renderers produce identical state logic", "47+ suites 0 failures"]
+    },
+    {
+      "id": "34",
+      "subject": "Task 2: Summary and Dashboard Migration",
+      "status": "pending",
+      "blockedBy": ["33"],
+      "files": ["files/app-render.js", "files/engine.js", "test/c7-consumer-parity.test.js", "test/run-tests.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["summary pill counts match C1 except named deltas", "viability score match except named deltas", "bottleneck messages match except named deltas", "downed pawns EXCLUDED via Availability filter (parity with C1 downed block)", "unknown pawns included as not-proven-blocked", "no new dashboard count categories", "48+ suites 0 failures"]
+    },
+    {
+      "id": "35",
+      "subject": "Task 3: C5 Skill and Stat Display Migration",
+      "status": "pending",
+      "blockedBy": ["34"],
+      "files": ["files/app-pawns.js", "files/app-render.js", "files/charts.js", "test/c7-skill-display-parity.test.js", "test/run-tests.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["skill numbers match C1 via SkillFact.runtimeGetLevelForUIProjection", "passion glyphs match C1", "no canonical primarySkill selection", "StructuralSkillResolver.resolve used for C5 projection", "known SkillDef projected as UI projection not canonical primary", "49+ suites 0 failures"]
+    },
+    {
+      "id": "36",
+      "subject": "Task 4: evaluatePawnJob Consumer Decomposition",
+      "status": "pending",
+      "blockedBy": ["35"],
+      "files": ["files/engine.js", "test/c7-consumer-parity.test.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["calculateWorkCapacity uses coordinator", "calculateTemporalCoverage uses C4 Permission+Availability dual filter", "evaluatePawnJob marked deprecated", "all suites 0 failures"]
+    },
+    {
+      "id": "37",
+      "subject": "Task 5: Analyser and Work Planner Migration",
+      "status": "pending",
+      "blockedBy": ["36"],
+      "files": ["files/engine.js", "files/app-priorities.js", "test/c7-consumer-parity.test.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["analyzeColony uses coordinator Permission+Availability dual filter", "bestPawnForJob uses coordinator", "Work Planner uses coordinator", "downed pawns excluded via Availability filter", "gap/recommendation/singlePoint output matches C1 except named deltas", "all suites 0 failures"]
+    },
+    {
+      "id": "38",
+      "subject": "Task 6: Auto-Assign Parity Migration",
+      "status": "pending",
+      "blockedBy": ["37"],
+      "files": ["files/engine.js", "test/c7-ranking-parity.test.js", "test/run-tests.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["runMinMaxAssignment uses coordinator Permission+Availability dual filter", "downed pawns excluded via Availability filter", "ranking formula (speed*100 + passion*25) unchanged", "full priority-matrix parity except named deltas with causal fixtures", "unknown pawns participate in candidate set", "no plural C5 intelligence in ranking", "50+ suites 0 failures"]
+    },
+    {
+      "id": "39",
+      "subject": "Task 7: Scheduler Phase 1 Mechanism-to-Policy Split",
+      "status": "pending",
+      "blockedBy": ["38"],
+      "files": ["files/engine.js", "test/c7-scheduler-parity.test.js", "test/run-tests.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["exact 24h schedule array parity for all test pawns", "rationale driver strings unchanged", "C6 mechanism facts consumed via TemporalProfileResolver", "UV avoidance from C6 conditions dimension not windows", "Undergrounder exemption remains C7 policy trait check", "compositionResolved inspected per activity", "rest dimension completeness inspected", "temporal coverage NOT fabricated with hardcoded completeness", "no identity branching in C6 consumption path", "51+ suites 0 failures"]
+    },
+    {
+      "id": "40",
+      "subject": "Task 8: Temporal Coverage and Resilience Migration",
+      "status": "pending",
+      "blockedBy": ["39"],
+      "files": ["files/engine.js", "files/app-pawns.js", "test/c7-temporal-parity.test.js", "test/run-tests.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["coverage arrays match C1", "Availability filtered for temporal coverage", "gap/fragile/healthy thresholds unchanged", "resilience output matches C1", "proposal output matches C1", "52+ suites 0 failures"]
+    },
+    {
+      "id": "41",
+      "subject": "Task 9: Legacy Adapter Deprecation and Final Parity Gate",
+      "status": "pending",
+      "blockedBy": ["40"],
+      "files": ["files/app-pawns.js", "files/engine.js", "files/rimjobs.html", "docs/architecture/CODE-MAP.md", "docs/architecture/INVARIANTS.md", "test/c7-static-gates.test.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["isIncapable removed or deprecated", "evaluatePawnJob removed or deprecated", "evaluateJobPermission removed or deprecated", "C4/C5 legacy compatibility adapters deprecated (shadow tests retained)", "all parity evidence reviewed before removal", "CODE-MAP.md has C7 section", "INVARIANTS.md has C7 invariants", "static gates scope coordinator only", "explicit file staging in commit (no broad git add)", "52+ suites 0 failures"]
+    }
+  ]
+}
