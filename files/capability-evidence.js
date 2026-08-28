@@ -1425,8 +1425,9 @@ const _TEMPORAL_TRAITS = {
   ascetic(traitId, provenance, confidence) {
     return [_makeEvidence(
       'trait:' + traitId + ':recreationHoursRecommendation',
-      'recreationHoursRecommendation', null, -1,
-      provenance, confidence
+      'recreationHoursRecommendation', null, null,
+      provenance, confidence,
+      { fields: { delta: -1 } }
     )];
   },
 };

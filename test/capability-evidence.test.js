@@ -640,7 +640,8 @@ module.exports = function run() {
     ok(recEv != null, 'CE-TR-011 recreationHoursRecommendation exists');
     ok(recEv && recEv.type === 'recreationHoursRecommendation',
       'CE-TR-011 recreationHoursRecommendation type');
-    ok(recEv && recEv.value === -1, 'CE-TR-011 recreationHoursRecommendation value -1');
+    ok(recEv && recEv.delta === -1, 'CE-TR-011 recreationHoursRecommendation delta -1');
+    ok(recEv && recEv.value === null, 'CE-TR-011 value null (delta in fields)');
     ok(recEv && recEv.target === null, 'CE-TR-011 target null');
   }
 
