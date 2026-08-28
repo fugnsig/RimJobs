@@ -166,6 +166,138 @@ Object.assign(App, {
     </details>`;
   },
 
+  _condenseHours(hours) {
+    if (!hours.length) return [];
+    const sorted = [...hours].sort((a, b) => a - b);
+    const windows = [];
+    let from = sorted[0];
+    let prev = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] === prev + 1) {
+        prev = sorted[i];
+      } else {
+        windows.push({ from, to: (prev + 1) % 24 });
+        from = sorted[i];
+        prev = sorted[i];
+      }
+    }
+    windows.push({ from, to: (prev + 1) % 24 });
+    if (windows.length >= 2 && windows[windows.length - 1].to === 0 && windows[0].from === 0) {
+      windows[0] = { from: windows[windows.length - 1].from, to: windows[0].to };
+      windows.pop();
+    }
+    return windows;
+  },
+
+  _schedProposals: null,
+
+  _schedResilienceHTML() {
+    if (!this.state.pawns.length) return '';
+    const contextMap = this._c7PawnContextMap(
+      this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const schedMap = {};
+    this.state.pawns.forEach(p => {
+      if (Array.isArray(p.schedule) && p.schedule.length === 24) schedMap[p.id] = p.schedule;
+    });
+    const allJobs = typeof JOBS !== 'undefined' ? JOBS : [];
+    const resilience = Engine.analyzeTemporalResilience(
+      this.state.pawns, allJobs, schedMap, contextMap);
+    if (!resilience.jobs.length) { this._schedProposals = null; return ''; }
+
+    const allHealthy = resilience.gaps === 0 && resilience.fragileHours === 0;
+    const hasInferred = resilience.jobs.some(j =>
+      j.coverage.some(h => h.capablePawns.some(cp => cp.inferredAwake)));
+
+    if (allHealthy && !hasInferred) { this._schedProposals = null; return `<div style="max-width:940px; margin:0 auto var(--gap-sm); padding:var(--gap-sm) var(--gap-lg); font-size:var(--f-xs); color:var(--text3)">Temporal resilience: all critical jobs covered</div>`; }
+
+    const proposals = (resilience.gaps > 0 || resilience.fragileHours > 0)
+      ? Engine.proposeTemporalAdjustments(
+        this.state.pawns, allJobs, schedMap, resilience, contextMap)
+      : [];
+    this._schedProposals = proposals;
+
+    const sections = resilience.jobs.map(j => {
+      const lines = [];
+      if (j.gapHours.length === 0 && j.fragileHours.length === 0) {
+        lines.push(`<span style="color:var(--text3)">Covered all day</span>`);
+      } else {
+        if (j.gapHours.length) {
+          const ws = this._condenseHours(j.gapHours);
+          const wStr = ws.map(w => this._schedFmtHour(w.from) + '-' + this._schedFmtHour(w.to)).join(', ');
+          lines.push(`<span style="color:#ef5350">No capable pawn awake ${wStr}</span>`);
+        }
+        if (j.fragileHours.length) {
+          const ws = this._condenseHours(j.fragileHours);
+          const wStr = ws.map(w => this._schedFmtHour(w.from) + '-' + this._schedFmtHour(w.to)).join(', ');
+          lines.push(`<span style="color:#e8a838">Single-pawn coverage ${wStr}</span>`);
+        }
+      }
+
+      const jobProposals = proposals.filter(pr => pr.jobId === j.jobId);
+      jobProposals.forEach((pr, pi) => {
+        const idx = proposals.indexOf(pr);
+        const sleepFrom = this._schedFmtHour(pr.currentSleep.start);
+        const sleepTo = this._schedFmtHour((pr.currentSleep.start + pr.currentSleep.hours) % 24);
+        const newFrom = this._schedFmtHour(pr.proposedSleep.start);
+        const newTo = this._schedFmtHour((pr.proposedSleep.start + pr.proposedSleep.hours) % 24);
+        const costParts = [];
+        costParts.push(`${pr.costs.sleepShiftHours}h sleep shift`);
+        if (pr.costs.nightOwlPenaltyHours) costParts.push(`${pr.costs.nightOwlPenaltyHours}h Night Owl penalty`);
+        if (pr.costs.uvPenaltyHours) costParts.push(`${pr.costs.uvPenaltyHours}h UV penalty`);
+        const isGap = pr.type === 'gap';
+        const benefitText = isGap
+          ? `Restores ${pr.benefit.gapsRemoved} uncovered hour${pr.benefit.gapsRemoved !== 1 ? 's' : ''}`
+          : `Improves single-point coverage`;
+        const btnLabel = isGap ? 'Apply' : 'Apply optional improvement';
+        const btnColor = isGap ? 'var(--accent)' : 'var(--text3)';
+        lines.push(`<div style="margin-top:6px; padding:6px 8px; background:var(--surface2); border-radius:var(--radius-sm); border:1px solid var(--border)">
+          <div style="font-size:var(--f-xs); color:var(--text2)">Shift <strong>${_escapeHtml(pr.pawnName)}</strong> sleep <span style="color:var(--text3)">${sleepFrom}-${sleepTo}</span> to <strong>${newFrom}-${newTo}</strong></div>
+          <div style="font-size:var(--f-xs); color:var(--text3); margin-top:2px">${benefitText} · ${costParts.join(' · ')}</div>
+          <button onclick="App._applyProposal(${idx})" style="margin-top:4px; padding:2px 10px; font-size:var(--f-xs); border:1px solid ${btnColor}; border-radius:var(--radius-sm); background:transparent; color:${btnColor}; cursor:pointer">${btnLabel}</button>
+        </div>`);
+      });
+
+      return `<div style="padding:4px 0"><strong style="color:var(--text)">${_escapeHtml(j.jobName)}</strong><br>${lines.join('')}</div>`;
+    }).join('');
+
+    const inferredNote = hasInferred
+      ? '<div style="font-size:var(--f-xs); color:var(--text3); margin-top:4px; font-style:italic">Some pawns have no schedule data - coverage is inferred, not confirmed.</div>' : '';
+
+    return `<details class="sched-resilience" open style="max-width:940px; margin:0 auto var(--gap-sm); background:var(--surface); border:1px solid var(--border-med); border-radius:var(--radius-md); overflow:hidden">
+      <summary style="cursor:pointer; padding:var(--gap-sm) var(--gap-lg); font-weight:700; font-size:var(--f-sm); color:${resilience.gaps > 0 ? '#ef5350' : '#e8a838'}; list-style:none; background:var(--surface2); border-bottom:1px solid var(--border)">
+        Temporal resilience ${resilience.gaps > 0 ? '- ' + resilience.gaps + ' uncovered hour' + (resilience.gaps !== 1 ? 's' : '') : resilience.fragileHours > 0 ? '- ' + resilience.fragileHours + ' fragile hour' + (resilience.fragileHours !== 1 ? 's' : '') : ''}
+      </summary>
+      <div style="padding:var(--gap-sm) var(--gap-lg)">${sections}${inferredNote}</div>
+    </details>`;
+  },
+
+  _applyProposal(idx) {
+    const proposals = this._schedProposals;
+    if (!Array.isArray(proposals) || idx < 0 || idx >= proposals.length) return;
+    const pr = proposals[idx];
+    const pawn = this.state.pawns.find(p => p.id === pr.pawnId);
+    if (!pawn) {
+      this.toast('Pawn no longer exists.');
+      return;
+    }
+
+    if (!Engine.verifyProposalPrecondition(pr, pawn.schedule)) {
+      this.toast('Schedule has changed since this recommendation was made. Recomputing.');
+      this._schedProposals = null;
+      this._schedRationale = null;
+      this.renderSchedule();
+      return;
+    }
+
+    pawn.schedule = [...pr.proposedSchedule];
+
+    this._schedRationale = null;
+    this._schedProposals = null;
+    this.triggerAutoSave();
+    this.renderSchedule();
+    this.toast(`Shifted ${_escapeHtml(pr.pawnName)} sleep to ${this._schedFmtHour(pr.proposedSleep.start)}-${this._schedFmtHour((pr.proposedSleep.start + pr.proposedSleep.hours) % 24)}.`);
+  },
+
   // -- CONTENT HUB ACTIONS --
 
   _schedFilter: '',
@@ -235,7 +367,7 @@ Object.assign(App, {
         </div>
       </div>`;
 
-      container.innerHTML = `${this._schedSummaryHTML()}<div class="sched-panel">${legend}
+      container.innerHTML = `${this._schedSummaryHTML()}${this._schedResilienceHTML()}<div class="sched-panel">${legend}
         <div style="padding:var(--gap-sm) var(--gap-sm)">
           ${hourMarkers}
           ${pawnStrips}
@@ -246,7 +378,7 @@ Object.assign(App, {
         </div>
       </div>`;
     } else {
-      container.innerHTML = `${this._schedSummaryHTML()}<div class="sched-panel">${legend}
+      container.innerHTML = `${this._schedSummaryHTML()}${this._schedResilienceHTML()}<div class="sched-panel">${legend}
         <div class="sched-table-wrap">
           <table class="sched-table" onmouseup="App._schedPainting=false" onmouseleave="App._schedPainting=false">
             <thead><tr>
