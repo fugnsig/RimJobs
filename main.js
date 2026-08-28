@@ -539,6 +539,36 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
 
   if (!dirPath || !fs.existsSync(dirPath)) return { error: 'Directory not found: ' + dirPath };
 
+  const readRuntimeFingerprint = async () => {
+    let versionText = null;
+    try {
+      versionText = await fsp.readFile(pathMod.join(dirPath, 'Version.txt'), 'utf-8');
+    } catch (_) { return null; }
+    const versionMatch = String(versionText).match(/(\d+\.\d+\.\d+)\s+(rev\d+)/i);
+    if (!versionMatch) return null;
+    const assemblyCandidates = [
+      pathMod.join(dirPath, 'RimWorldWin64_Data', 'Managed', 'Assembly-CSharp.dll'),
+      pathMod.join(dirPath, 'RimWorldLinux_Data', 'Managed', 'Assembly-CSharp.dll'),
+      pathMod.join(dirPath, 'RimWorldMac.app', 'Contents', 'Resources', 'Data',
+        'Managed', 'Assembly-CSharp.dll'),
+    ];
+    let assemblySha256 = null;
+    for (const assemblyPath of assemblyCandidates) {
+      try {
+        const bytes = await fsp.readFile(assemblyPath);
+        assemblySha256 = crypto.createHash('sha256').update(bytes).digest('hex').toUpperCase();
+        break;
+      } catch (_) { /* try the next platform layout */ }
+    }
+    return {
+      version: versionMatch[1],
+      revision: versionMatch[2].toLowerCase(),
+      displayVersion: versionMatch[1] + ' ' + versionMatch[2].toLowerCase(),
+      assemblySha256,
+    };
+  };
+  const runtimeFingerprint = await readRuntimeFingerprint();
+
   // ── Incremental cache ──
   // Reading and regex-scanning every mod XML on each rescan is the slow part, yet
   // a player's mod files almost never change between runs. We persist, per file,
@@ -1108,7 +1138,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     raceThingDefsXml: raceThingDefs, workTypeDefsXml: workTypeDefs,
     workGiverDefsXml: workGiverDefs, defSources, definitionSources,
     definitionUncertainty, requirementUncertainty, effectivenessUncertainty,
-    providerFingerprint,
+    providerFingerprint, runtimeFingerprint,
     scannerCacheVersion: CACHE_VERSION, traitFiles, geneFiles, backstoryFiles,
     hediffFiles, totalScanned: total, reusedFromCache: reusedCount,
     freshlyRead: readCount };

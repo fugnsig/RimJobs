@@ -450,10 +450,17 @@ Object.assign(App, {
     });
   },
 
-  _c7CoordinatorOptions(definitionSnapshot, evidenceOptions) {
+  _c5EffectivenessSnapshot() {
+    return C5DefinitionSnapshotFactory.createSnapshot(
+      this.state.effectivenessProvider || null);
+  },
+
+  _c7CoordinatorOptions(definitionSnapshot, evidenceOptions, effectivenessSnapshot) {
     return {
       definitionSnapshot,
       c4RequirementSnapshot: definitionSnapshot,
+      effectivenessSnapshot: effectivenessSnapshot === undefined
+        ? this._c5EffectivenessSnapshot() : effectivenessSnapshot,
       evidenceOptions: evidenceOptions || {},
       capabilityDefinitions: {
         bodyDefs: this.state.scannedBodyDefs || {},
@@ -466,11 +473,13 @@ Object.assign(App, {
 
   _c7PawnContextMap(pawns, evidenceOptionsByPawn) {
     const definitionSnapshot = this._c4DefinitionSnapshot();
+    const effectivenessSnapshot = this._c5EffectivenessSnapshot();
     const contexts = new Map();
     (pawns || []).forEach(pawn => {
       const evidenceOptions = evidenceOptionsByPawn && evidenceOptionsByPawn.get(pawn.id) || {};
       contexts.set(pawn.id, C7EvaluationCoordinator.createPawnContext(
-        pawn, this._c7CoordinatorOptions(definitionSnapshot, evidenceOptions)));
+        pawn, this._c7CoordinatorOptions(
+          definitionSnapshot, evidenceOptions, effectivenessSnapshot)));
     });
     return contexts;
   },

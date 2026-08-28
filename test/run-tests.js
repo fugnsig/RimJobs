@@ -54,6 +54,7 @@ const tests = [
   './c7-static-gates.test.js',
   './c7-grid-parity.test.js',
   './c7-consumer-parity.test.js',
+  './c5-production-contract.test.js',
 ];
 
 (async () => {

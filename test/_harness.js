@@ -50,7 +50,7 @@ function loadScripts(relFiles, ctxStubs) {
     .join('\n;\n');
   // `const Engine = {...}` / `const Charts = {...}` are lexical bindings and will
   // not attach to the context object on their own; copy them across if present.
-  const capture = ['Engine', 'Charts', 'CapabilityEvidence', 'CapacityResolver', 'RequirementRegistry', 'EffectivenessDefinitionRegistry', 'StructuralEffectivenessContext', 'StructuralSkillResolver', 'StructuralPassionResolver', 'StructuralStatResolver', 'StructuralLearningResolver', 'StructuralEffectivenessResolver', 'TemporalProfileResolver', 'PermissionResolver', 'C4EvaluationContext', 'AvailabilityResolver', 'C4LegacyCompatibility', 'C5LegacyCompatibility', 'C7EvaluationCoordinator', 'PRESET_BUILDINGS',
+  const capture = ['Engine', 'Charts', 'CapabilityEvidence', 'CapacityResolver', 'RequirementRegistry', 'EffectivenessDefinitionRegistry', 'C5RuntimeContract', 'C5DefinitionSnapshotFactory', 'StructuralEffectivenessContext', 'StructuralSkillResolver', 'StructuralPassionResolver', 'StructuralStatResolver', 'StructuralLearningResolver', 'StructuralEffectivenessResolver', 'TemporalProfileResolver', 'PermissionResolver', 'C4EvaluationContext', 'AvailabilityResolver', 'C4LegacyCompatibility', 'C5LegacyCompatibility', 'C7EvaluationCoordinator', 'PRESET_BUILDINGS',
     'JOBS', 'SKILLS', 'TRAITS', 'GENES', 'BACKSTORIES', 'VANILLA_DEF_SIZES']
     .map(name => `try { globalThis.${name} = ${name}; } catch (e) {}`).join(' ');
   vm.runInContext(src + '\n;' + capture, ctx);
