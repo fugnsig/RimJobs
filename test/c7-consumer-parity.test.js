@@ -13,12 +13,34 @@ module.exports = function run() {
     }
   };
 
+  let compatibilitySpeedCalls = 0;
+  let canonicalPassionCalls = 0;
   const App = {
-    state: { customJobs: [] },
+    state: { customJobs: [], shiftTypes: ['Anything', 'Work', 'Joy', 'Sleep'] },
     getTrait() { return null; },
     getIdeoEffects() { return {}; },
+    _passionValue(pawnValue, skillId) {
+      return (pawnValue.passions || {})[skillId] || 0;
+    },
+    _passionMeta(rawIdentity) {
+      return { bucket: Number(rawIdentity) || 0 };
+    },
   };
-  const ctx = loadScripts(['data.js', 'engine.js'], { App });
+  const C5LegacyCompatibility = {
+    evaluateLegacyJobWorkSpeed(pawnValue) {
+      compatibilitySpeedCalls++;
+      return pawnValue.compatibilityWorkSpeed;
+    },
+  };
+  const StructuralPassionResolver = {
+    resolve(c5Context, skillDefId) {
+      canonicalPassionCalls++;
+      return c5Context.passionFacts[skillDefId];
+    },
+  };
+  const ctx = loadScripts(['data.js', 'engine.js'], {
+    App, C5LegacyCompatibility, StructuralPassionResolver,
+  });
   const Engine = ctx.Engine;
   const jobs = ctx.JOBS;
   const important = jobs.filter(job => job.important);
@@ -139,6 +161,84 @@ module.exports = function run() {
       'C7-BOT-004 existing conflict detection is unchanged');
   }
 
+  {
+    const a = pawn('capacity-a', { compatibilityWorkSpeed: 2 });
+    const b = pawn('capacity-b', { compatibilityWorkSpeed: 1.5 });
+    const priorities = {
+      [a.id]: { mining: 1 },
+      [b.id]: { mining: 3 },
+    };
+    const map = contextMap([a, b], allEligible);
+    const originalEvaluatePawnJob = Engine.evaluatePawnJob;
+    Engine.evaluatePawnJob = () => { throw new Error('legacy aggregation must not run'); };
+    let capacity = null;
+    try {
+      capacity = Engine.calculateWorkCapacity([a, b], { id: 'mining' }, priorities, map);
+    } catch (_) {
+      capacity = null;
+    }
+    Engine.evaluatePawnJob = originalEvaluatePawnJob;
+    ok(capacity === 2.5,
+      'C7-WC-001 work capacity preserves the frozen numeric compatibility projection');
+    ok(compatibilitySpeedCalls === 2,
+      'C7-WC-001 work capacity uses the explicit C7 compatibility boundary');
+  }
+
+  {
+    const healthy = pawn('temporal-healthy');
+    const unavailable = pawn('temporal-unavailable');
+    const unknown = pawn('temporal-unknown');
+    const blocked = pawn('temporal-blocked');
+    const pawns = [healthy, unavailable, unknown, blocked];
+    const schedules = Object.fromEntries(pawns.map(p => [p.id, Array(24).fill(0)]));
+    const map = contextMap(pawns, p => {
+      if (p.id === unavailable.id) {
+        return { permission: 'allowed', availability: 'unavailable' };
+      }
+      if (p.id === unknown.id) {
+        return { permission: 'unknown', availability: 'unknown' };
+      }
+      if (p.id === blocked.id) {
+        return { permission: 'blocked', availability: 'available' };
+      }
+      return allEligible();
+    });
+    const originalEvaluatePawnJob = Engine.evaluatePawnJob;
+    Engine.evaluatePawnJob = () => ({ permission: { status: 'allowed' } });
+    const coverage = Engine.calculateTemporalCoverage(
+      pawns, schedules, { id: 'doctoring' }, map);
+    Engine.evaluatePawnJob = originalEvaluatePawnJob;
+    ok(coverage.every(hour => hour.count === 2),
+      'C7-TC-001 healthy and explicit unknown pawns preserve temporal participation');
+    ok(coverage.every(hour => hour.capablePawns.some(p => p.id === healthy.id)),
+      'C7-TC-001 allowed and available pawn is included');
+    ok(coverage.every(hour => !hour.capablePawns.some(p => p.id === unavailable.id)),
+      'C7-TC-002 unavailable pawn is excluded by Availability');
+    ok(coverage.every(hour => hour.capablePawns.some(p => p.id === unknown.id)),
+      'C7-TC-003 unknown pawn participates under not-proven-blocked policy');
+    ok(coverage.every(hour => !hour.capablePawns.some(p => p.id === blocked.id)),
+      'C7-TC-004 blocked Permission is excluded');
+  }
+
+  {
+    const p = pawn('passion-canonical', { passions: { medicine: 0 } });
+    const c5Context = {
+      effectivenessSnapshot: {
+        skillPolicies: { Medicine: { appSkillId: 'medicine' } },
+      },
+      passionFacts: {
+        Medicine: { state: 'resolved', completeness: 'complete', compatibilityBucket: 2 },
+      },
+    };
+    const bucket = Engine.passionBucket(p, 'medicine', { c5Context });
+    ok(bucket === 2,
+      'C7-PASSION-001 exact requested SkillDef projects its canonical compatibility bucket');
+    ok(canonicalPassionCalls === 1,
+      'C7-PASSION-001 canonical passion resolver is used when context is available');
+    ok(Engine.passionBucket(p, 'medicine') === 0,
+      'C7-PASSION-002 context-free ranking callers retain the frozen legacy bucket');
+  }
+
   const source = fs.readFileSync(path.join(__dirname, '..', 'files', 'engine.js'), 'utf8');
   const viabilitySource = source.slice(source.indexOf('  calculateViability('),
     source.indexOf('  getBottlenecks('));
@@ -148,6 +248,26 @@ module.exports = function run() {
     'C7-STATIC-VIA viability has no direct legacy Permission call');
   ok(!/evaluateJobPermission/.test(bottleneckSource),
     'C7-STATIC-BOT bottlenecks have no direct legacy Permission call');
+  const workCapacitySource = source.slice(source.indexOf('  calculateWorkCapacity('),
+    source.indexOf('  /**\n   * Survival Index calculation.'));
+  const temporalCoverageStart = source.indexOf('  calculateTemporalCoverage(');
+  const temporalCoverageNext = source.indexOf('  analyzeTemporalResilience(', temporalCoverageStart);
+  const temporalCoverageFallback = source.indexOf('  calculateWorkSpeedMod(', temporalCoverageStart);
+  const temporalCoverageSource = source.slice(temporalCoverageStart,
+    temporalCoverageNext >= 0 ? temporalCoverageNext : temporalCoverageFallback);
+  const passionBucketSource = source.slice(source.indexOf('  passionBucket('),
+    source.indexOf('  runMinMaxAssignment('));
+  ok(!/evaluatePawnJob/.test(workCapacitySource),
+    'C7-STATIC-WC work capacity has no legacy aggregation call');
+  ok(/C5LegacyCompatibility\.evaluateLegacyJobWorkSpeed/.test(workCapacitySource),
+    'C7-STATIC-WC numeric work capacity remains explicit compatibility policy');
+  ok(!/evaluatePawnJob/.test(temporalCoverageSource),
+    'C7-STATIC-TC temporal coverage has no legacy aggregation call');
+  ok(!/state\s*!==\s*['"]blocked['"]/.test(temporalCoverageSource)
+      && !/state\s*!==\s*['"]unavailable['"]/.test(temporalCoverageSource),
+    'C7-STATIC-TC temporal states use explicit participation policy');
+  ok(!/primarySkill/.test(passionBucketSource),
+    'C7-STATIC-PASSION requested passion projection does not create primarySkill');
 
   return { name: 'C7 summary and dashboard consumer parity', total, failures };
 };

@@ -48,11 +48,11 @@
     {
       "id": "36",
       "subject": "Task 4: evaluatePawnJob Consumer Decomposition",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": ["35"],
       "files": ["files/engine.js", "test/c7-consumer-parity.test.js"],
       "verifyCommand": "node test/run-tests.js",
-      "acceptanceCriteria": ["calculateWorkCapacity uses coordinator", "calculateTemporalCoverage uses C4 Permission+Availability dual filter", "evaluatePawnJob marked deprecated", "all suites 0 failures"]
+      "acceptanceCriteria": ["calculateWorkCapacity accepts coordinator context and no longer calls evaluatePawnJob", "work-capacity scalar remains explicit frozen C7 compatibility policy with no canonical effectiveness score", "calculateTemporalCoverage uses explicit C4 allowed|unknown Permission plus available|unknown Availability participation", "unavailable pawns excluded while Permission unknown participates under not-proven-blocked policy", "evaluatePawnJob marked deprecated with no new callers", "passionBucket resolves only exact or uniquely mapped requested SkillDef when context exists and preserves context-free legacy ranking", "focused 5 suites 139 checks 0 failures", "full 50 suites 35272 checks 0 skipped 0 failures"]
     },
     {
       "id": "37",
