@@ -75,11 +75,11 @@
     {
       "id": "39",
       "subject": "Task 7: Scheduler Phase 1 Mechanism-to-Policy Split",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": ["38"],
-      "files": ["files/engine.js", "test/c7-scheduler-parity.test.js", "test/run-tests.js"],
+      "files": ["files/engine.js", "files/app-schedule.js", "files/app-pawns.js", "test/c7-scheduler-parity.test.js", "test/run-tests.js"],
       "verifyCommand": "node test/run-tests.js",
-      "acceptanceCriteria": ["exact 24h schedule array parity for all test pawns", "rationale driver strings unchanged", "C6 mechanism facts consumed via TemporalProfileResolver", "UV avoidance from C6 conditions dimension not windows", "Undergrounder exemption remains C7 policy trait check", "compositionResolved inspected per activity", "rest dimension completeness inspected", "temporal coverage NOT fabricated with hardcoded completeness", "no identity branching in C6 consumption path", "51+ suites 0 failures"]
+      "acceptanceCriteria": ["exact 24h schedule array parity for all test pawns", "rationale driver strings unchanged", "C6 mechanism facts consumed via TemporalProfileResolver", "UV avoidance from C6 conditions dimension not windows", "Undergrounder exemption remains C7 policy trait check", "compositionResolved inspected per activity", "nested rest StatEvaluation quality inspected", "rest dimension completeness inspected", "temporal coverage NOT fabricated with hardcoded completeness", "both production scheduler callers forward provider-derived evidence options and mood-preset reuses one context map", "no identity branching in C6 consumption path", "focused 12 suites 609 checks 0 failures", "full 52 suites 35378 checks 0 skipped 0 failures"]
     },
     {
       "id": "40",

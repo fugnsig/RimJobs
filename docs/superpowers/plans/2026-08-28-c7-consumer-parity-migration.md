@@ -1361,27 +1361,30 @@ git commit -m "C7: migrate auto-assign to coordinator with full priority-matrix 
 
 **Files:**
 - Modify: `files/engine.js:469-592` (`optimizeSchedules` Phase 1)
+- Modify: `files/app-schedule.js:80-88` (scheduler request context)
+- Modify: `files/app-pawns.js:2785-2830` (mood-preset request context reuse)
 - Create: `test/c7-scheduler-parity.test.js`
 - Modify: `test/run-tests.js`
 
 **Acceptance Criteria:**
-- [ ] Exact 24-hour schedule array parity for all test pawns
-- [ ] Rationale report text unchanged (driver strings preserved)
-- [ ] C6 mechanism facts consumed: `rest.needState`, rest StatEvaluations, recreation recommendations, `windows` (Night Owl avoidHours), `conditions` (UV avoidCondition), activities
-- [ ] UV sensitivity avoid hours read from C6 `conditions` dimension (`condition:'daylight'`, `fallbackHours:{start:6,end:18}`) - NOT from `windows`
-- [ ] Undergrounder exemption remains as C7 policy trait check - Undergrounder is in `_SKIP_TRAITS`, NOT emitted by C2, NOT in C6
-- [ ] C7 policy owns: sleep hours, joy hours, meditate hours, work hours, workload budget, child rules, break-risk mitigation, Undergrounder interpretation, mood presets, depressive/neurotic checks
-- [ ] Temporal coverage NOT fabricated with hardcoded `completeness:'complete'` - derived from C2's `_temporalFamilyCoverage`
-- [ ] Each activity's `compositionResolved` inspected - unresolved composition skips meditation hours
-- [ ] Rest dimension completeness inspected via `tp.dimensions.rest.completeness`
-- [ ] Legacy `sleepHoursOverride` consumed from `rest.compatibility` only inside the explicit legacy-parity projection
-- [ ] No identity-based branching (trait/gene/hediff names) in the C6 consumption path (Undergrounder check is C7 policy, not C6 consumption)
+- [x] Exact 24-hour schedule array parity for all test pawns
+- [x] Rationale report text unchanged (driver strings preserved)
+- [x] C6 mechanism facts consumed: `rest.needState`, rest StatEvaluations, recreation recommendations, `windows` (Night Owl avoidHours), `conditions` (UV avoidCondition), activities
+- [x] UV sensitivity avoid hours read from C6 `conditions` dimension (`condition:'daylight'`, `fallbackHours:{start:6,end:18}`) - NOT from `windows`
+- [x] Undergrounder exemption remains as C7 policy trait check - Undergrounder is in `_SKIP_TRAITS`, NOT emitted by C2, NOT in C6
+- [x] C7 policy owns: sleep hours, joy hours, meditate hours, work hours, workload budget, child rules, break-risk mitigation, Undergrounder interpretation, mood presets, depressive/neurotic checks
+- [x] Temporal coverage NOT fabricated with hardcoded `completeness:'complete'` - derived from C2's `_temporalFamilyCoverage`
+- [x] Each activity's `compositionResolved` inspected - unresolved composition skips meditation hours
+- [x] Rest dimension completeness inspected via `tp.dimensions.rest.completeness`
+- [x] Legacy `sleepHoursOverride` consumed from `rest.compatibility` only inside the explicit legacy-parity projection
+- [x] No identity-based branching (trait/gene/hediff names) in the C6 consumption path (Undergrounder check is C7 policy, not C6 consumption)
+- [x] Both production scheduler callers forward contexts built from `_c7EvidenceOptionsByPawn`; the mood-preset path reuses one context map for scheduling and auto-assign
 
 **Verify:** `node test/run-tests.js` - all suites pass, new scheduler parity suite has 30+ checks.
 
 **Steps:**
 
-- [ ] **Step 1: Write scheduler parity tests**
+- [x] **Step 1: Write scheduler parity tests**
 
 Create `test/c7-scheduler-parity.test.js`. Build test profiles and compare schedule arrays:
 
@@ -1425,7 +1428,7 @@ module.exports = function run() {
 };
 ```
 
-- [ ] **Step 2: Extract C6 mechanism consumption**
+- [x] **Step 2: Extract C6 mechanism consumption**
 
 Add a `_c7TemporalInputs(pawnCtx, pawn)` helper to engine.js that reads C6 mechanism facts and maps them to the scheduler's input vocabulary.
 
@@ -1501,7 +1504,7 @@ _c7TemporalInputs(pawnCtx, pawn) {
 },
 ```
 
-- [ ] **Step 3: Rewrite Phase 1 to consume C6 inputs and apply C7 policy**
+- [x] **Step 3: Rewrite Phase 1 to consume C6 inputs and apply C7 policy**
 
 Replace the identity-based profiling block (engine.js:482-592). The key change: instead of checking trait/gene names directly, read from the C6 temporal inputs, then apply C7 policy for hours, child rules, and break risk.
 
@@ -1551,9 +1554,9 @@ var needsNight = avoidAwake.size > 0;
 - Depressive, neurotic, break risk -> remain as C7 policy reading trait definitions directly (break thresholds are policy metadata, not temporal mechanism)
 - Child/baby age rules -> remain as C7 policy (life-stage scheduling is C7 policy per frozen C6 design)
 
-- [ ] **Step 4: Build coordinator contexts for scheduler**
+- [x] **Step 4: Build coordinator contexts for scheduler**
 
-At the top of `optimizeSchedules`, build contexts. Do NOT fabricate `temporalCoverage` with hardcoded `completeness: 'complete'`. Forward only the caller/provider-supplied C2 evidence options. `CapabilityEvidence._temporalFamilyCoverage()` derives coverage from `evidenceOptions.temporalCoverage`; if the caller/provider supplies no coverage, every temporal family remains `unknown` and C7 policy must use its named legacy fallback.
+At the top of `optimizeSchedules`, consume a caller-supplied request context map, with a legacy direct-call fallback through `App._c7PawnContextMap`. Do NOT fabricate `temporalCoverage` with hardcoded `completeness: 'complete'`. The two production callers build contexts through `_c7PawnContextMap(pawns, _c7EvidenceOptionsByPawn)`, preserving the actual caller/provider-supplied C2 evidence options. `CapabilityEvidence._temporalFamilyCoverage()` derives coverage from `evidenceOptions.temporalCoverage`; if the caller/provider supplies no coverage, every temporal family remains `unknown` and C7 policy must use its named legacy fallback.
 
 ```javascript
 var contextMap = new Map();
@@ -1570,15 +1573,20 @@ pawns.forEach(function (p) {
 
 The coordinator forwards these evidence options unchanged into `CapabilityEvidence.collectPawnEvidence()`. The coordinator's `_c7TemporalInputs` helper inspects `tp.dimensions.rest.completeness` etc. from the resulting profile. If a dimension's completeness is not `'complete'`, the helper exposes that via `restComplete` so policy uses the explicit legacy fallback. No C7 helper may upgrade absent or partial coverage to complete.
 
-- [ ] **Step 5: Run parity tests**
+- [x] **Step 5: Run parity tests**
 
 Run: `node test/run-tests.js`
 Expected: All suites pass. Every test pawn produces the exact same 24-hour schedule array as C1.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
+
+Actual verification before commit: focused 12 suites / 609 checks / 0 failures;
+full 52 suites / 35,378 checks / 0 skipped / 0 failures. Syntax checks,
+C6/C7 static gates, exact Phase 2-5 source comparison, architecture searches,
+and `git diff --check` passed.
 
 ```
-git add files/engine.js test/c7-scheduler-parity.test.js test/run-tests.js
+git add files/engine.js files/app-schedule.js files/app-pawns.js test/c7-scheduler-parity.test.js test/run-tests.js
 git commit -m "C7: split scheduler Phase 1 into C6 mechanism consumption and C7 policy"
 ```
 

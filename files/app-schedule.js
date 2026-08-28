@@ -81,7 +81,10 @@ Object.assign(App, {
 
   autoOptimizeSchedules() {
     // Keep the rationale report so the grid can explain *why* it chose these hours.
-    this._schedRationale = Engine.optimizeSchedules(this.state.pawns);
+    const contextMap = this._c7PawnContextMap(
+      this.state.pawns, this._c7EvidenceOptionsByPawn);
+    this._schedRationale = Engine.optimizeSchedules(
+      this.state.pawns, { contextMap });
     // The shift planner piggy-backs ON the priorities table - it reads priorities
     // (workload, critical cover) and must never write them. The auto-assign re-run
     // that used to live here silently reset EVERY column, including manual choices.
