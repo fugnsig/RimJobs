@@ -43,6 +43,9 @@ Object.assign(App, {
   _pawnCardHash(p) {
     const t = p.traits || [];
     const s = SKILLS.map(sk => p.skills[sk.id] + ',' + (p.passions[sk.id]||0)).join(';');
+    const provider = this.state.effectivenessProvider || {};
+    const providerKey = String(provider.providerFingerprint || '') + ':'
+      + JSON.stringify(provider.runtimeFingerprint || null);
     const h = p.health ? p.health.length : 0;
     return [
       p.name, p.nickname||'', p.firstName||'', p.lastName||'',
@@ -50,7 +53,7 @@ Object.assign(App, {
       p.childhood||'', p.adulthood||'', p.collapsed?1:0, p.traitsCollapsed?1:0,
       p.moodPreset||'', p.bio||'', p.avatarBg||'', p.avatarColor||'',
       t.join(','), s, h, (p.incapable||[]).join(','), p.downed ? 1 : 0,
-      this._rcTraitCount
+      this._rcTraitCount, providerKey
     ].join('|');
   },
 
@@ -65,7 +68,7 @@ Object.assign(App, {
   },
 
   // Build HTML for a single pawn sidebar card (extracted for differential rendering)
-  _renderPawnCardHtml(p, compact) {
+  _renderPawnCardHtml(p, compact, pawnCtx) {
     const xeno = this.getXeno(p.xenotype); const collapsed = p.collapsed; const traitsCollapsed = p.traitsCollapsed || false;
     const xenoIncap = xeno.incapable || [];
     const role = this.getRole(p.role || 'none');
@@ -83,9 +86,12 @@ Object.assign(App, {
     const fullNameStr = hasFullName ? _escapeHtml([p.firstName, p.lastName].filter(Boolean).join(' ')) : '';
     const xenoColor = _safeColor(xeno.color);
 
-    const wsMod = Engine.calculateWorkSpeedMod(p);
+    const wsProjection = this._c5WorkSpeedDisplay(p, pawnCtx);
+    const wsMod = wsProjection.value;
     const wsDisplay = (wsMod * 100).toFixed(0) + '%';
     const wsColor = wsMod > 1.05 ? 'var(--accent)' : wsMod < 0.95 ? 'var(--p4-txt)' : 'var(--text3)';
+    const wsTitle = 'Work Speed Modifier' + (wsProjection.notice
+      ? ' · ' + wsProjection.notice : '');
     const ageDisplay = p.bioAge != null ? `${p.bioAge}y` : '';
     const chronoDisplay = p.chronoAge != null && p.chronoAge !== p.bioAge ? ` (${p.chronoAge})` : '';
     const uvLevel = (xeno.uvSensitivity || 0);
@@ -101,7 +107,7 @@ Object.assign(App, {
           <div class="pawn-header" style="margin-bottom:0">
             <div class="avatar" style="width:calc(var(--f-base) * 1.6); height:calc(var(--f-base) * 1.6); font-size:var(--f-xs); background:${avatarBg};color:${avatarColor}">${avatarIcon}</div>
             <input class="pawn-name" draggable="false" value="${pawnName}" oninput="App.renameNickname('${p.id}', this.value)" style="font-size:var(--f-sm)">
-            ${ageDisplay ? `<span style="font-size:var(--f-xs); color:var(--text3); font-weight:600; margin-right:2px" title="Bio age${chronoDisplay ? ' (Chrono: '+p.chronoAge+')' : ''}">${ageDisplay}</span>` : ''}${uvBadge ? `<span style="font-size:var(--f-xs); color:#e8a838; margin-right:2px" title="${uvLevel===2?'Intense':'Mild'} UV Sensitivity">${uvBadge}</span>` : ''}<div class="ws-pill" style="font-size:var(--f-xs); color:${wsColor}; font-weight:700; margin-right:4px" title="Work Speed Modifier">${wsDisplay}</div>
+            ${ageDisplay ? `<span style="font-size:var(--f-xs); color:var(--text3); font-weight:600; margin-right:2px" title="Bio age${chronoDisplay ? ' (Chrono: '+p.chronoAge+')' : ''}">${ageDisplay}</span>` : ''}${uvBadge ? `<span style="font-size:var(--f-xs); color:#e8a838; margin-right:2px" title="${uvLevel===2?'Intense':'Mild'} UV Sensitivity">${uvBadge}</span>` : ''}<div class="ws-pill" style="font-size:var(--f-xs); color:${wsColor}; font-weight:700; margin-right:4px" title="${_escapeHtml(wsTitle)}">${wsDisplay}</div>
             <button class="pawn-del" onclick="App.duplicatePawn('${p.id}')" title="Clone Pawn" style="width:calc(var(--f-base) * 1.4); height:calc(var(--f-base) * 1.4); font-size:var(--f-xs); margin-right:4px; color:var(--accent)">Copy</button>
             <button class="pawn-del" onclick="App.removePawn('${p.id}')" style="width:calc(var(--f-base) * 1.4); height:calc(var(--f-base) * 1.4); font-size:var(--f-xs)">&times;</button>
           </div>
@@ -129,12 +135,17 @@ Object.assign(App, {
 
     // Build skills HTML
     const skillsHtml = SKILLS.map(s => {
-      const base = p.skills[s.id]; const eff = this.effectiveSkill(p, s.id); const mod = (eff - base);
+      const base = p.skills[s.id];
+      const display = this._c5SkillDisplay(p, pawnCtx, s.id);
+      const eff = display.level; const mod = (eff - base);
       const lvlClass = eff >= 20 ? 'lvl-max' : eff >= 10 ? 'lvl-high' : eff >= 5 ? 'lvl-mid' : 'lvl-low';
       const pmeta = this._passionMeta(this._passionValue(p, s.id));
       const pcls = pmeta.modded ? 'passion-modded' : (pmeta.bucket === 1 ? 'on-1' : pmeta.bucket === 2 ? 'on-2' : '');
       const spark = this.renderSparkline(p.skillHistory?.[s.id]);
-      return `<div class="skill-row" data-skill-id="${s.id}" title="${s.name}: Base ${base}${mod?' + '+mod+' Modifiers':''} = ${eff} Total"><span class="skill-name">${s.name}</span><div class="skill-stepper"><button class="step-btn" onclick="App.setSkill('${p.id}','${s.id}',${Math.max(0,base-1)})">&#8722;</button><span class="step-val ${eff>12?'skill-high':eff>7?'skill-mid':''}">${base}</span><button class="step-btn" onclick="App.setSkill('${p.id}','${s.id}',${Math.min(20,base+1)})">+</button>${spark}</div><div class="skill-bar"><div class="skill-fill ${lvlClass}" style="width:${(eff/20)*100}%"></div></div><button class="passion-btn ${pcls}" title="${_escapeHtml(pmeta.label)}" onclick="App.togglePassion('${p.id}','${s.id}', 1)" oncontextmenu="event.preventDefault(); App.togglePassion('${p.id}','${s.id}', -1)">${_escapeHtml(pmeta.glyph)}</button></div>`;
+      const skillTitle = s.name + ': Base ' + base
+        + (mod ? ' + ' + mod + ' Modifiers' : '') + ' = ' + eff + ' Total'
+        + (display.notice ? ' · ' + display.notice : '');
+      return `<div class="skill-row" data-skill-id="${s.id}" title="${_escapeHtml(skillTitle)}"><span class="skill-name">${s.name}</span><div class="skill-stepper"><button class="step-btn" onclick="App.setSkill('${p.id}','${s.id}',${Math.max(0,base-1)})">&#8722;</button><span class="step-val ${eff>12?'skill-high':eff>7?'skill-mid':''}">${base}</span><button class="step-btn" onclick="App.setSkill('${p.id}','${s.id}',${Math.min(20,base+1)})">+</button>${spark}</div><div class="skill-bar"><div class="skill-fill ${lvlClass}" style="width:${(eff/20)*100}%"></div></div><button class="passion-btn ${pcls}" title="${_escapeHtml(pmeta.label)}" onclick="App.togglePassion('${p.id}','${s.id}', 1)" oncontextmenu="event.preventDefault(); App.togglePassion('${p.id}','${s.id}', -1)">${_escapeHtml(pmeta.glyph)}</button></div>`;
     }).join('');
 
     // Build incapable HTML
@@ -159,7 +170,7 @@ Object.assign(App, {
           <div class="avatar" style="background:${avatarBg};color:${avatarColor}">${avatarIcon}</div>
           <input class="pawn-name" draggable="false" value="${pawnName}" oninput="App.renameNickname('${p.id}', this.value)">
           ${ageDisplay ? `<span style="font-size:var(--f-xs); color:var(--text3); font-weight:600; margin-right:4px" title="Bio age${chronoDisplay ? ' (Chrono: '+p.chronoAge+')' : ''}">${ageDisplay}</span>` : ''}${uvBadge ? `<span style="font-size:var(--f-xs); color:#e8a838; margin-right:4px" title="${uvLevel===2?'Intense':'Mild'} UV Sensitivity">${uvBadge}</span>` : ''}
-          <div class="ws-pill" style="font-size:var(--f-xs); padding:2px 6px; background:var(--surface3); border:1px solid ${wsColor}; border-radius:12px; color:${wsColor}; margin-right:8px; font-weight:700" title="Work Speed Modifier (Traits + Role)">${wsDisplay}</div>
+          <div class="ws-pill" style="font-size:var(--f-xs); padding:2px 6px; background:var(--surface3); border:1px solid ${wsColor}; border-radius:12px; color:${wsColor}; margin-right:8px; font-weight:700" title="${_escapeHtml(wsTitle)}">${wsDisplay}</div>
           <button class="icon-btn collapse-btn" onclick="App.toggleCollapse('${p.id}')">${collapsed?'▼':'▲'}</button>
           <button class="pawn-del" onclick="App.removePawn('${p.id}')" title="Delete Pawn">&times;</button>
         </div>
@@ -247,6 +258,8 @@ Object.assign(App, {
     this.state.pawnFilter = search;
     const filteredPawns = this._sortPawns(this.state.pawns.filter(p => p.name.toLowerCase().includes(search)));
     const compact = this.state.settings.compactSidebar;
+    const pawnContexts = this._c7PawnContextMap(
+      filteredPawns, this._c7EvidenceOptionsByPawn);
 
     // Populate sort dropdown (only rebuild if options missing)
     const sortEl = document.getElementById('pawnSort');
@@ -277,7 +290,7 @@ Object.assign(App, {
       const newHashes = {};
       const htmlParts = filteredPawns.map(p => { try {
         newHashes[p.id] = this._pawnCardHash(p);
-        return this._renderPawnCardHtml(p, compact);
+        return this._renderPawnCardHtml(p, compact, pawnContexts.get(p.id));
       } catch(err) { console.warn('Render error for pawn', p?.id, err); return `<div class="pawn-card" data-pawn-id="${p?.id}" style="border:1px solid #ef5350;padding:12px"><span style="color:#ef5350;font-weight:700">! Render error</span></div>`; } });
       el.innerHTML = htmlParts.join('');
       this._pawnCardHashes = newHashes;
@@ -290,7 +303,8 @@ Object.assign(App, {
         if (this._pawnCardHashes[p.id] !== newHash) {
           try {
             const tmp = document.createElement('div');
-            tmp.innerHTML = this._renderPawnCardHtml(p, compact);
+            tmp.innerHTML = this._renderPawnCardHtml(
+              p, compact, pawnContexts.get(p.id));
             const newCard = tmp.firstElementChild;
             if (children[i]) el.replaceChild(newCard, children[i]);
           } catch(err) { console.warn('Diff render error for pawn', p?.id, err); }
@@ -456,12 +470,20 @@ Object.assign(App, {
   },
 
   _c7CoordinatorOptions(definitionSnapshot, evidenceOptions, effectivenessSnapshot) {
+    const c5Snapshot = effectivenessSnapshot === undefined
+      ? this._c5EffectivenessSnapshot() : effectivenessSnapshot;
+    const provider = this.state.effectivenessProvider || null;
+    const c5EvidenceOptions = c5Snapshot ? {
+      effectivenessSourceCatalogues: {
+        sourceOperations: c5Snapshot.sourceOperationCatalogues || {},
+        sourceFamilyCompleteness: provider && provider.sourceFamilyCompleteness || {},
+      },
+    } : {};
     return {
       definitionSnapshot,
       c4RequirementSnapshot: definitionSnapshot,
-      effectivenessSnapshot: effectivenessSnapshot === undefined
-        ? this._c5EffectivenessSnapshot() : effectivenessSnapshot,
-      evidenceOptions: evidenceOptions || {},
+      effectivenessSnapshot: c5Snapshot,
+      evidenceOptions: Object.assign(c5EvidenceOptions, evidenceOptions || {}),
       capabilityDefinitions: {
         bodyDefs: this.state.scannedBodyDefs || {},
         bodyPartDefs: this.state.scannedBodyPartDefs || {},
@@ -709,7 +731,7 @@ Object.assign(App, {
     const radarCard = `
       <div class="dash-card dash-card--hero" style="display:flex; flex-direction:column; align-items:center; padding:${isWidget ? '10px 8px' : '20px 24px'}">
         <div class="trait-title" style="margin-bottom:${isWidget ? '6px' : '12px'}">Colony Skill Radar</div>
-        ${Charts.renderColonyRadar(this.state.pawns, radarSize)}
+        ${Charts.renderColonyRadar(this.state.pawns, radarSize, contextMap)}
         <div class="settings-desc" style="margin-top:${isWidget ? '6px' : '10px'}; text-align:center; max-width:340px">Each spoke = colony average (0-20). Wider = more rounded.</div>
       </div>`;
 

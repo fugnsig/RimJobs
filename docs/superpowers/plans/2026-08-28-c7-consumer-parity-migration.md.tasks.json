@@ -39,11 +39,11 @@
     {
       "id": "35",
       "subject": "Task 3: C5 Skill and Stat Display Migration",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": ["34A"],
       "files": ["files/app-pawns.js", "files/app-render.js", "files/charts.js", "test/c7-skill-display-parity.test.js", "test/run-tests.js"],
       "verifyCommand": "node test/run-tests.js",
-      "acceptanceCriteria": ["skill numbers match C1 via SkillFact.runtimeGetLevelForUIProjection", "passion glyphs match C1", "no canonical primarySkill selection", "StructuralSkillResolver.resolve used for C5 projection", "known SkillDef projected as UI projection not canonical primary", "49+ suites 0 failures"]
+      "acceptanceCriteria": ["skill numbers match C1 via SkillFact.runtimeGetLevelForUIProjection except exact creationGainAlreadyPersisted display fixture", "creationGainAlreadyPersisted displays canonical 10 instead of legacy double-counted 12", "approved delta is display-only and ranking/assignment/analyser/viability remain frozen", "passion glyphs match C1", "no canonical primarySkill selection", "StructuralSkillResolver.resolve used for C5 projection", "known SkillDef projected as UI projection not canonical primary", "all other complete supported differences stop for review", "50+ suites 0 failures"]
     },
     {
       "id": "36",

@@ -46,6 +46,143 @@ Object.assign(App, {
     return Number.isFinite(sum) ? Math.max(0, Math.min(20, sum)) : 0;
   },
 
+  _c5SkillProjection(pawnCtx, requestedSkillId) {
+    const c5Context = pawnCtx && pawnCtx.c5Context;
+    const policies = c5Context && c5Context.effectivenessSnapshot
+      && c5Context.effectivenessSnapshot.skillPolicies || {};
+    let matches = [];
+    if (policies[requestedSkillId]) {
+      matches = [requestedSkillId];
+    } else {
+      matches = Object.keys(policies).filter(skillDefId =>
+        policies[skillDefId] && policies[skillDefId].appSkillId === requestedSkillId);
+    }
+    const reason = matches.length > 1 ? 'ambiguousSkillDefProjection'
+      : matches.length === 0 ? 'unregisteredSkillDefProjection' : null;
+    if (reason) {
+      return {
+        level: null, source: 'unknown', skillDefId: null, state: 'unknown',
+        completeness: 'unknown', precision: 'approximate', unresolved: [], reason,
+        fact: null,
+      };
+    }
+    const skillDefId = matches[0];
+    const fact = StructuralSkillResolver.resolve(c5Context, skillDefId);
+    const uiLevel = Number.isFinite(fact.runtimeGetLevelForUIProjection)
+      ? fact.runtimeGetLevelForUIProjection : null;
+    const runtimeLevel = Number.isFinite(fact.runtimeGetLevelProjection)
+      ? fact.runtimeGetLevelProjection : null;
+    const level = uiLevel == null ? runtimeLevel : uiLevel;
+    return {
+      level,
+      source: level == null ? 'unknown' : 'c5',
+      skillDefId,
+      state: fact.state || 'unknown',
+      completeness: fact.completeness || 'unknown',
+      precision: fact.storedLevelInt && fact.storedLevelInt.state === 'known'
+        ? null : 'approximate',
+      unresolved: Array.isArray(fact.unresolved) ? fact.unresolved : [],
+      reason: level == null ? 'canonicalSkillProjectionUnknown' : null,
+      fact,
+    };
+  },
+
+  _c5SkillProjectionNotice(projection) {
+    if (projection && projection.level != null
+        && projection.completeness === 'complete') return '';
+    const state = projection && projection.completeness || 'unknown';
+    const reason = projection && projection.reason;
+    if (reason === 'ambiguousSkillDefProjection') {
+      return 'Canonical C5 skill evidence is ambiguous across multiple SkillDefs; '
+        + 'showing the legacy-compatible value.';
+    }
+    if (projection && projection.level != null) {
+      return 'Canonical C5 skill evidence is ' + state
+        + '; displaying the available canonical projection.';
+    }
+    return 'Canonical C5 skill evidence is ' + state
+      + '; showing the legacy-compatible value.';
+  },
+
+  _c5SkillDisplay(pawn, pawnCtx, requestedSkillId) {
+    const projection = this._c5SkillProjection(pawnCtx, requestedSkillId);
+    if (projection.level != null) {
+      return Object.assign({}, projection, {
+        fallbackUsed: false,
+        notice: this._c5SkillProjectionNotice(projection),
+      });
+    }
+    return Object.assign({}, projection, {
+      level: this.effectiveSkill(pawn, requestedSkillId),
+      fallbackUsed: true,
+      notice: this._c5SkillProjectionNotice(projection),
+    });
+  },
+
+  _c5StatProjection(pawnCtx, statDefId) {
+    const c5Context = pawnCtx && pawnCtx.c5Context;
+    if (!c5Context) {
+      return {
+        value: null, source: 'unknown', statDefId, state: 'unknown',
+        completeness: 'unknown', precision: [], unresolved: [],
+        notice: 'Canonical C5 stat evidence is unknown; showing the legacy-compatible value.',
+        fact: null,
+      };
+    }
+    const fact = StructuralStatResolver.resolve(c5Context, statDefId);
+    const precision = Array.isArray(fact.precision) ? fact.precision : [];
+    const usable = !fact.frontier && Number.isFinite(fact.resolvedPrefixValue);
+    const notices = [];
+    if (precision.length) {
+      const inputs = precision.map(item => item.capacityDefId + ' '
+        + item.roundedValue + ' at ' + (item.roundingIncrement || 0.01)).join(', ');
+      notices.push('Precision: exact against rounded C3 capacity input (' + inputs
+        + '); not bit-exact against unrounded runtime capacity.');
+    }
+    if (!usable || (fact.completeness !== 'complete' && !precision.length)) {
+      notices.push('Canonical C5 stat evidence is ' + (fact.completeness || 'unknown')
+        + (usable ? '.' : '; showing the legacy-compatible value.'));
+    }
+    return {
+      value: usable ? fact.resolvedPrefixValue : null,
+      source: usable ? 'c5' : 'unknown',
+      statDefId,
+      state: fact.state || 'unknown',
+      completeness: fact.completeness || 'unknown',
+      precision,
+      unresolved: Array.isArray(fact.unresolved) ? fact.unresolved : [],
+      notice: notices.join(' '),
+      fact,
+    };
+  },
+
+  _c5WorkSpeedDisplay(pawn, pawnCtx) {
+    const projection = this._c5StatProjection(pawnCtx, 'WorkSpeedGlobal');
+    if (projection.value != null) {
+      return Object.assign({}, projection, { fallbackUsed: false });
+    }
+    return Object.assign({}, projection, {
+      value: Engine.calculateWorkSpeedMod(pawn), fallbackUsed: true,
+    });
+  },
+
+  _c5UpdateRawSkillLevel(pawn, appSkillId, level) {
+    const records = pawn && pawn.rawSkillRecords;
+    if (!records || typeof records !== 'object') return false;
+    const matches = Object.values(records).filter(record => record
+      && record.appSkillId === appSkillId);
+    if (matches.length !== 1) return false;
+    const record = matches[0];
+    record.recordPresence = 'present';
+    record.levelFieldPresent = true;
+    record.levelState = 'known';
+    record.levelInt = level;
+    record.provenance = Object.assign({}, record.provenance || {}, {
+      editedByRimJobs: true,
+    });
+    return true;
+  },
+
   isIncapable(pawn, job) {
     // Downed (from save import): the pawn is incapacitated in bed - a wound, missing
     // organ or modded part (e.g. an android awaiting a reactor) keeps them down for an
@@ -1203,6 +1340,8 @@ Object.assign(App, {
     const _savedScroll = body.scrollTop;
     this._buildRenderCache();
     const pawns = this.state.pawns;
+    const pawnContexts = this._c7PawnContextMap(
+      pawns, this._c7EvidenceOptionsByPawn);
 
     if (pawns.length === 0) {
       body.innerHTML = `<div style="text-align:center;padding:var(--gap-2xl);color:var(--text3)">
@@ -1214,6 +1353,7 @@ Object.assign(App, {
     }
 
     body.innerHTML = pawns.map(p => {
+      const pawnCtx = pawnContexts.get(p.id);
       const xeno = this.getXeno(p.xenotype);
       const role = this.getRole(p.role || 'none');
       const xenoIncap = xeno.incapable || [];
@@ -1231,9 +1371,12 @@ Object.assign(App, {
       const avatarIcon = _escapeHtml(((p.nickname || p.name) || '?')[0].toUpperCase());
       const xenoColor = _safeColor(xeno.color);
 
-      const wsMod = Engine.calculateWorkSpeedMod(p);
+      const wsProjection = this._c5WorkSpeedDisplay(p, pawnCtx);
+      const wsMod = wsProjection.value;
       const wsDisplay = (wsMod * 100).toFixed(0) + '%';
       const wsColor = wsMod > 1.05 ? 'var(--accent)' : wsMod < 0.95 ? 'var(--p4-txt)' : 'var(--text3)';
+      const wsTitle = 'Work Speed Modifier' + (wsProjection.notice
+        ? ' · ' + wsProjection.notice : '');
 
       const traitsCollapsed = p.traitsCollapsed || false;
       const pawnTraitIds = p.traits || [];
@@ -1260,7 +1403,7 @@ Object.assign(App, {
                 <span style="font-size:var(--f-xs);color:var(--text3)">•</span>
                 <span style="font-size:var(--f-xs);color:var(--text3)">${_escapeHtml(role.label)}</span>
                 ${p.bioAge != null ? `<span style="font-size:var(--f-xs);color:var(--text3)">• ${p.bioAge}y</span>` : ''}${(xeno.uvSensitivity||0) >= 1 ? `<span style="font-size:var(--f-xs);color:#e8a838" title="${(xeno.uvSensitivity||0)===2?'Intense':'Mild'} UV Sensitivity">• UV</span>` : ''}
-                <span style="font-size:var(--f-xs);font-weight:700;color:${wsColor};margin-left:auto">Work Speed ${wsDisplay}</span>
+                <span style="font-size:var(--f-xs);font-weight:700;color:${wsColor};margin-left:auto" title="${_escapeHtml(wsTitle)}">Work Speed ${wsDisplay}</span>
               </div>
             </div>
             <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
@@ -1340,10 +1483,14 @@ Object.assign(App, {
               <div class="pm-section-title">Skills</div>
               <div class="pm-skills-grid">
                 ${SKILLS.map(s => {
-                  const base = p.skills[s.id]; const eff = this.effectiveSkill(p, s.id);
+                  const base = p.skills[s.id];
+                  const display = this._c5SkillDisplay(p, pawnCtx, s.id);
+                  const eff = display.level;
                   const lvlClass = eff >= 20 ? 'lvl-max' : eff >= 10 ? 'lvl-high' : eff >= 5 ? 'lvl-mid' : 'lvl-low';
                   const pct = Math.min(100, (eff / 20) * 100);
-                  return `<div class="pm-skill-row">
+                  const skillTitle = s.name + ': ' + eff + ' effective'
+                    + (display.notice ? ' · ' + display.notice : '');
+                  return `<div class="pm-skill-row" title="${_escapeHtml(skillTitle)}">
                     <span class="pm-skill-name">${_escapeHtml(s.short)}</span>
                     <div class="skill-stepper" style="flex-shrink:0">
                       <button class="step-btn" onmousedown="App.setSkill('${p.id}','${s.id}',${Math.max(0, base-1)}); App.renderPawnManager()">−</button>
@@ -1531,10 +1678,12 @@ Object.assign(App, {
     const p = this.state.pawns[this._spotlightIdx];
     if (!ov || !p) return;
     const total = this.state.pawns.length;
+    const pawnCtx = this._c7PawnContextMap(
+      [p], this._c7EvidenceOptionsByPawn).get(p.id);
     ov.innerHTML = `
       <button class="spotlight-arrow" onclick="App.spotlightStep(-1)" title="Previous pawn (Left arrow)">&#10094;</button>
       <div class="spotlight-stage">
-        <div class="spotlight-card ${dir < 0 ? 'enter-left' : 'enter-right'}" id="spotlightCard">${this._spotlightCardHtml(p)}</div>
+        <div class="spotlight-card ${dir < 0 ? 'enter-left' : 'enter-right'}" id="spotlightCard">${this._spotlightCardHtml(p, pawnCtx)}</div>
         <div class="spotlight-footer">
           <span class="spotlight-counter">${this._spotlightIdx + 1} of ${total}</span>
           <button class="btn btn-sm" onclick="App.spotlightLocate()" title="Close and scroll the sidebar to this pawn's card">Show in sidebar</button>
@@ -1545,7 +1694,7 @@ Object.assign(App, {
   },
 
   // The enlarged card body: a read-only, presentation-grade summary of the pawn.
-  _spotlightCardHtml(p) {
+  _spotlightCardHtml(p, pawnCtx) {
     const xeno = this.getXeno(p.xenotype);
     const xenoColor = _safeColor(xeno.color);
     const role = this.getRole(p.role || 'none');
@@ -1554,8 +1703,11 @@ Object.assign(App, {
     const avatarColor = _safeColor(p.avatarColor || av.color, '#ffffff');
     const displayName = _escapeHtml(p.nickname || p.name || '?');
     const fullName = [p.firstName, p.lastName].filter(Boolean).join(' ');
-    const wsMod = Engine.calculateWorkSpeedMod(p);
+    const wsProjection = this._c5WorkSpeedDisplay(p, pawnCtx);
+    const wsMod = wsProjection.value;
     const wsColor = wsMod > 1.05 ? 'var(--accent)' : wsMod < 0.95 ? 'var(--p4-txt)' : 'var(--text3)';
+    const wsTitle = 'Work Speed Modifier' + (wsProjection.notice
+      ? ' · ' + wsProjection.notice : '');
     const uvLevel = xeno.uvSensitivity || 0;
 
     const meta = [];
@@ -1583,10 +1735,14 @@ Object.assign(App, {
     // Skills: two-column grid, effective values with passion glyphs
     const skillCells = SKILLS.map(s => {
       const base = p.skills[s.id] || 0;
-      const eff = this.effectiveSkill(p, s.id);
+      const display = this._c5SkillDisplay(p, pawnCtx, s.id);
+      const eff = display.level;
       const lvlClass = eff >= 20 ? 'lvl-max' : eff >= 10 ? 'lvl-high' : eff >= 5 ? 'lvl-mid' : 'lvl-low';
       const pmeta = this._passionMeta(this._passionValue(p, s.id));
-      return `<div class="spotlight-skill" title="${s.name}: base ${base}, effective ${eff}${pmeta.label && pmeta.label !== 'None' ? ' - ' + _escapeHtml(pmeta.label) : ''}">
+      const skillTitle = s.name + ': base ' + base + ', effective ' + eff
+        + (pmeta.label && pmeta.label !== 'None' ? ' - ' + pmeta.label : '')
+        + (display.notice ? ' · ' + display.notice : '');
+      return `<div class="spotlight-skill" title="${_escapeHtml(skillTitle)}">
         <span class="spotlight-skill-name">${s.name}</span>
         <span class="spotlight-skill-val">${eff}</span>
         <div class="skill-bar"><div class="skill-fill ${lvlClass}" style="width:${Math.min(100, (eff / 20) * 100)}%"></div></div>
@@ -1627,7 +1783,7 @@ Object.assign(App, {
         <div class="spotlight-pills">
           <span class="spotlight-pill" style="border-color:${xenoColor}; color:${xenoColor}">${_escapeHtml(xeno.label)}</span>
           ${p.role && p.role !== 'none' ? `<span class="spotlight-pill">${_escapeHtml(role.label)}</span>` : ''}
-          <span class="spotlight-pill" style="color:${wsColor}" title="Work speed modifier">${(wsMod * 100).toFixed(0)}%</span>
+          <span class="spotlight-pill" style="color:${wsColor}" title="${_escapeHtml(wsTitle)}">${(wsMod * 100).toFixed(0)}%</span>
           ${uvLevel ? `<span class="spotlight-pill" style="color:#e8a838" title="${uvLevel === 2 ? 'Intense' : 'Mild'} UV sensitivity">UV${uvLevel === 2 ? '+' : ''}</span>` : ''}
         </div>
       </div>
@@ -1956,6 +2112,7 @@ Object.assign(App, {
     const pawn = this.state.pawns.find(p => p.id === pid);
     if (pawn && pawn.skills[sid] !== v) {
       pawn.skills[sid] = v;
+      this._c5UpdateRawSkillLevel(pawn, sid, v);
       this.recordSkillHistory(pawn, sid, v);
       this._updateSkillRow(pawn, pid, sid);
       this.renderTable();
@@ -1969,10 +2126,13 @@ Object.assign(App, {
     const row = card.querySelector(`.skill-row[data-skill-id="${sid}"]`);
     if (!row) return;
     const base = pawn.skills[sid];
-    const eff = this.effectiveSkill(pawn, sid);
+    const pawnCtx = this._c7PawnContextMap(
+      [pawn], this._c7EvidenceOptionsByPawn).get(pid);
+    const display = this._c5SkillDisplay(pawn, pawnCtx, sid);
+    const eff = display.level;
     const mod = eff - base;
     const lvlClass = eff >= 20 ? 'lvl-max' : eff >= 10 ? 'lvl-high' : eff >= 5 ? 'lvl-mid' : 'lvl-low';
-    row.title = `${SKILLS.find(s=>s.id===sid)?.name||sid}: Base ${base}${mod?' + '+mod+' Modifiers':''} = ${eff} Total`;
+    row.title = `${SKILLS.find(s=>s.id===sid)?.name||sid}: Base ${base}${mod?' + '+mod+' Modifiers':''} = ${eff} Total${display.notice ? ' · ' + display.notice : ''}`;
     const btns = row.querySelectorAll('.step-btn');
     if (btns[0]) btns[0].setAttribute('onclick', `App.setSkill('${pid}','${sid}',${Math.max(0,base-1)})`);
     if (btns[1]) btns[1].setAttribute('onclick', `App.setSkill('${pid}','${sid}',${Math.min(20,base+1)})`);
