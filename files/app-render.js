@@ -651,8 +651,10 @@ Object.assign(App, {
   renderDashboard() {
     const container = document.getElementById('view-dash');
     if (!container) return;
-    const viability = Engine.calculateViability(this.state.pawns, this.state.priorities, this.state.precepts);
-    const alerts = Engine.getBottlenecks(this.state.pawns, this.state.priorities);
+    const contextMap = this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const viability = Engine.calculateViability(
+      this.state.pawns, this.state.priorities, this.state.precepts, contextMap);
+    const alerts = Engine.getBottlenecks(this.state.pawns, this.state.priorities, contextMap);
     const portrait = this._isPortrait();
 
     const isWidget = window.innerWidth <= 550;
@@ -753,11 +755,14 @@ Object.assign(App, {
     const el = document.getElementById('summaryBar');
     if (!el) return;
     const total = this.state.pawns.length;
+    const contextMap = this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
     
     // 1. Important Job Pills (existing)
     const pills = JOBS.filter(j => j.important).map(j => {
-      const atP1  = this.state.pawns.filter(p => this.state.priorities[p.id]?.[j.id] === 1 && !this.isIncapable(p, j)).length;
-      const atAny = this.state.pawns.filter(p => this.state.priorities[p.id]?.[j.id] != null && !this.isIncapable(p, j)).length;
+      const atP1  = this.state.pawns.filter(p => this.state.priorities[p.id]?.[j.id] === 1
+        && Engine._c7IsEligible(contextMap, p, j)).length;
+      const atAny = this.state.pawns.filter(p => this.state.priorities[p.id]?.[j.id] != null
+        && Engine._c7IsEligible(contextMap, p, j)).length;
       const cls = atP1 > 0 ? 'sum-pill ok' : atAny > 0 ? 'sum-pill' : 'sum-pill warn';
       const label = atP1 > 0 ? `<b>${atP1}</b>` : atAny > 0 ? `<b style="color:var(--p3-txt)">${atAny}</b>` : `<b>0</b>`;
       return `<div class="${cls}" title="${_escapeHtml(j.name)}: ${atP1} at P1, ${atAny} total assigned">${_escapeHtml(j.name)} ${label}</div>`;
@@ -765,7 +770,7 @@ Object.assign(App, {
 
     // 2. Conflict/Bottleneck alerts - collapsed into ONE expandable pill so a
     // colony with many gaps doesn't show a wall of identical warnings.
-    const gaps = Engine.getBottlenecks(this.state.pawns, this.state.priorities);
+    const gaps = Engine.getBottlenecks(this.state.pawns, this.state.priorities, contextMap);
     let alertsHtml = '';
     if (gaps.length) {
       const expanded = !!this._summaryAlertsExpanded;

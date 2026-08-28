@@ -60,7 +60,7 @@ const Engine = {
   /**
    * Survival Index calculation.
    */
-  calculateViability(pawns, priorities, precepts) {
+  calculateViability(pawns, priorities, precepts, contextMap) {
     if (pawns.length === 0) return 0;
     
     let score = 50; // Base baseline
@@ -71,7 +71,8 @@ const Engine = {
       // A real worker = an assigned priority (1-4) on a capable pawn. Use loose
       // `!= null` so an *unset* priority (undefined) is not mistaken for an
       // assignment - otherwise the "no doctor/cook" penalty silently never fires.
-      const hasWorker = pawns.some(p => priorities[p.id]?.[j.id] != null && !App.isIncapable(p, j));
+      const hasWorker = pawns.some(p => priorities[p.id]?.[j.id] != null
+        && this._c7IsEligible(contextMap, p, j));
       if (!hasWorker) score -= 10;
     });
 
@@ -104,16 +105,17 @@ const Engine = {
   /**
    * Identifies labor gaps.
    */
-  getBottlenecks(pawns, priorities) {
+  getBottlenecks(pawns, priorities, contextMap) {
     const gaps = [];
     const jobs = [...JOBS, ...(App.state.customJobs || [])];
     const importantJobs = jobs.filter(j => j.important);
+    const isCapable = (p, j) => this._c7IsEligible(contextMap, p, j);
     
     // 1. Basic coverage check
     importantJobs.forEach(j => {
-      const hasP1 = pawns.some(p => priorities[p.id]?.[j.id] === 1 && !App.isIncapable(p, j));
+      const hasP1 = pawns.some(p => priorities[p.id]?.[j.id] === 1 && isCapable(p, j));
       if (!hasP1) {
-        const hasAny = pawns.some(p => priorities[p.id]?.[j.id] !== null && !App.isIncapable(p, j));
+        const hasAny = pawns.some(p => priorities[p.id]?.[j.id] !== null && isCapable(p, j));
         if (!hasAny) gaps.push(`NO COVERAGE: ${j.name}`);
         else gaps.push(`Low priority for ${j.name}`);
       }
@@ -127,7 +129,7 @@ const Engine = {
     const uncoveredCriticals = criticalIds.filter(id => {
       const job = jobs.find(j => j.id === id);
       if (!job) return false;
-      return !pawns.some(p => (priorities[p.id]?.[id] !== null && priorities[p.id]?.[id] <= 2) && !App.isIncapable(p, job));
+      return !pawns.some(p => (priorities[p.id]?.[id] !== null && priorities[p.id]?.[id] <= 2) && isCapable(p, job));
     });
 
     if (uncoveredCriticals.length > 0) {
@@ -135,13 +137,13 @@ const Engine = {
         const job = jobs.find(j => j.id === id);
         if (!job) return;
         
-        const p1Pawns = pawns.filter(p => priorities[p.id]?.[id] === 1 && !App.isIncapable(p, job));
+        const p1Pawns = pawns.filter(p => priorities[p.id]?.[id] === 1 && isCapable(p, job));
         if (p1Pawns.length >= 2) {
           // Check if any of these p1Pawns COULD cover an uncovered critical
           const capableOfCritical = p1Pawns.filter(p => {
             return uncoveredCriticals.some(critId => {
               const critJob = jobs.find(j => j.id === critId);
-              return critJob && !App.isIncapable(p, critJob);
+              return critJob && isCapable(p, critJob);
             });
           });
 
@@ -154,6 +156,16 @@ const Engine = {
     }
     
     return gaps;
+  },
+
+  _c7IsEligible(contextMap, pawn, job) {
+    const pawnContext = contextMap && contextMap.get(pawn.id);
+    if (pawnContext) {
+      return pawnContext.permission(job).state !== 'blocked'
+        && pawnContext.availability(job).state !== 'unavailable';
+    }
+    // Temporary compatibility for non-UI legacy callers while C7 migrates them.
+    return !App.isIncapable(pawn, job);
   },
 
   /**
