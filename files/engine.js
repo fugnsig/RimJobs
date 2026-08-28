@@ -368,7 +368,136 @@ const Engine = {
    *   - Workload balancing - pawns with more P1 jobs get more work hours
    *   - Intelligent staggering - uses coverage-aware slot assignment
    */
-  optimizeSchedules(pawns) {
+  _c7TemporalStatQuality(statEvaluation) {
+    const stat = statEvaluation || {};
+    const applied = Array.isArray(stat.applied) ? stat.applied : [];
+    const dependencies = applied.map(item => item && item.dependency).filter(Boolean);
+    const unresolved = Array.isArray(stat.unresolved) ? stat.unresolved.slice() : [];
+    const quality = {
+      state: stat.state || 'unknown',
+      completeness: stat.completeness || 'unknown',
+      frontier: stat.frontier || null,
+      precision: Array.isArray(stat.precision) ? stat.precision.slice() : [],
+      dependencyPath: Array.isArray(stat.dependencyPath) ? stat.dependencyPath.slice() : [],
+      dependencies,
+      evidence: Array.isArray(stat.evidence) ? stat.evidence.slice() : [],
+      unresolved,
+    };
+    quality.usable = quality.state === 'resolved'
+      && quality.completeness === 'complete'
+      && quality.frontier === null
+      && quality.unresolved.length === 0
+      && quality.dependencies.every(dependency => dependency.state !== 'unknown'
+        && dependency.completeness !== 'unknown');
+    return quality;
+  },
+
+  _c7TemporalMechanism(pawnContext) {
+    if (!pawnContext || !pawnContext.c5Context
+        || typeof TemporalProfileResolver === 'undefined') return null;
+    const profile = TemporalProfileResolver.resolve(pawnContext.c5Context);
+    const dimensions = profile.dimensions || {};
+    const dimension = name => dimensions[name] || {
+      confidence: 'unknown', completeness: 'unknown', unresolvedSources: [],
+    };
+    const restFallRateFactor = this._c7TemporalStatQuality(
+      profile.rest && profile.rest.restFallRateFactor);
+    const restRateMultiplier = this._c7TemporalStatQuality(
+      profile.rest && profile.rest.restRateMultiplier);
+    const restDimension = dimension('rest');
+    const recommendations = profile.recreation
+      && Array.isArray(profile.recreation.recommendations)
+      ? profile.recreation.recommendations : [];
+
+    const avoidHoursFromWindows = new Set();
+    (profile.windows || []).forEach(window => {
+      if (window && window.kind === 'avoid') {
+        (window.hours || []).forEach(hour => avoidHoursFromWindows.add(hour));
+      }
+    });
+    const avoidHoursFromConditions = new Set();
+    (profile.conditions || []).forEach(condition => {
+      const fallback = condition && condition.condition === 'daylight'
+        && condition.policy && condition.policy.fallbackHours;
+      if (!fallback) return;
+      for (let hour = fallback.start; hour < fallback.end; hour++) {
+        avoidHoursFromConditions.add(hour);
+      }
+    });
+
+    let hasResolvedMeditation = false;
+    let hasUnresolvedMeditation = false;
+    (profile.activities || []).forEach(activity => {
+      if (!activity || activity.activity !== 'meditation') return;
+      if (activity.compositionResolved === true) hasResolvedMeditation = true;
+      else hasUnresolvedMeditation = true;
+    });
+
+    return {
+      profile,
+      dimensions: {
+        rest: restDimension,
+        recreation: dimension('recreation'),
+        windows: dimension('windows'),
+        conditions: dimension('conditions'),
+        activities: dimension('activities'),
+      },
+      rest: {
+        needState: profile.rest && profile.rest.needState || 'unknown',
+        sleepHoursOverride: profile.rest && profile.rest.compatibility
+          ? profile.rest.compatibility.sleepHoursOverride : null,
+        quality: { restFallRateFactor, restRateMultiplier },
+        policyUsable: restDimension.completeness === 'complete'
+          && restFallRateFactor.usable && restRateMultiplier.usable,
+      },
+      recreation: {
+        delta: recommendations.reduce((sum, item) => sum + Number(item.delta || 0), 0),
+        hasRecommendations: recommendations.length > 0,
+      },
+      windows: { avoidHours: avoidHoursFromWindows },
+      conditions: { daylightAvoidHours: avoidHoursFromConditions },
+      activities: { hasResolvedMeditation, hasUnresolvedMeditation },
+    };
+  },
+
+  _c7LegacySchedulerPolicyInputs(pawn) {
+    const traits = Array.isArray(pawn.traits) ? pawn.traits : [];
+    const xeno = App.getXeno(pawn.xenotype);
+    const genes = xeno.genes || [];
+    const allGenes = typeof GENES !== 'undefined' ? GENES : [];
+    const customGenes = App.state.customGenes || {};
+    const hasSleeplessGene = genes.some(geneId => {
+      const gene = allGenes.find(item => item.id === geneId) || customGenes[geneId];
+      return gene && (gene.id === 'gene_no_sleep' || gene.label === 'Sleepless');
+    });
+    const hasLowSleepGene = genes.some(geneId => /low_?sleep/i.test(String(geneId)));
+    const isQuickSleeper = traits.includes('quick_sleeper');
+    const isBodyMastery = traits.includes('body_mastery');
+    let sleepHours = 8;
+    if (hasSleeplessGene || isBodyMastery) sleepHours = 0;
+    else {
+      if (isQuickSleeper) sleepHours = 6;
+      if (hasLowSleepGene) sleepHours = Math.max(3, Math.round(sleepHours * 0.4));
+    }
+    const health = (Array.isArray(pawn.health) ? pawn.health : [])
+      .concat(Array.isArray(pawn._saveHediffs) ? pawn._saveHediffs : []);
+    return {
+      sleepHours,
+      isNightOwl: traits.includes('night_owl'),
+      isUVSensitive: (xeno.uvSensitivity || 0) >= 1,
+      isQuickSleeper,
+      isBodyMastery,
+      hasSleeplessGene,
+      hasLowSleepGene,
+      recreationDelta: traits.includes('ascetic') ? -1 : 0,
+      isAscetic: traits.includes('ascetic'),
+      hasMeditationObligation: health.some(item => item
+        && (/psylink|psychicamp/i.test(item.def || '')
+          || item.hediffClass === 'Hediff_Psylink')),
+    };
+  },
+
+  optimizeSchedules(pawns, options) {
     const types = App.state.shiftTypes;
     const idxAny = Math.max(0, types.indexOf('Anything'));
     const idxSleep = Math.max(0, types.indexOf('Sleep'));
@@ -379,35 +508,41 @@ const Engine = {
     const idxMedRaw = types.indexOf('Meditate');
     const idxMed = idxMedRaw >= 0 ? idxMedRaw : idxJoy;
     const priorities = App.state.priorities || {};
+    const schedulerOptions = options || {};
+    let contextMap = schedulerOptions.contextMap || null;
+    if (!contextMap && typeof App._c7PawnContextMap === 'function') {
+      contextMap = App._c7PawnContextMap(
+        pawns, schedulerOptions.evidenceOptionsByPawn);
+    }
 
     // -- Phase 1: Profile each pawn --
     const profiles = pawns.map(p => {
       const traits = Array.isArray(p.traits) ? p.traits : [];
-      const xeno = App.getXeno(p.xenotype);
-      const uvLevel = xeno.uvSensitivity || 0;
-      const genes = (xeno.genes || []);
-      const allGenes = typeof GENES !== 'undefined' ? GENES : [];
-      const customGenes = App.state.customGenes || {};
-
-      // Trait flags
-      const isNightOwl = traits.includes('night_owl');
-      const isUVSensitive = uvLevel >= 1;
+      const mechanism = this._c7TemporalMechanism(
+        contextMap && contextMap.get(p.id));
+      const legacyPolicy = this._c7LegacySchedulerPolicyInputs(p);
       const isUndergrounder = traits.includes('undergrounder');
-      const isQuickSleeper = traits.includes('quick_sleeper');
-      const isAscetic = traits.includes('ascetic');
       const isDepressive = traits.includes('depressive');
       const isNeurotic = traits.includes('neurotic') || traits.includes('very_neurotic');
-
-      // Gene flags
-      const hasSleeplessGene = genes.some(gId => {
-        const gene = allGenes.find(g => g.id === gId) || customGenes[gId];
-        return gene && (gene.id === 'gene_no_sleep' || gene.label === 'Sleepless');
-      });
-      // Low Sleep gene (Biotech, e.g. sanguophages): RestFallRateFactor 0.4 - carriers
-      // tire 60% slower, so a full 8h block wastes around 4 productive hours a day.
-      const hasLowSleepGene = genes.some(gId => /low_?sleep/i.test(String(gId)));
-      // Body Mastery trait: "No basic needs (Food/Sleep)" - treat like the Sleepless gene.
-      const isBodyMastery = traits.includes('body_mastery');
+      const windowFactsKnown = mechanism
+        && (mechanism.windows.avoidHours.size > 0
+          || mechanism.dimensions.windows.completeness === 'complete');
+      const conditionFactsKnown = mechanism
+        && (mechanism.conditions.daylightAvoidHours.size > 0
+          || mechanism.dimensions.conditions.completeness === 'complete');
+      const windowAvoidHours = windowFactsKnown
+        ? mechanism.windows.avoidHours
+        : new Set(legacyPolicy.isNightOwl ? [11,12,13,14,15,16,17] : []);
+      const conditionAvoidHours = conditionFactsKnown
+        ? mechanism.conditions.daylightAvoidHours
+        : new Set(legacyPolicy.isUVSensitive
+          ? [6,7,8,9,10,11,12,13,14,15,16,17] : []);
+      const isNightOwl = windowAvoidHours.size > 0;
+      const isUVSensitive = conditionAvoidHours.size > 0;
+      const hasSleeplessGene = legacyPolicy.hasSleeplessGene;
+      const hasLowSleepGene = legacyPolicy.hasLowSleepGene;
+      const isBodyMastery = legacyPolicy.isBodyMastery;
+      const isQuickSleeper = legacyPolicy.isQuickSleeper;
       // Children (Biotech): work unlocks by age (see JOB_MIN_AGE) - most jobs at 7,
       // skilled ones at 10-13. Under-3s are babies; under-7s get no work blocks.
       const isChild = p.bioAge != null && p.bioAge < 13;
@@ -417,11 +552,13 @@ const Engine = {
       // time (could be a modded part awaiting replacement), so schedule nothing.
       const isDowned = p.downed === true;
 
-      // Psycaster: has a psylink (vanilla PsychicAmplifier, or a modded equivalent). They
-      // need to meditate to recover psyfocus, which in RimWorld happens during Recreation /
-      // Anything time, so the optimiser sets aside extra non-work hours for them.
-      const hed = (Array.isArray(p.health) ? p.health : []).concat(Array.isArray(p._saveHediffs) ? p._saveHediffs : []);
-      const isPsycaster = hed.some(h => h && (/psylink|psychicamp/i.test(h.def || '') || h.hediffClass === 'Hediff_Psylink'));
+      const activityFactsComplete = mechanism
+        && mechanism.dimensions.activities.completeness === 'complete';
+      const isPsycaster = mechanism && mechanism.activities.hasUnresolvedMeditation
+        ? false
+        : mechanism && mechanism.activities.hasResolvedMeditation
+          ? true
+          : activityFactsComplete ? false : legacyPolicy.hasMeditationObligation;
 
       // Break risk from traits - higher threshold = more likely to break
       let breakRisk = 0;
@@ -431,12 +568,13 @@ const Engine = {
       });
 
       // Sleep hours needed
-      let sleepHours = 8;
-      if (hasSleeplessGene || isBodyMastery) sleepHours = 0;
-      else {
-        if (isQuickSleeper) sleepHours = 6;
-        // RestFallRateFactor 0.4: needs ~40% of normal sleep, floored at 3h blocks.
-        if (hasLowSleepGene) sleepHours = Math.max(3, Math.round(sleepHours * 0.4));
+      let sleepHours = legacyPolicy.sleepHours;
+      if (mechanism && mechanism.rest.needState === 'suppressed') {
+        sleepHours = 0;
+      } else if (mechanism && mechanism.rest.needState === 'required'
+          && mechanism.rest.policyUsable) {
+        sleepHours = mechanism.rest.sleepHoursOverride == null
+          ? 8 : mechanism.rest.sleepHoursOverride;
       }
 
       // Joy hours needed - base 2, adjusted by mood risk
@@ -446,7 +584,14 @@ const Engine = {
       if (isDepressive && isNeurotic) joyHours = 4;
       if (breakRisk > 0.10) joyHours = Math.max(joyHours, 4);
       else if (breakRisk > 0.05) joyHours = Math.max(joyHours, 3);
-      if (isAscetic) joyHours = Math.max(1, joyHours - 1);
+      const recreationFactsKnown = mechanism
+        && (mechanism.recreation.hasRecommendations
+          || mechanism.dimensions.recreation.completeness === 'complete');
+      const recreationDelta = recreationFactsKnown
+        ? mechanism.recreation.delta : legacyPolicy.recreationDelta;
+      joyHours = Math.max(1, joyHours + recreationDelta);
+      const isAscetic = recreationFactsKnown
+        ? recreationDelta < 0 : legacyPolicy.isAscetic;
       // Children get extra play; babies follow their needs, so no scheduled blocks.
       if (isChild && !isBaby) joyHours += 2;
       if (isBaby) joyHours = 0;
@@ -461,8 +606,10 @@ const Engine = {
       // loses mood when awake 11h-18h (and gains 23h-6h); UV-sensitive pawns burn in
       // daylight 6h-18h (Undergrounders exempt). Verified against the trait/gene defs.
       const avoidAwake = new Set();
-      if (isNightOwl) for (let h = 11; h < 18; h++) avoidAwake.add(h);
-      if (isUVSensitive && !isUndergrounder) for (let h = 6; h < 18; h++) avoidAwake.add(h);
+      windowAvoidHours.forEach(hour => avoidAwake.add(hour));
+      if (!isUndergrounder) {
+        conditionAvoidHours.forEach(hour => avoidAwake.add(hour));
+      }
 
       // Workload: count P1 assignments
       const pPrios = priorities[p.id] || {};

@@ -2792,6 +2792,8 @@ Object.assign(App, {
     const p = this.state.pawns.find(x => x.id === pid);
     if (!p) return;
     p.moodPreset = mode;
+    const contextMap = this._c7PawnContextMap(
+      this.state.pawns, this._c7EvidenceOptionsByPawn);
 
     const idxSleep = Math.max(0, this.state.shiftTypes.indexOf('Sleep'));
     const idxWork = Math.max(0, this.state.shiftTypes.indexOf('Work'));
@@ -2817,13 +2819,11 @@ Object.assign(App, {
       [18,19,20,21,6,7].forEach(h => p.schedule[h] = idxJoy);
       this.toast(` ${p.nickname||p.name} on Light Duty.`);
     } else {
-      Engine.optimizeSchedules([p]);
+      Engine.optimizeSchedules([p], { contextMap });
       this.toast(` ${p.nickname||p.name} back to Auto-Optimisation.`);
     }
 
     // Auto-update priorities based on new mood
-    const contextMap = this._c7PawnContextMap(
-      this.state.pawns, this._c7EvidenceOptionsByPawn);
     Engine.runMinMaxAssignment(
       this.state.pawns, this.state.roles, this.state.priorities,
       undefined, contextMap);
