@@ -28,10 +28,19 @@
       "acceptanceCriteria": ["summary pill counts match C1 except named deltas", "viability score match except named deltas", "bottleneck messages match except named deltas", "downed pawns EXCLUDED via Availability filter (parity with C1 downed block)", "unknown pawns included as not-proven-blocked", "no new dashboard count categories", "48+ suites 0 failures"]
     },
     {
+      "id": "34A",
+      "subject": "Task 2A: Packaged C5 Runtime Contract Bridge",
+      "status": "completed",
+      "blockedBy": ["34"],
+      "files": ["files/c5-runtime-contract.js", "files/c5-definition-snapshot-factory.js", "main.js", "files/rimjobs.html", "files/app-render.js", "test/_harness.js", "test/c5-production-contract.test.js", "test/run-tests.js"],
+      "verifyCommand": "node test/run-tests.js",
+      "acceptanceCriteria": ["packaged contract is deeply immutable and JSON-equivalent", "scanner emits exact installed runtime identity", "mismatch remains unknown", "factory delegates to EffectivenessDefinitionRegistry", "snapshot remains pawn-independent", "C7 request options receive effectivenessSnapshot", "supported SkillDef resolves through production path", "load order and packaging verified", "49+ suites 0 failures"]
+    },
+    {
       "id": "35",
       "subject": "Task 3: C5 Skill and Stat Display Migration",
       "status": "pending",
-      "blockedBy": ["34"],
+      "blockedBy": ["34A"],
       "files": ["files/app-pawns.js", "files/app-render.js", "files/charts.js", "test/c7-skill-display-parity.test.js", "test/run-tests.js"],
       "verifyCommand": "node test/run-tests.js",
       "acceptanceCriteria": ["skill numbers match C1 via SkillFact.runtimeGetLevelForUIProjection", "passion glyphs match C1", "no canonical primarySkill selection", "StructuralSkillResolver.resolve used for C5 projection", "known SkillDef projected as UI projection not canonical primary", "49+ suites 0 failures"]

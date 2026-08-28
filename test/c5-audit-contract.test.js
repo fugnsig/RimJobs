@@ -4,7 +4,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const fixture = require('./fixtures/c5-runtime-audit-1.6.4871.json');
+const fixture = require('../files/c5-runtime-contract.js');
 
 const PHASE_IDS = [
   'base', 'skillNeedOffset', 'capacityOffset', 'traitOffset', 'hediffOffset',

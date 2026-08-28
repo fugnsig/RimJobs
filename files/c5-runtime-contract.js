@@ -1,0 +1,334 @@
+/**
+ * Packaged authoritative C5 runtime contract for RimWorld 1.6.4871 rev590.
+ * Generated from the reviewed executable audit; keep the retained JSON fixture
+ * under an exact deep-equivalence test.
+ */
+const C5RuntimeContract = (() => {
+  function deepFreeze(value) {
+    if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+    Object.values(value).forEach(deepFreeze);
+    return Object.freeze(value);
+  }
+
+  return deepFreeze({
+  "schemaVersion": 1,
+  "runtime": {
+    "version": "1.6.4871",
+    "revision": "rev590",
+    "displayVersion": "1.6.4871 rev590",
+    "assemblySha256": "5CF1B5BE399D5B1C9C56CA72C9D35B4ECF307FEACF5859D04AC5A1AA5926356A"
+  },
+  "skillRecord": {
+    "minLevel": 0,
+    "maxLevel": 20,
+    "rawPresenceStates": ["present", "absent", "unknown"],
+    "resolvedPresenceStates": ["present", "runtimeDefaulted", "unknown"],
+    "missingFieldDefaults": {
+      "level": 0,
+      "xpSinceLastLevel": 0,
+      "passion": "None",
+      "xpSinceMidnight": 0
+    },
+    "runtimeDefaultRequiresCompleteSkillDefCatalogue": true,
+    "levelIgnoringDisableFormula": "clamp(storedLevelInt + runtimeAptitude, minLevel, maxLevel)"
+  },
+  "passions": {
+    "vanillaProvider": {
+      "providerId": "rimworld-vanilla",
+      "runtimeFingerprint": "1.6.4871 rev590",
+      "entries": [
+        { "identity": "None", "enumValue": 0, "directLearningFactor": 0.35, "compatibilityBucket": 0, "isBad": false },
+        { "identity": "Minor", "enumValue": 1, "directLearningFactor": 1.0, "compatibilityBucket": 1, "isBad": false },
+        { "identity": "Major", "enumValue": 2, "directLearningFactor": 1.5, "compatibilityBucket": 2, "isBad": false }
+      ]
+    },
+    "dailySaturation": {
+      "thresholdXpSinceMidnight": 4000,
+      "factorAboveThreshold": 0.2,
+      "directLearningAppliesSaturation": false
+    },
+    "unsupportedModIdentityState": "unknown"
+  },
+  "aptitude": {
+    "sumType": "integer",
+    "appliedBeforeClamp": true,
+    "sourceFamilies": [
+      { "id": "geneDefAptitudes", "dlc": "Biotech", "applicability": "geneActive", "sourceField": "GeneDef.aptitudes" },
+      { "id": "traitDegreeAptitudes", "dlc": "Anomaly", "applicability": "traitNotSuppressed", "sourceField": "TraitDegreeData.aptitudes" },
+      { "id": "hediffDefAptitudes", "dlc": "Anomaly", "applicability": "hediffPresent", "sourceField": "HediffDef.aptitudes" }
+    ],
+    "inhumanized": [
+      { "skillDefId": "Animals", "offset": -12 },
+      { "skillDefId": "Social", "offset": -12 },
+      { "skillDefId": "Artistic", "offset": -12 }
+    ],
+    "excludedCreationSources": ["BackstoryDef.skillGains", "TraitDegreeData.skillGains"]
+  },
+  "globalLearningFactorFixture": {
+    "base": 1.0,
+    "offsets": [
+      { "sourceDefId": "FastLearner", "value": 0.75 },
+      { "sourceDefId": "TooSmart", "value": 0.75 }
+    ],
+    "expected": 2.5,
+    "legacyMultiplicativeResult": 3.0625,
+    "slowLearnerOffset": -0.75
+  },
+  "statPhases": [
+    { "order": 1, "id": "base" },
+    { "order": 2, "id": "skillNeedOffset" },
+    { "order": 3, "id": "capacityOffset" },
+    { "order": 4, "id": "traitOffset" },
+    { "order": 5, "id": "hediffOffset" },
+    { "order": 6, "id": "preceptOffset" },
+    { "order": 7, "id": "roleOffset" },
+    { "order": 8, "id": "geneOffset" },
+    { "order": 9, "id": "lifeStageOffset" },
+    { "order": 10, "id": "equipmentOffset" },
+    { "order": 11, "id": "traitFactor" },
+    { "order": 12, "id": "hediffFactor" },
+    { "order": 13, "id": "preceptFactor" },
+    { "order": 14, "id": "roleFactor" },
+    { "order": 15, "id": "geneFactor" },
+    { "order": 16, "id": "lifeStageFactor" },
+    { "order": 17, "id": "requestThingOperation" },
+    { "order": 18, "id": "statFactor" },
+    { "order": 19, "id": "skillNeedFactor" },
+    { "order": 20, "id": "capacityFactor" },
+    { "order": 21, "id": "inspiration" },
+    { "order": 22, "id": "statPart" },
+    { "order": 23, "id": "postProcessCurve" },
+    { "order": 24, "id": "postProcessStatFactor" },
+    { "order": 25, "id": "scenarioFactor" },
+    { "order": 26, "id": "roundToFiveOver" },
+    { "order": 27, "id": "roundValue" },
+    { "order": 28, "id": "clamp" }
+  ],
+  "capacityFormulas": {
+    "offset": {
+      "expression": "(min(capacityValue, max) - 1) * scale",
+      "operands": ["capacityValue", "max", "scale"]
+    },
+    "factor": {
+      "steps": [
+        "factor = capacityValue",
+        "if allowedDefect != 0 and factor < 1: factor = inverseLerp(0, 1 - allowedDefect, factor)",
+        "factor = min(factor, max)",
+        "if useReciprocal: factor = abs(factor) < 0.001 ? 5 : min(1 / factor, 5)",
+        "output = lerp(input, input * factor, weight)"
+      ],
+      "operands": ["capacityValue", "allowedDefect", "max", "useReciprocal", "input", "weight"],
+      "reciprocalNearZeroThreshold": 0.001,
+      "reciprocalCap": 5
+    }
+  },
+  "statDefs": {
+    "GlobalLearningFactor": {
+      "support": "initialSubset",
+      "defaultBaseValue": 1.0,
+      "minValue": 0,
+      "scenarioRandomizable": true,
+      "skillNeeds": [],
+      "capacityOffsets": [],
+      "capacityFactors": [],
+      "dependencies": [],
+      "statParts": [],
+      "postProcessCurve": [],
+      "postProcessStatFactors": [],
+      "roundValue": false
+    },
+    "AnimalsLearningFactor": {
+      "support": "initialSubset",
+      "defaultBaseValue": 1.0,
+      "minValue": 0,
+      "scenarioRandomizable": true,
+      "skillNeeds": [],
+      "capacityOffsets": [],
+      "capacityFactors": [],
+      "dependencies": [],
+      "statParts": [],
+      "postProcessCurve": [],
+      "postProcessStatFactors": [],
+      "roundValue": false
+    },
+    "WorkSpeedGlobal": {
+      "support": "initialSubset",
+      "defaultBaseValue": 1,
+      "minValue": 0.3,
+      "scenarioRandomizable": true,
+      "skillNeeds": [],
+      "capacityOffsets": [],
+      "capacityFactors": [],
+      "dependencies": ["WorkSpeedGlobalOffsetMech"],
+      "statParts": [
+        { "class": "StatPart_Glow", "priorityOrder": 1, "durability": "current" },
+        { "class": "StatPart_Slave", "priorityOrder": 2, "factor": 0.85, "durability": "durable" },
+        { "class": "StatPart_OverseerStatOffset", "priorityOrder": 3, "dependencyStatDefId": "WorkSpeedGlobalOffsetMech", "durability": "mixed" },
+        { "class": "StatPart_Age", "priorityOrder": 4, "applicabilityProperty": "humanlike", "ageField": "biologicalAge", "curvePoints": [{ "x": 4, "y": 0.2 }, { "x": 12, "y": 0.8 }, { "x": 18, "y": 1 }], "durability": "durable" }
+      ],
+      "postProcessCurve": [],
+      "postProcessStatFactors": [],
+      "roundValue": false
+    },
+    "MiningSpeed": {
+      "support": "initialSubset",
+      "defaultBaseValue": 1,
+      "minValue": 0.1,
+      "scenarioRandomizable": true,
+      "skillNeeds": [{ "skillDefId": "Mining", "phase": "skillNeedFactor", "base": 0.04, "perLevel": 0.12 }],
+      "capacityOffsets": [],
+      "capacityFactors": [
+        { "capacityDefId": "Manipulation", "weight": 1, "max": null, "allowedDefect": 0, "useReciprocal": false },
+        { "capacityDefId": "Sight", "weight": 0.5, "max": 1, "allowedDefect": 0, "useReciprocal": false }
+      ],
+      "dependencies": ["WorkSpeedGlobal"],
+      "statParts": [{ "class": "StatPart_Trainable", "trainableDefId": "Dig", "factor": 0.52, "durability": "mixed" }],
+      "postProcessCurve": [],
+      "postProcessStatFactors": [],
+      "roundValue": false
+    },
+    "CookSpeed": {
+      "support": "initialSubset",
+      "defaultBaseValue": 0,
+      "noSkillOffset": 20,
+      "minValue": 0.1,
+      "scenarioRandomizable": true,
+      "skillNeeds": [{ "skillDefId": "Cooking", "phase": "skillNeedOffset", "base": 0, "perLevel": 1 }],
+      "capacityOffsets": [
+        { "capacityDefId": "Sight", "scale": 4, "max": 1.5 },
+        { "capacityDefId": "Manipulation", "scale": 16, "max": 1.5 }
+      ],
+      "capacityFactors": [],
+      "dependencies": ["WorkSpeedGlobal"],
+      "statParts": [],
+      "postProcessCurve": [{ "x": -20, "y": 0.01 }, { "x": 0, "y": 0.4 }, { "x": 20, "y": 1.6 }],
+      "postProcessStatFactors": ["WorkSpeedGlobal"],
+      "roundValue": false
+    },
+    "RestFallRateFactor": {
+      "support": "initialSubset",
+      "defaultBaseValue": 1,
+      "minValue": 0.0001,
+      "scenarioRandomizable": false,
+      "skillNeeds": [],
+      "capacityOffsets": [],
+      "capacityFactors": [],
+      "dependencies": [],
+      "statParts": [],
+      "postProcessCurve": [],
+      "postProcessStatFactors": [],
+      "roundValue": false
+    },
+    "RestRateMultiplier": {
+      "support": "initialSubset",
+      "defaultBaseValue": 1.0,
+      "minValue": 0.05,
+      "scenarioRandomizable": true,
+      "skillNeeds": [],
+      "capacityOffsets": [],
+      "capacityFactors": [
+        { "capacityDefId": "BloodPumping", "weight": 0.3, "max": null, "allowedDefect": 0, "useReciprocal": false },
+        { "capacityDefId": "Metabolism", "weight": 0.3, "max": null, "allowedDefect": 0, "useReciprocal": false },
+        { "capacityDefId": "Breathing", "weight": 0.3, "max": null, "allowedDefect": 0, "useReciprocal": false }
+      ],
+      "dependencies": [],
+      "statParts": [],
+      "postProcessCurve": [],
+      "postProcessStatFactors": [],
+      "roundValue": false
+    }
+  },
+  "recordOnlyStatDefs": [
+    "AnimalGatherSpeed", "CleaningSpeed", "ConstructionSpeed", "DeepDrillingSpeed",
+    "EntityStudyRate", "FishingSpeed", "GeneralLaborSpeed", "MedicalOperationSpeed",
+    "MedicalTendQuality", "MedicalTendSpeed", "PlantHarvestYield", "PlantWorkSpeed",
+    "ResearchSpeed", "ResearchSpeedFactor", "SmoothingSpeed", "StudyEfficiency",
+    "WorkSpeedGlobalOffsetMech"
+  ],
+  "dependencyGraph": {
+    "GlobalLearningFactor": [],
+    "AnimalsLearningFactor": [],
+    "WorkSpeedGlobal": ["WorkSpeedGlobalOffsetMech"],
+    "MiningSpeed": ["WorkSpeedGlobal"],
+    "CookSpeed": ["WorkSpeedGlobal"],
+    "RestFallRateFactor": [],
+    "RestRateMultiplier": []
+  },
+  "jobPolicies": [
+    { "jobId": "firefight", "sourceWorkTypeDefIds": ["Firefighter"], "skillDefIds": [], "facets": [{ "facetId": "fire-beating", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
+    { "jobId": "patient", "sourceWorkTypeDefIds": ["Patient"], "skillDefIds": [], "facets": [{ "facetId": "patient-health", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
+    { "jobId": "doctoring", "sourceWorkTypeDefIds": ["Doctor"], "skillDefIds": ["Medicine"], "facets": [{ "facetId": "tending", "metricKind": "speed", "statDefIds": ["MedicalTendSpeed", "MedicalTendQuality"], "support": "recordOnly" }, { "facetId": "surgery", "metricKind": "speed", "statDefIds": ["MedicalOperationSpeed"], "support": "recordOnly" }, { "facetId": "rescue-other", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
+    { "jobId": "bed_rest", "sourceWorkTypeDefIds": ["PatientBedRest"], "skillDefIds": [], "facets": [{ "facetId": "rest-health", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
+    { "jobId": "childcare", "sourceWorkTypeDefIds": ["Childcare"], "skillDefIds": ["Social"], "facets": [{ "facetId": "feeding-carrying", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }, { "facetId": "play-learning", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }] },
+    { "jobId": "basic_work", "sourceWorkTypeDefIds": ["BasicWorker"], "skillDefIds": [], "facets": [{ "facetId": "basic-workgivers", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
+    { "jobId": "warden", "sourceWorkTypeDefIds": ["Warden"], "skillDefIds": ["Social"], "facets": [{ "facetId": "prisoner-interaction", "metricKind": "unknown", "statDefIds": [], "support": "recordOnly" }] },
+    { "jobId": "handling", "sourceWorkTypeDefIds": ["Handling"], "skillDefIds": ["Animals"], "facets": [{ "facetId": "tame-train", "metricKind": "chance", "statDefIds": [], "support": "recordOnly" }, { "facetId": "gather", "metricKind": "speed", "statDefIds": ["AnimalGatherSpeed"], "support": "recordOnly" }, { "facetId": "slaughter", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
+    { "jobId": "cooking", "sourceWorkTypeDefIds": ["Cooking"], "skillDefIds": ["Cooking"], "facets": [{ "facetId": "meal-cooking", "metricKind": "speed", "statDefIds": ["CookSpeed"], "support": "initialSubset" }, { "facetId": "recipe-selected", "metricKind": "speed", "statDefIds": [], "support": "recordOnly" }, { "facetId": "butchery-other", "metricKind": "unknown", "statDefIds": [], "support": "recordOnly" }] },
+    { "jobId": "hunting", "sourceWorkTypeDefIds": ["Hunting"], "skillDefIds": ["Shooting"], "facets": [{ "facetId": "combat-movement-risk", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
+    { "jobId": "construction", "sourceWorkTypeDefIds": ["Construction"], "skillDefIds": ["Construction"], "facets": [{ "facetId": "frames", "metricKind": "speed", "statDefIds": ["ConstructionSpeed"], "support": "recordOnly" }, { "facetId": "smoothing", "metricKind": "speed", "statDefIds": ["SmoothingSpeed"], "support": "recordOnly" }, { "facetId": "repair-deconstruct", "metricKind": "unknown", "statDefIds": [], "support": "recordOnly" }] },
+    { "jobId": "growing", "sourceWorkTypeDefIds": ["Growing"], "skillDefIds": ["Plants"], "facets": [{ "facetId": "sow-harvest-speed", "metricKind": "speed", "statDefIds": ["PlantWorkSpeed"], "support": "recordOnly" }, { "facetId": "harvest-yield", "metricKind": "yield", "statDefIds": ["PlantHarvestYield"], "support": "recordOnly" }] },
+    { "jobId": "mining", "sourceWorkTypeDefIds": ["Mining"], "skillDefIds": ["Mining"], "facets": [{ "facetId": "wall-mining", "metricKind": "speed", "statDefIds": ["MiningSpeed"], "support": "initialSubset" }, { "facetId": "deep-drilling", "metricKind": "speed", "statDefIds": ["DeepDrillingSpeed"], "support": "recordOnly" }, { "facetId": "mining-yield", "metricKind": "yield", "statDefIds": [], "support": "recordOnly" }] },
+    { "jobId": "plant_cut", "sourceWorkTypeDefIds": ["PlantCutting"], "skillDefIds": ["Plants"], "facets": [{ "facetId": "plant-cutting", "metricKind": "speed", "statDefIds": ["PlantWorkSpeed"], "support": "recordOnly" }, { "facetId": "plant-yield", "metricKind": "yield", "statDefIds": ["PlantHarvestYield"], "support": "recordOnly" }] },
+    { "jobId": "smithing", "sourceWorkTypeDefIds": ["Smithing"], "skillDefIds": ["Crafting"], "facets": [{ "facetId": "recipe-selected", "metricKind": "speed", "statDefIds": [], "support": "recordOnly" }] },
+    { "jobId": "tailoring", "sourceWorkTypeDefIds": ["Tailoring"], "skillDefIds": ["Crafting"], "facets": [{ "facetId": "recipe-selected", "metricKind": "speed", "statDefIds": [], "support": "recordOnly" }] },
+    { "jobId": "art_work", "sourceWorkTypeDefIds": ["Art"], "skillDefIds": ["Artistic"], "facets": [{ "facetId": "recipe-speed", "metricKind": "speed", "statDefIds": [], "support": "recordOnly" }, { "facetId": "quality", "metricKind": "quality", "statDefIds": [], "support": "recordOnly" }] },
+    { "jobId": "crafting", "sourceWorkTypeDefIds": ["Crafting"], "skillDefIds": ["Crafting"], "facets": [{ "facetId": "recipe-selected", "metricKind": "speed", "statDefIds": [], "support": "recordOnly" }] },
+    { "jobId": "fishing", "sourceWorkTypeDefIds": ["Fishing"], "skillDefIds": ["Animals"], "facets": [{ "facetId": "fishing", "metricKind": "speed", "statDefIds": ["FishingSpeed"], "support": "recordOnly" }] },
+    { "jobId": "hauling", "sourceWorkTypeDefIds": ["Hauling"], "skillDefIds": [], "facets": [{ "facetId": "movement-carrying", "metricKind": "movement", "statDefIds": [], "support": "definitionBacked" }, { "facetId": "contextual-haul", "metricKind": "unknown", "statDefIds": [], "support": "definitionBacked" }] },
+    { "jobId": "cleaning", "sourceWorkTypeDefIds": ["Cleaning"], "skillDefIds": [], "facets": [{ "facetId": "filth", "metricKind": "speed", "statDefIds": ["CleaningSpeed"], "support": "recordOnly" }, { "facetId": "snow-sand-pollution", "metricKind": "speed", "statDefIds": ["GeneralLaborSpeed"], "support": "recordOnly" }] },
+    { "jobId": "dark_study", "sourceWorkTypeDefIds": ["DarkStudy"], "skillDefIds": ["Intellectual"], "facets": [{ "facetId": "cadence", "metricKind": "cadence", "statDefIds": ["EntityStudyRate", "ResearchSpeed"], "support": "recordOnly" }, { "facetId": "study-result", "metricKind": "quality", "statDefIds": ["StudyEfficiency"], "support": "recordOnly" }] },
+    { "jobId": "research", "sourceWorkTypeDefIds": ["Research"], "skillDefIds": ["Intellectual"], "facets": [{ "facetId": "pawn-research", "metricKind": "speed", "statDefIds": ["ResearchSpeed"], "support": "recordOnly" }, { "facetId": "bench-factor", "metricKind": "speed", "statDefIds": ["ResearchSpeedFactor"], "support": "recordOnly" }] },
+    { "jobId": "tending", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "wait", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "sell", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "entertain", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "dissect", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "gene_craft", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "guard", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "therapist", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "gen_power", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" },
+    { "jobId": "cycle", "sourceWorkTypeDefIds": [], "skillDefIds": [], "facets": [{ "facetId": "unknown-app-job", "metricKind": "unknown", "statDefIds": [], "support": "unknown" }], "policyKind": "unknown" }
+  ],
+  "legacySpeedFormulas": [
+    { "jobId": "doctoring", "base": 0.4, "perLevel": 0.06, "classification": "legacyApproximation" },
+    { "jobId": "tending", "base": 0.4, "perLevel": 0.06, "classification": "unsupportedUnknown" },
+    { "jobId": "handling", "base": 0.04, "perLevel": 0.12, "classification": "legacyApproximation" },
+    { "jobId": "cooking", "base": 0, "perLevel": 1, "curve": true, "classification": "legacyApproximation" },
+    { "jobId": "construction", "base": 0.3, "perLevel": 0.0875, "classification": "legacyApproximation" },
+    { "jobId": "growing", "base": 0.08, "perLevel": 0.115, "classification": "legacyApproximation" },
+    { "jobId": "mining", "base": 0.04, "perLevel": 0.12, "classification": "legacyApproximation" },
+    { "jobId": "plant_cut", "base": 0.08, "perLevel": 0.115, "classification": "legacyApproximation" },
+    { "jobId": "dark_study", "base": 0.08, "perLevel": 0.115, "classification": "legacyApproximation" },
+    { "jobId": "research", "base": 0.08, "perLevel": 0.115, "classification": "legacyApproximation" },
+    { "jobId": "gen_power", "base": 0.3, "perLevel": 0.0875, "classification": "unsupportedUnknown" }
+  ],
+  "namedShadowDeltas": [
+    "creationGainAlreadyPersisted",
+    "runtimeGeneAptitude",
+    "anomalyHediffAptitude",
+    "totalDisablementProjection",
+    "ideologyIntellectualId",
+    "unknownDefinition",
+    "unknownModdedPassion",
+    "stackedGlobalLearningOffsets",
+    "workSpeedGlobalFinalization",
+    "cookSpeedOperationOrder",
+    "miningPluralFacets",
+    "fishingSkillAndStat",
+    "unsupportedAppJob",
+    "capacityInputPrecision"
+  ],
+  "precision": {
+    "decision": "optionA",
+    "noticeKind": "capacityInputRoundedByC3",
+    "roundingIncrement": 0.01,
+    "numericClaim": "exactAgainstRoundedC3CapacityInput",
+    "resultState": "partial",
+    "completeness": "partial",
+    "bitExactRuntime": false,
+    "intervalClaimed": false
+  }
+});
+})();
+
+if (typeof module !== 'undefined' && module.exports) module.exports = C5RuntimeContract;

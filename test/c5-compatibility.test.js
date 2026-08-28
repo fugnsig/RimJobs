@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const { loadScripts } = require('./_harness');
-const audit = require('./fixtures/c5-runtime-audit-1.6.4871.json');
+const audit = require('../files/c5-runtime-contract.js');
 
 module.exports = function run() {
   let total = 0, failures = 0;

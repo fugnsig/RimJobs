@@ -895,6 +895,42 @@ git commit -m "C7: migrate summary counts, viability, and bottlenecks to coordin
 
 ---
 
+### Task 2A: Packaged C5 Runtime Contract Bridge
+
+**Goal:** Promote the audited RimWorld `1.6.4871 rev590` C5 runtime contract into the packaged application and combine it with the pawn-independent scanner provider through `EffectivenessDefinitionRegistry.createSnapshot()`. This prerequisite must complete before the first production C5 consumer in Task 3.
+
+**Files:**
+- Create: `files/c5-runtime-contract.js`
+- Create: `files/c5-definition-snapshot-factory.js`
+- Modify: `main.js` (emit installed runtime fingerprint with scanner output)
+- Modify: `files/rimjobs.html` (load contract and factory before C7 consumers)
+- Modify: `files/app-render.js` (request-boundary definition snapshot wiring)
+- Modify: `test/_harness.js`
+- Create: `test/c5-production-contract.test.js`
+- Modify: C5 tests that consume the audit contract so the packaged module is authoritative
+- Modify: `test/run-tests.js`
+
+**Acceptance Criteria:**
+- [ ] `C5RuntimeContract` is deeply immutable and exactly equivalent to the retained JSON audit fixture
+- [ ] Release packaging includes the contract through the existing `files/**/*` rule
+- [ ] Scanner output carries the installed display version and Assembly-CSharp hash when both are readable
+- [ ] Missing or mismatched runtime identity produces no verified effectiveness snapshot
+- [ ] `C5DefinitionSnapshotFactory` alone combines the provider and contract through `EffectivenessDefinitionRegistry.createSnapshot()`
+- [ ] Definition snapshots remain pawn-independent
+- [ ] `_c7CoordinatorOptions()` receives the factory result without another C2/C3 evaluation
+- [ ] A complete supported SkillDef resolves through the production path to a non-null C5 UI projection
+- [ ] Missing/incompatible inputs remain canonical unknown rather than using audited formulas
+- [ ] Contract and factory load before C7 production consumers
+
+**Verify:** focused C5/C7 contract tests, syntax/static gates, and `node test/run-tests.js`.
+
+**Commit:**
+```bash
+git commit -m "C5: package audited runtime contract for production consumers"
+```
+
+---
+
 ### Task 3: C5 Skill and Stat Display Migration
 
 **Goal:** Migrate `App.effectiveSkill()` consumers in pawn cards, pawn manager, spotlight, and colony radar to C5 SkillFact projections. Preserve numeric parity. Add precision notices and partial/unknown annotations in tooltips. Do not introduce a `primarySkill`.
