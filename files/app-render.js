@@ -438,6 +438,114 @@ Object.assign(App, {
     `);
   },
 
+  _c4DefinitionSnapshot() {
+    return RequirementRegistry.createSnapshot({
+      jobCatalog: this.allJobs,
+      workTypeDefs: this.state.scannedWorkTypeDefs || {},
+      workGiverDefs: this.state.scannedWorkGiverDefs || {},
+      capacityDefs: this.state.scannedCapacityDefs || {},
+      raceWorkPolicies: this.state.scannedRaceWorkPolicies || {},
+      activePackageIds: this.state.activePackageResolution || null,
+      definitionUncertainty: this.state.requirementUncertainty || {},
+    });
+  },
+
+  _c7CoordinatorOptions(definitionSnapshot, evidenceOptions) {
+    return {
+      definitionSnapshot,
+      c4RequirementSnapshot: definitionSnapshot,
+      evidenceOptions: evidenceOptions || {},
+      capabilityDefinitions: {
+        bodyDefs: this.state.scannedBodyDefs || {},
+        bodyPartDefs: this.state.scannedBodyPartDefs || {},
+        capacityDefs: this.state.scannedCapacityDefs || {},
+        raceBodyMap: this.state.scannedRaceBodyMap || {},
+      },
+    };
+  },
+
+  _c7PawnContextMap(pawns, evidenceOptionsByPawn) {
+    const definitionSnapshot = this._c4DefinitionSnapshot();
+    const contexts = new Map();
+    (pawns || []).forEach(pawn => {
+      const evidenceOptions = evidenceOptionsByPawn && evidenceOptionsByPawn.get(pawn.id) || {};
+      contexts.set(pawn.id, C7EvaluationCoordinator.createPawnContext(
+        pawn, this._c7CoordinatorOptions(definitionSnapshot, evidenceOptions)));
+    });
+    return contexts;
+  },
+
+  _c7CellState(pawnContext, job) {
+    const permission = pawnContext.permission(job);
+    if (permission.state === 'blocked') return { state: 'blocked', permission };
+    if (permission.state === 'unknown') return { state: 'unknown', permission };
+    const availability = pawnContext.availability(job);
+    if (availability.state === 'unavailable') {
+      return { state: 'unavailable', permission, availability };
+    }
+    return { state: 'normal', permission, availability };
+  },
+
+  _c7EvaluationTooltipLine(item, fallback) {
+    const explanation = item && item.explanation || {};
+    const params = explanation.params || {};
+    let line = explanation.code || fallback;
+    if (params.target) line += ': ' + params.target;
+    const sources = [];
+    (item && item.evidence || []).forEach(source => {
+      const kind = source.sourceKind || source.kind;
+      const id = source.sourceId || source.evidenceId;
+      if (kind || id) sources.push([kind, id].filter(Boolean).join(':'));
+    });
+    const provenance = item && item.requirementProvenance || {};
+    if (provenance.modId) sources.push('mod:' + provenance.modId);
+    (provenance.sources || []).forEach(source => {
+      if (source.file || source.path) sources.push('source:' + (source.file || source.path));
+    });
+    if (sources.length) line += ' [' + Array.from(new Set(sources)).join(', ') + ']';
+    return line;
+  },
+
+  _c7Tooltip(cellInfo) {
+    const lines = [];
+    if (cellInfo.state === 'blocked' && cellInfo.permission) {
+      (cellInfo.permission.blockers || []).forEach(item => lines.push(
+        this._c7EvaluationTooltipLine(item, 'Incapable of this job type')));
+      if (!lines.length) lines.push('Incapable of this job type');
+    } else if (cellInfo.state === 'unknown' && cellInfo.permission) {
+      (cellInfo.permission.unknowns || []).forEach(item => lines.push(
+        this._c7EvaluationTooltipLine(item, 'Eligibility could not be verified')));
+      if (!lines.length) lines.push('Eligibility could not be verified');
+    } else if (cellInfo.state === 'unavailable' && cellInfo.availability) {
+      (cellInfo.availability.blockers || []).forEach(item => lines.push(
+        this._c7EvaluationTooltipLine(item, 'Temporarily unavailable')));
+      if (!lines.length) lines.push('Temporarily unavailable');
+    }
+    return _escapeHtml(lines.join('\n'));
+  },
+
+  _c7EditablePriorityCellHTML(pid, jid, priority, state, title) {
+    let html = this._prioCellHTML(pid, jid, priority);
+    html = html.replace('class="prio-box ', 'class="prio-box ' + state + ' ');
+    html = html.replace(/\s+title="[^"]*"/g, '');
+    const lockNotice = this._prioritiesAreLocked() ? '\nPriorities are locked - unlock to edit' : '';
+    const fullTitle = title + _escapeHtml(lockNotice);
+    return html.replace(' tabindex=', ' title="' + fullTitle + '" tabindex=');
+  },
+
+  _c7GridCellHTML(pawnId, job, priority, pawnContext) {
+    const cellInfo = this._c7CellState(pawnContext, job);
+    const title = this._c7Tooltip(cellInfo);
+    if (cellInfo.state === 'blocked') {
+      return '<td class="td-job"><div class="prio-box incap" title="'
+        + title + '">×</div></td>';
+    }
+    const cell = cellInfo.state === 'normal'
+      ? this._prioCellHTML(pawnId, job.id, priority)
+      : this._c7EditablePriorityCellHTML(pawnId, job.id, priority, cellInfo.state, title);
+    return '<td class="td-job">' + cell + '</td>';
+  },
+
   _renderTableHorizontal(wrap) {
     const tooltip = `
       <div class="info-btn" style="margin-left:8px">?
@@ -454,6 +562,7 @@ Object.assign(App, {
     const pSearch = (this.state.pawnFilter || "").toLowerCase();
     const filteredJobs = this._visibleJobs();
     const filteredPawns = this.state.pawns.filter(p => !pSearch || (p.nickname || p.name).toLowerCase().includes(pSearch));
+    const pawnContexts = this._c7PawnContextMap(filteredPawns, this._c7EvidenceOptionsByPawn);
 
     const catSpans = [];
     filteredJobs.forEach(j => { 
@@ -482,10 +591,8 @@ Object.assign(App, {
               </div>
             </td>
             ${filteredJobs.map(j => {
-              const incap = this.isIncapable(p, j);
               const prio = this.state.priorities[p.id]?.[j.id];
-              if (incap) return `<td class="td-job"><div class="prio-box incap" title="Incapable of this job type">×</div></td>`;
-              return `<td class="td-job">${this._prioCellHTML(p.id, j.id, prio)}</td>`;
+              return this._c7GridCellHTML(p.id, j, prio, pawnContexts.get(p.id));
             }).join('')}
           </tr>`;
         } catch(err) { console.warn('Table render error for pawn', p?.id, err); return `<tr><td class="td-pawn-name" style="color:#ef5350">! ${_escapeHtml(p?.nickname||p?.name||'?')}</td>${filteredJobs.map(()=>'<td></td>').join('')}</tr>`; } }).join('')}</tbody></table></div>`;
@@ -508,6 +615,7 @@ Object.assign(App, {
     const pSearch = (this.state.pawnFilter || "").toLowerCase();
     const filteredJobs = this._visibleJobs();
     const filteredPawns = this.state.pawns.filter(p => !pSearch || (p.nickname || p.name).toLowerCase().includes(pSearch));
+    const pawnContexts = this._c7PawnContextMap(filteredPawns, this._c7EvidenceOptionsByPawn);
 
     // Pawn header cells
     const pawnHeaders = filteredPawns.map(p => { try {
@@ -531,10 +639,8 @@ Object.assign(App, {
       const catRow = j.cat !== lastCat ? `<tr><td colspan="${filteredPawns.length + 1}" style="padding:4px 10px; background:var(--surface2); font-size:var(--cat-font-size); font-weight:700; color:var(--text2); border:1px solid var(--border)"><input class="cat-label-input" value="${_escapeHtml(this.state.catLabels[j.cat] || CAT_LABELS[j.cat] || j.cat)}" oninput="App.updateCatLabel('${j.cat}', this.value)" style="width:100%"></td></tr>` : '';
       lastCat = j.cat;
       const cells = filteredPawns.map(p => {
-        const incap = this.isIncapable(p, j);
         const prio = this.state.priorities[p.id]?.[j.id];
-        if (incap) return `<td class="td-job"><div class="prio-box incap" title="Incapable of this job type">×</div></td>`;
-        return `<td class="td-job">${this._prioCellHTML(p.id, j.id, prio)}</td>`;
+        return this._c7GridCellHTML(p.id, j, prio, pawnContexts.get(p.id));
       }).join('');
       return `${catRow}<tr class="pawn-row"><td class="td-pawn-name" draggable="true" ondragstart="App._jobColDragStart(event,'${j.id}')" ondragover="App._jobColDragOver(event)" ondrop="App._jobColDrop(event,'${j.id}')" style="white-space:nowrap; font-size:var(--job-font-size); font-weight:700; cursor:grab" title="${this._jobHeaderTitle(j)}">${_escapeHtml(j.name)}</td>${cells}</tr>`;
     }).join('');
