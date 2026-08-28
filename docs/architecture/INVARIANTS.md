@@ -37,17 +37,13 @@ Simple mode "enabled" is always `PriorityScale.defaultEnabled()` (3), regardless
 
 **Regression coverage:** `test/engine.optimiser.test.js` (extended-scale, overwrite-p5, cycling, isValid checks)
 
-### WORK-003: evaluatePawnJob remains the production C1 aggregation until C7
+### WORK-003: C7 is the production work-capability aggregation boundary
 
-`Engine.evaluatePawnJob(pawn, job)` remains the single production C1 aggregation surface for what a pawn can do in a job. It returns structured legacy facts (permission, skill, work speed, advantages, penalties, confidence, evidence) - not a suitability score.
+`C7EvaluationCoordinator.createPawnContext(pawn, options)` is the production request boundary for migrated work consumers. It shares one C2 evidence collection and one C3 capacity resolution with C4 Permission/Availability, C5 structural facts, and C6 temporal facts. `Engine.evaluatePawnJob()` and `Engine.evaluateJobPermission()` are deprecated C1 compatibility/test surfaces, not production aggregation architecture.
 
-`Engine.evaluateJobPermission(pawn, job)` decomposes incapability into structured blocks with provenance (backstory, gene, trait, hediff, etc.) and tracks uncertainty from unresolvable modded genes.
+Decision engines (`_bestPawnForJob`, `analyzeColony`, `runMinMaxAssignment`, `calculateWorkCapacity`, `getBottlenecks`, `calculateViability`) consume request-scoped C7 contexts and apply explicit policy projections. They must not duplicate C2/C3 evaluation or invent a canonical scalar effectiveness score.
 
-Decision engines (`_bestPawnForJob`, `analyzeColony`, `runMinMaxAssignment`, `calculateWorkCapacity`, `getBottlenecks`, `calculateViability`) consume the facts and apply their own scoring/objective. No consumer should duplicate the capability lookup inline.
-
-Three-valued permission: `allowed`, `blocked`, `uncertain`. The existing `isIncapable()` boolean contract is preserved; the richer semantics live only in `evaluateJobPermission`.
-
-C4 Permission/Availability and C5 structural effectiveness are the canonical shadow fact layers. They do not replace this production surface until the parity-proven C7 consumer migration. New canonical evidence or resolver work must not be routed back through C1 aggregation merely because C1 remains the current production caller.
+`App.isIncapable()` remains only for context-free legacy API compatibility and historical C1 evidence. Packaged C7 request paths use structural `allowed | blocked | unknown` Permission and independent current `available | unavailable | unknown` Availability.
 
 **Origin:** Intelligence architecture refactor - single source of truth before new reasoning.
 
@@ -65,9 +61,9 @@ Coverage status: `gap` (0 capable pawns awake), `fragile` (1 - single-point risk
 
 **Regression coverage:** `test/engine.optimiser.test.js` (TC-001 through TC-009, TP-001 through TP-009, TA-001 through TA-007)
 
-### WORK-004: Consumer migrations must not alter automatic assignment outcomes
+### WORK-004: C7 migration must not alter automatic assignment outcomes
 
-Migrating a consumer to `evaluatePawnJob()` must not alter automatic assignment outcomes unless the behaviour change is explicitly scoped and regression-tested.
+Consuming canonical C4/C5 facts through C7 must not alter automatic assignment outcomes unless the behaviour change is explicitly scoped and regression-tested.
 
 Full-matrix parity (every pawnId x jobId cell identical) is required for `runMinMaxAssignment`. Gap/recommendation parity is required for `analyzeColony`. New intelligence may only be introduced after parity is proven, as a separate deliberate change.
 
@@ -79,7 +75,7 @@ Full-matrix parity (every pawnId x jobId cell identical) is required for `runMin
 
 ## Canonical Permission and Availability (C4)
 
-These invariants target RimWorld `1.6.4871 rev590`. They describe the pure C4 shadow architecture; existing production planning and UI remain on the frozen C1 surfaces until C7.
+These invariants target RimWorld `1.6.4871 rev590`. C4 remains pure canonical mechanism; C7 now projects its peer Permission and Availability reports into production planning and UI policy.
 
 ### C4-001: Permission and Availability are independent peer outputs
 
@@ -157,7 +153,7 @@ No planning, assignment, viability, bottleneck, summary, scheduling, priority, o
 
 ## Structural Effectiveness (C5)
 
-These invariants target RimWorld `1.6.4871 rev590`. C5 is an immutable, shadow-only structural fact layer. Existing C1 calculations and consumers remain production truth until C7.
+These invariants target RimWorld `1.6.4871 rev590`. C5 is an immutable structural fact layer. C7 may project its exact facts into reviewed consumers, but C5 itself owns no consumer policy or intelligence.
 
 ### C5-001: Parser facts and runtime defaults are separate
 
@@ -239,19 +235,19 @@ C5 is independent of C4 Permission and Availability. Those results never zero, h
 
 **Regression coverage:** `test/structural-stat-resolver.test.js`, `test/structural-learning-resolver.test.js`, `test/structural-effectiveness-resolver.test.js`
 
-### C5-011: Legacy effectiveness is isolated and shadow-only
+### C5-011: Legacy effectiveness is isolated from canonical calculation
 
-`C5LegacyCompatibility` delegates unchanged to `App.effectiveSkill()`, `App._passionValue()`, `App._passionMeta()`, `Engine.calculateWorkSpeedMod()`, and `Engine.calculateRealWorkSpeed()`. Its named differences are diagnostic shadow results. Canonical unknown never becomes legacy zero, and a legacy number never enters canonical arithmetic.
+`C5LegacyCompatibility` delegates unchanged to `App.effectiveSkill()`, `App._passionValue()`, `App._passionMeta()`, `Engine.calculateWorkSpeedMod()`, and `Engine.calculateRealWorkSpeed()`. Its named differences remain diagnostic evidence. Canonical unknown never becomes legacy zero, and a legacy number never enters canonical arithmetic. C7 may use these values only as explicitly labelled frozen ranking/work-speed compatibility policy until C8.
 
 All eleven C1 speed formulas remain compatibility-only. Canonical modules contain no reference to the adapter or legacy calculation surfaces.
 
 **Regression coverage:** `test/capability-corpus.test.js`, `test/c5-compatibility.test.js`
 
-### C5-012: C5 does not migrate consumers or implement intelligence
+### C5-012: C5 does not implement consumer policy or intelligence
 
-No renderer, planner, priority, assignment, optimiser, viability, bottleneck, chart, summary, scheduler, or temporal consumer may call C5 during Phase C5. C5 emits no effectiveness score, suitability scalar, ranking proxy, best-pawn helper, or assignment change.
+C7 may consume exact C5 facts for reviewed projections, but C5 itself emits no effectiveness score, suitability scalar, ranking proxy, best-pawn helper, assignment change, or scheduling policy.
 
-C7 owns parity-proven consumer migration and any durable report cache. C8 owns weighting, ranking, recommendations, and smarter assignment. C5 implements neither.
+C7 owns parity-proven consumer projection and keeps evaluation request-scoped. C8 owns new weighting, ranking, recommendations, smarter assignment, and any separately reviewed durable cache boundary. C5 implements none of them.
 
 **Regression coverage:** Task 14 static architecture gates plus the complete C1-C5 suite
 
@@ -355,6 +351,62 @@ Design contract: `docs/superpowers/specs/2026-08-27-c6-temporal-profile-resoluti
 
 ---
 
+## C7 Consumer Parity Migration Invariants
+
+### C7-001: A pawn context is immutable and request-scoped
+
+`C7EvaluationCoordinator.createPawnContext()` collects C2 evidence once and resolves C3 capacities once. C4, C5, and C6 reuse those exact request objects. Per-job and temporal memoisation never crosses contexts; there is no long-lived pawn/result cache, revision cache, or invalidation protocol.
+
+**Regression coverage:** `test/c7-evaluation-coordinator.test.js`, `test/c7-static-gates.test.js`
+
+### C7-002: Permission and Availability remain peer facts
+
+Permission answers structural allowance. Availability answers current ability. C7 policy may inspect both but must never convert downed or another current blocker into structural Permission.
+
+Permission `unknown` follows the explicit parity projection "not proven blocked"; it is not rewritten to canonical `allowed`. Availability exclusions are consumer-specific and may not broaden beyond each reviewed C1 parity boundary.
+
+**Regression coverage:** `test/c7-grid-parity.test.js`, `test/c7-consumer-parity.test.js`, `test/c7-ranking-parity.test.js`, `test/c7-temporal-parity.test.js`
+
+### C7-003: Canonical plurality never becomes ranking intelligence
+
+C5 displays may resolve the exact requested SkillDef. Multiple SkillDefs and facets remain plural. The coordinator and canonical infrastructure contain no `primarySkill`, scalar effectiveness score, ranking, assignment, or schedule construction.
+
+Frozen C7 analyser/auto-assign ranking remains explicit compatibility policy, including legacy numeric skill and speed inputs, until C8. Skillless jobs remain skillless.
+
+**Regression coverage:** `test/c7-static-gates.test.js`, `test/c7-skill-display-parity.test.js`, `test/c7-ranking-parity.test.js`
+
+### C7-004: Temporal mechanism never silently becomes policy
+
+C7 calls `TemporalProfileResolver.resolve(c5Context)` and forwards actual provider-derived `evidenceOptions.temporalCoverage`. Missing, partial, and unknown evidence stay missing, partial, and unknown.
+
+C6 supplies rest quality, windows, conditions, and activity composition. C7 owns sleep/joy/meditation-hour choices, child/baby policy, break risk, Undergrounder interpretation, workload budgets, mood presets, specialist staggering, shift construction, and every schedule slot.
+
+**Regression coverage:** `test/c7-scheduler-parity.test.js`, `test/c7-temporal-parity.test.js`
+
+### C7-005: Only five reviewed behavioral deltas are allowed
+
+| Delta | Allowed scope |
+|-------|---------------|
+| Firefight + Violent | Corrected C4 Firefight eligibility and its exact priority, aggregate, analyser/assignment, and temporal downstream fixtures only. |
+| Human Fishing age | Corrected C4 Fishing age eligibility and exact Fishing downstream fixtures only. |
+| Hauling + zero Manipulation | Corrected C4 Hauling capacity eligibility and exact Hauling downstream fixtures only. |
+| Downed Permission/Availability decomposition | Grid shows an editable current-unavailable cell; aggregate, assignment, scheduler, and temporal current-state policy still excludes the pawn. |
+| `creationGainAlreadyPersisted` | C5 skill display projects stored level 10 rather than legacy double-counted 12. No analyser, viability, ranking, or assignment change. |
+
+A named-delta pawn is not a blanket exemption. Every affected consumer must match its causal fixture; any other behavioral difference is an unnamed regression.
+
+**Regression coverage:** `test/c4-compatibility.test.js`, `test/c7-grid-parity.test.js`, `test/c7-consumer-parity.test.js`, `test/c7-skill-display-parity.test.js`, `test/c7-ranking-parity.test.js`, `test/c7-temporal-parity.test.js`
+
+### C7-006: Legacy evidence and compatibility policy have explicit owners
+
+The C4 shadow adapter is deprecated, test-only, and absent from the packaged script graph. Its suite remains executable migration evidence. `Engine.evaluatePawnJob()` and `Engine.evaluateJobPermission()` have no migrated production consumer.
+
+`C5LegacyCompatibility` remains production-loaded only because frozen C7 numeric ranking/work-speed projections deliberately depend on it until C8. `App.isIncapable()` remains only in context-free legacy fallbacks and historical tests; no new caller may be added.
+
+**Regression coverage:** `test/c4-compatibility.test.js`, `test/c5-compatibility.test.js`, `test/c7-static-gates.test.js`, and deprecated-caller architecture searches
+
+---
+
 ## Save Editing
 
 ### SAVE-001: Never mutate the original save file
@@ -393,7 +445,7 @@ Unaudited or unsupported scanner data remains best-effort or unknown. The scanne
 
 ### MOD-002: Legacy and canonical gene skill paths have different coverage
 
-The frozen legacy C1 and auto-assign path remains limited to its existing curated or defName-inferred gene skill modifiers and disabled WorkTags until C7. C#-driven or otherwise unresolved gene effects still do not reach that production path.
+The frozen legacy numeric ranking/auto-assign path remains limited to its existing curated or defName-inferred gene skill modifiers and disabled WorkTags until C8. C#-driven or otherwise unresolved gene effects still do not reach that compatibility path.
 
 Canonical C2/C5 evidence is richer and must not be described by that legacy limitation. It preserves exact typed gene, trait, and hediff aptitude operations, current-pawn applicability joins, source-family completeness, source-fact conservation, and supported exact stat operations from the audited scanner/provider subset. Unsupported identities, inactive or unknown gene state, incomplete catalogues, unapplied patches, and arbitrary C# semantics remain unknown rather than falling back to the legacy inference.
 

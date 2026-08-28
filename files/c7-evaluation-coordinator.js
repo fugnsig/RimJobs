@@ -81,19 +81,6 @@ const C7EvaluationCoordinator = (() => {
       return resolvedTemporalProfile;
     }
 
-    function legacyShadow(job) {
-      const legacyPermission = C4LegacyCompatibility.evaluateLegacyPermission(sourcePawn, job);
-      const legacyIncapable = C4LegacyCompatibility.evaluateLegacyIncapable(sourcePawn, job);
-      return C4LegacyCompatibility.compare({
-        permission: permission(job),
-        availability: availability(job),
-        legacy: {
-          permission: legacyPermission,
-          incapable: legacyIncapable,
-        },
-      });
-    }
-
     return Object.freeze({
       pawnId,
       pawnEvidence,
@@ -102,7 +89,6 @@ const C7EvaluationCoordinator = (() => {
       permission,
       availability,
       temporalProfile,
-      legacyShadow,
     });
   }
 

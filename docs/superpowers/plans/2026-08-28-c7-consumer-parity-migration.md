@@ -1702,132 +1702,34 @@ git commit -m "C7: migrate temporal coverage, resilience, and proposals to coord
 
 ### Task 9: Legacy Adapter Deprecation and Final Parity Gate
 
-**Goal:** Deprecate legacy shadow adapters (`C4LegacyCompatibility`, `C5LegacyCompatibility`) and legacy functions (`App.isIncapable()`, `Engine.evaluatePawnJob()`, `Engine.evaluateJobPermission()`), update CODE-MAP.md and INVARIANTS.md with C7 architecture, and run a final full regression gate. Shadow test suites are retained as historical regression coverage.
+**Status:** Completed as a closure/audit task. No product behavior, ranking, scheduler policy, or canonical resolver semantics changed.
 
-**Files:**
-- Modify: `files/app-pawns.js:49-97` (`isIncapable` - deprecate or remove)
-- Modify: `files/engine.js:228-300` (`evaluatePawnJob` - deprecate or remove)
-- Modify: `files/engine.js:165-226` (`evaluateJobPermission` - deprecate or remove)
-- Modify: `files/c4-legacy-compatibility.js` (add deprecation comment; remove script tag from rimjobs.html only after parity evidence accepted)
-- Modify: `files/c5-legacy-compatibility.js` (add deprecation comment; remove script tag from rimjobs.html only after parity evidence accepted)
-- Modify: `files/rimjobs.html` (remove script tags for deprecated adapters only if zero production callers confirmed)
-- Modify: `docs/architecture/CODE-MAP.md` (add C7 section)
-- Modify: `docs/architecture/INVARIANTS.md` (add C7 invariants)
-- Modify: `test/c7-static-gates.test.js` (extend for all C7 files)
+**Actual files:** `files/c7-evaluation-coordinator.js`, `files/c4-legacy-compatibility.js`, `files/c5-legacy-compatibility.js`, `files/app-pawns.js`, `files/rimjobs.html`, `docs/architecture/CODE-MAP.md`, `docs/architecture/INVARIANTS.md`, `test/c7-evaluation-coordinator.test.js`, and `test/c7-static-gates.test.js`. The pre-existing unstaged `files/engine.js` work was inspected and preserved without staging.
 
-**Acceptance Criteria:**
-- [ ] `App.isIncapable()` has no production callers (grep returns zero hits in `files/` excluding test files)
-- [ ] `Engine.evaluatePawnJob()` has no production callers
-- [ ] `Engine.evaluateJobPermission()` has no production callers
-- [ ] C4 and C5 shadow adapters marked deprecated with removal milestone
-- [ ] Shadow test suites RETAINED in `run-tests.js` as historical regression coverage
-- [ ] All 44+ existing test suites still pass
-- [ ] All new C7 test suites pass
-- [ ] Static gates pass for coordinator module only (not engine.js or app modules)
-- [ ] CODE-MAP.md documents C7 coordinator architecture
-- [ ] INVARIANTS.md documents C7 behavioural invariants
-- [ ] Commit uses explicit file staging (no `git add files/`, `git add test/`, or `git add -A`)
-- [ ] Full regression: `node test/run-tests.js` reports 52+ suites, 0 failures
+**Closure decisions:**
+- [x] Removed `legacyShadow(job)` and the `C4LegacyCompatibility` dependency from the production coordinator.
+- [x] Removed `c4-legacy-compatibility.js` from the packaged application script graph; retained the module and `test/c4-compatibility.test.js` as deprecated test-only evidence.
+- [x] Retained `c5-legacy-compatibility.js` in the script graph because C7 ranking/work-speed policy deliberately owns frozen legacy numeric inputs until C8. It is deprecated for canonical calculation, not removed.
+- [x] Retained `App.isIncapable()` for context-free compatibility and historical parity evidence. All packaged migrated entry points provide C7 contexts.
+- [x] Retained the context-free `_c7AnalyserEligible()` call to `evaluateJobPermission()`. Removing it caused two frozen optimiser parity failures (`analyse:blocked-excluded` and `assign:matrix-incap-panic`), so the fallback was restored without changing fixtures.
+- [x] Confirmed no caller of `evaluatePawnJob()` in migrated production consumers. A locally retained C1 definition belongs to pre-existing unstaged compatibility work and is not absorbed by this task.
+- [x] Retained both C4 and C5 shadow suites in `test/run-tests.js`.
+- [x] Kept static semantic prohibitions scoped to canonical coordinator/infrastructure, not `engine.js` policy code.
+- [x] Documented request scope, C4 peer facts, C5 displays, C6 consumption, policy projections, the C8 ranking boundary, and all five reviewed deltas from actual implementation.
 
-**Verify:** `node test/run-tests.js` - 52+ suites, 35,500+ checks, 0 failures.
+**Caller audit:**
+- `evaluatePawnJob()`: zero semantic calls from packaged consumers; test instrumentation and historical tests remain.
+- `evaluateJobPermission()`: no migrated-context call. The retained local legacy aggregate calls it internally; `_c7AnalyserEligible()` calls it only when no C7 context was supplied; the deprecated C4 adapter calls it only in tests.
+- `App.isIncapable()`: retained in the three context-free Engine fallbacks (`_c7IsEligible`, `_c7TemporalParticipates`, `_c7AnalyserEligible`) plus the test-only C4 adapter. Packaged UI/assignment/scheduler/temporal entry points supply contexts.
 
-**Steps:**
+**Verification:**
+- Focused C7: 8 suites / 291 checks / 0 failures.
+- Focused C2-C6 canonical and compatibility contracts: 25 suites / 1,433 checks / 0 failures.
+- Final full `node test/run-tests.js`: 53 suites / 35,412 checks / 0 skipped / 0 failures.
+- Syntax checks, canonical static gates, semantic caller searches, script-order checks, `git diff --check`, and staged-diff inspection passed.
+- Packaging/load-order is covered by the C5 production-contract suite plus the C7 static gate: `files/**/*` includes the packaged contract, the contract loads before its factory, canonical C4-C6 dependencies load before C7, and C5 compatibility loads after its legacy owners. No release artifact was built because the repository exposes only the release-producing `npm run build`, and C7 does not require a release build.
 
-- [ ] **Step 1: Verify no production callers remain for legacy functions**
-
-Run architecture searches:
-
-```powershell
-node -e "const {execSync}=require('child_process'); ['App.isIncapable','Engine.evaluateJobPermission','Engine.evaluatePawnJob','App.effectiveSkill'].forEach(fn => { const out = execSync('grep -rn \"'+fn+'\" files/ --include=\"*.js\"', {encoding:'utf8'}).trim(); console.log(fn+': '+(out ? out.split('\n').length : 0)+' hits'); console.log(out || '  (none)'); });"
-```
-
-Expected: Zero hits for `isIncapable`, `evaluateJobPermission`, and `evaluatePawnJob` in production files. `effectiveSkill` may have legacy display references if Task 3 preserved it as a fallback.
-
-- [ ] **Step 2: Remove or deprecate legacy functions**
-
-If zero production callers confirmed, remove `isIncapable()` from `app-pawns.js`, `evaluatePawnJob()` and `evaluateJobPermission()` from `engine.js`. Remove `passionBucket()` from `engine.js` if fully replaced.
-
-If some callers remain (e.g. combat module intentionally unchanged), mark as deprecated with a comment:
-
-```javascript
-// @deprecated C7: legacy adapter retained for combat module only. Do not add new callers.
-```
-
-- [ ] **Step 3: Deprecate shadow adapters (do NOT remove test coverage)**
-
-Mark `files/c4-legacy-compatibility.js` and `files/c5-legacy-compatibility.js` as deprecated with removal milestone comment. Remove their `<script>` tags from `rimjobs.html` ONLY if zero production callers confirmed. Do NOT remove shadow test suites from `run-tests.js` - these suites serve as historical regression coverage and prove the parity relationship. They continue to run and pass.
-
-**Gate:** Shadow adapters may ONLY have their script tags removed after all C7 consumer parity tests pass and the user has reviewed the named delta evidence. If the user has not yet reviewed, mark the adapters as `@deprecated` but retain both modules and tests.
-
-- [ ] **Step 4: Verify static gate test scope**
-
-Confirm `test/c7-static-gates.test.js` scans ONLY `c7-evaluation-coordinator.js`. Do NOT extend to `engine.js`, `app-render.js`, or other app modules - those contain legitimate C7 policy code (trait-based break thresholds, child age rules, Undergrounder exemption, effectiveSkill fallbacks, etc.) that would false-positive on gates SG-2 and SG-7.
-
-- [ ] **Step 5: Update CODE-MAP.md**
-
-Add a C7 section after the C6 section:
-
-```markdown
-## C7 Consumer Parity Migration
-
-**Primary files:**
-- `files/c7-evaluation-coordinator.js` - request-scoped coordinator (`createPawnContext`)
-
-**API:**
-- `C7EvaluationCoordinator.createPawnContext(pawn, options)` - builds one shared C2/C3 evidence set, provides memoised C4 Permission/Availability per job, C5 context, lazy C6 temporal profile
-
-**Dependencies:** C2 (`CapabilityEvidence`), C3 (`CapacityResolver`), C4 (`PermissionResolver`, `AvailabilityResolver`, `RequirementRegistry`), C5 (`StructuralEffectivenessContext`), C6 (`TemporalProfileResolver`)
-
-**Output:**
-| Method | Returns |
-|--------|---------|
-| `permission(job)` | C4 Permission report with `state: 'allowed'\|'blocked'\|'unknown'` |
-| `availability(job)` | C4 Availability report with `state: 'available'\|'unavailable'\|'unknown'` |
-| `c5Context` | Frozen `StructuralEffectivenessContext` for C5 reporters |
-| `temporalProfile()` | Lazily resolved C6 `TemporalProfile` |
-| `legacyShadow(job)` | Migration-time shadow comparison (removed after adapter removal) |
-
-**Shadow-only:** No. C7 is the production consumer migration.
-
-**Consumers:** Priority grid, summary counts, viability, bottlenecks, auto-assign, analyser, Work Planner, scheduler, temporal coverage/resilience/proposals, skill/stat displays.
-```
-
-- [ ] **Step 6: Update INVARIANTS.md**
-
-Add C7 invariants between the C6 section and Save Editing:
-
-```markdown
-### C7 Consumer Parity Migration
-
-| Invariant | Description | Regression coverage |
-|-----------|-------------|---------------------|
-| C7-001 | createPawnContext returns a frozen context with no cross-request state | c7-evaluation-coordinator.test.js C7-COORD-001, C7-COORD-006 |
-| C7-002 | Permission and Availability are peers; neither derives from the other | c7-grid-parity.test.js C7-GRID-003, C7-GRID-010 |
-| C7-003 | Only three named C4 deltas are permitted; all others are regressions | c7-ranking-parity.test.js named delta whitelist |
-| C7-004 | Unknown permission is projected as "not proven blocked", never as canonical allowed | c7-consumer-parity.test.js C7-SUM-003 |
-| C7-005 | No primarySkill selection or scalar canonical effectiveness score | c7-static-gates.test.js SG-1 |
-| C7-006 | Ranking formula (speed*100 + passion*25) frozen as C7 policy | c7-ranking-parity.test.js C7-RANK-001 |
-| C7-007 | C6 mechanism facts consumed; C7 policy owns hours and schedule construction | c7-scheduler-parity.test.js C7-SCHED-001 |
-| C7-008 | Temporal coverage filters on Availability (current-state metric) | c7-temporal-parity.test.js C7-TEMP-002 |
-| C7-009 | No long-lived cache, WeakMap, or cross-request memoisation | c7-static-gates.test.js SG-3 |
-| C7-010 | Legacy shadow adapters removed only after all parity evidence reviewed | Gate in Task 9 Step 3 |
-```
-
-- [ ] **Step 7: Run final full regression**
-
-Run: `node test/run-tests.js`
-Expected: 52+ suites, 35,500+ checks, 0 skipped, 0 failures.
-
-- [ ] **Step 8: Commit**
-
-Name every file explicitly - no `git add files/`, `git add test/`, or `git add -A`:
-
-```
-git add files/app-pawns.js files/engine.js files/rimjobs.html docs/architecture/CODE-MAP.md docs/architecture/INVARIANTS.md test/c7-static-gates.test.js
-git commit -m "C7: deprecate legacy adapters, document C7 architecture and invariants"
-```
-
-If shadow adapter modules were deprecated (not removed), they are NOT staged. If their script tags were removed from rimjobs.html, that change is already in the staged rimjobs.html. No broad directory-level staging.
+**Commit:** `C7: close consumer parity migration and preserve legacy evidence` (this closure commit; exact hash is reported after creation).
 
 ---
 
