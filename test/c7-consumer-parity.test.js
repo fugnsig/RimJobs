@@ -27,6 +27,9 @@ module.exports = function run() {
     },
   };
   const C5LegacyCompatibility = {
+    evaluateLegacySkill(pawnValue) {
+      return pawnValue.compatibilitySkill;
+    },
     evaluateLegacyJobWorkSpeed(pawnValue) {
       compatibilitySpeedCalls++;
       return pawnValue.compatibilityWorkSpeed;
@@ -239,6 +242,178 @@ module.exports = function run() {
       'C7-PASSION-002 context-free ranking callers retain the frozen legacy bucket');
   }
 
+  {
+    let permissionCalls = 0;
+    let availabilityCalls = 0;
+    const doctor = {
+      id: 'doctoring', name: 'Doctor', important: true, skill: 'medicine',
+    };
+    const ada = pawn('analyser-ada', {
+      name: 'Ada', compatibilitySkill: 12, compatibilityWorkSpeed: 1.2,
+      compatibilityPassion: 2, passions: { medicine: 0 },
+    });
+    const bob = pawn('analyser-bob', {
+      name: 'Bob', compatibilitySkill: 8, compatibilityWorkSpeed: 0.8,
+      compatibilityPassion: 0, passions: { medicine: 0 },
+    });
+    const unavailable = pawn('analyser-downed', {
+      name: 'Downed', compatibilitySkill: 20, compatibilityWorkSpeed: 3,
+      compatibilityPassion: 2, passions: { medicine: 0 },
+    });
+    const analyserContexts = new Map([ada, bob, unavailable].map(p => [p.id, {
+      permission() {
+        permissionCalls++;
+        return { state: p.id === bob.id ? 'unknown' : 'allowed' };
+      },
+      availability() {
+        availabilityCalls++;
+        return { state: p.id === unavailable.id ? 'unavailable'
+          : p.id === bob.id ? 'unknown' : 'available' };
+      },
+      c5Context: {
+        effectivenessSnapshot: {
+          skillPolicies: { Medicine: { appSkillId: 'medicine' } },
+        },
+        passionFacts: {
+          Medicine: {
+            state: 'resolved', completeness: 'complete',
+            compatibilityBucket: p.compatibilityPassion,
+          },
+        },
+      },
+    }]));
+    const priorities = {
+      [ada.id]: { doctoring: null },
+      [bob.id]: { doctoring: 2 },
+      [unavailable.id]: { doctoring: 1 },
+    };
+    const originalEvaluatePawnJob = Engine.evaluatePawnJob;
+    Engine.evaluatePawnJob = () => { throw new Error('analyser must not use legacy aggregation'); };
+    let result = null;
+    try {
+      result = Engine.analyzeColony(
+        [ada, bob, unavailable], priorities, [doctor], analyserContexts);
+    } catch (_) {
+      result = null;
+    }
+    Engine.evaluatePawnJob = originalEvaluatePawnJob;
+    const expectedBest = {
+      pawnId: ada.id, pawnName: ada.name, skill: 12, passion: 2,
+      score: 170, realSpeed: 1.2, hasSkill: true,
+    };
+    ok(result && JSON.stringify(result.gaps) === JSON.stringify([{
+      jobId: 'doctoring', jobName: 'Doctor', severity: 'warning',
+      reason: 'Doctor has no P1 assignment (best assigned at P2)', bestPawn: expectedBest,
+    }]), 'C7-ANA-001 analyser gaps preserve exact text and best-pawn projection');
+    ok(result && JSON.stringify(result.recommendations) === JSON.stringify([{
+      jobId: 'doctoring', jobName: 'Doctor', pawnId: ada.id, pawnName: ada.name,
+      skill: 12, passion: 2,
+      reason: 'Skill 12 + major passion, 120% speed, currently unassigned',
+      suggestedPriority: 1,
+    }]), 'C7-ANA-002 analyser recommendations preserve exact text and priority');
+    ok(result && JSON.stringify(result.singlePoints) === JSON.stringify([{
+      jobId: 'doctoring', jobName: 'Doctor', pawnName: bob.name, pawnId: bob.id,
+    }]), 'C7-ANA-003 analyser single-point output remains parity-stable');
+    ok(permissionCalls === 3 && availabilityCalls === 3,
+      'C7-ANA-005 each pawn/job Permission and Availability is evaluated once');
+    ok(result && !JSON.stringify(result).includes(unavailable.id),
+      'C7-ANA-006 unavailable pawn is excluded without broadening other current states');
+
+    const tieA = pawn('tie-a', {
+      name: 'Tie A', compatibilitySkill: 10, compatibilityWorkSpeed: 1,
+      compatibilityPassion: 1, passions: { medicine: 1 },
+    });
+    const tieB = pawn('tie-b', {
+      name: 'Tie B', compatibilitySkill: 10, compatibilityWorkSpeed: 1,
+      compatibilityPassion: 1, passions: { medicine: 1 },
+    });
+    const tieContexts = new Map([tieA, tieB].map(p => [p.id, {
+      c5Context: {
+        effectivenessSnapshot: { skillPolicies: { Medicine: { appSkillId: 'medicine' } } },
+        passionFacts: { Medicine: {
+          state: 'resolved', completeness: 'complete', compatibilityBucket: 1,
+        } },
+      },
+    }]));
+    let best = null;
+    try { best = Engine._bestPawnForJob([tieA, tieB], doctor, tieContexts); }
+    catch (_) { best = null; }
+    ok(best && best.pawnId === tieA.id && best.score === 125,
+      'C7-ANA-004 frozen score and stable input-order tie break are preserved');
+
+    const hauling = { id: 'hauling', name: 'Haul', important: true, skill: null };
+    const haulingPawn = pawn('hauler', {
+      name: 'Hauler', compatibilitySkill: 20, compatibilityWorkSpeed: 1,
+      compatibilityPassion: 2,
+    });
+    let haulingBest = null;
+    try {
+      haulingBest = Engine._bestPawnForJob([haulingPawn], hauling, new Map([
+        [haulingPawn.id, { c5Context: null }],
+      ]));
+    } catch (_) { haulingBest = null; }
+    ok(haulingBest && haulingBest.hasSkill === false
+      && haulingBest.skill === 0 && haulingBest.passion === 0,
+    'C7-ANA-007 skillless jobs remain genuinely skillless');
+  }
+
+  {
+    let contextBuilds = 0;
+    const forwarded = [];
+    const plannerEngine = {
+      analyzeColony(_pawns, _priorities, _jobs, map) {
+        forwarded.push(map);
+        return { gaps: [], recommendations: [], singlePoints: [] };
+      },
+    };
+    const plannerCtx = loadScripts(['app-priorities.js'], {
+      App: { state: {} }, Engine: plannerEngine,
+      PriorityScale: { highest: 1, lowestManual: () => 4 },
+      document: { getElementById() { return null; } },
+      window: { innerWidth: 1200 },
+    });
+    const plannerMap = new Map([['planner-pawn', { pawnId: 'planner-pawn' }]]);
+    const planner = Object.assign(Object.create(plannerCtx.App), {
+      state: {
+        pawns: [{ id: 'planner-pawn' }], priorities: {},
+        settings: { priorityLocked: false },
+      },
+      _visibleJobs() { return [{ id: 'doctoring' }]; },
+      _c7PawnContextMap() { contextBuilds++; return plannerMap; },
+      renderOptimizer() {},
+      _optimizerHTML() { return ''; },
+      _lockedPriorityActionAttrs() { return ''; },
+      _showGenericModal() {},
+      _guardPriorityEdit() { return true; },
+      renderTable() {},
+      triggerAutoSave() {},
+    });
+    planner.runOptimizer();
+    planner.openWorkPlanner();
+    ok(contextBuilds === 2,
+      'C7-WP-001 each Work Planner analyser entry creates one request context map');
+    ok(forwarded.length === 2 && forwarded.every(map => map === plannerMap),
+      'C7-WP-002 Work Planner entry points forward the request context map');
+    planner.applyOptimizerSuggestion('planner-pawn', 'doctoring', 1);
+    ok(planner.state.priorities['planner-pawn'].doctoring === 1,
+      'C7-WP-003 Apply One preserves the exact priority mutation');
+    ok(contextBuilds === 3 && forwarded[2] === plannerMap,
+      'C7-WP-003 Apply One refresh uses a new request-scoped coordinator map');
+    planner._optimizerResult = {
+      gaps: [{ jobId: 'doctoring', bestPawn: { pawnId: 'planner-pawn' } }],
+      recommendations: [{
+        jobId: 'research', pawnId: 'planner-pawn', suggestedPriority: 2,
+      }],
+      singlePoints: [],
+    };
+    planner.applyAllOptimizerSuggestions();
+    ok(planner.state.priorities['planner-pawn'].doctoring === 1
+      && planner.state.priorities['planner-pawn'].research === 2,
+    'C7-WP-004 Apply All preserves gap and recommendation mutations');
+    ok(contextBuilds === 4 && forwarded[3] === plannerMap,
+      'C7-WP-004 Apply All refresh uses a new request-scoped coordinator map');
+  }
+
   const source = fs.readFileSync(path.join(__dirname, '..', 'files', 'engine.js'), 'utf8');
   const viabilitySource = source.slice(source.indexOf('  calculateViability('),
     source.indexOf('  getBottlenecks('));
@@ -268,6 +443,14 @@ module.exports = function run() {
     'C7-STATIC-TC temporal states use explicit participation policy');
   ok(!/primarySkill/.test(passionBucketSource),
     'C7-STATIC-PASSION requested passion projection does not create primarySkill');
+  const analyserSource = source.slice(source.indexOf('  analyzeColony('),
+    source.indexOf('  calculateLoadoutProtection('));
+  ok(!/evaluatePawnJob/.test(analyserSource),
+    'C7-STATIC-ANA analyser and best-pawn ranking have no legacy aggregation call');
+  ok(/\(realSpeed \* 100\) \+ \(passion \* 25\)/.test(analyserSource),
+    'C7-STATIC-ANA frozen ranking formula remains verbatim');
+  ok(!/primarySkill|canonicalEffectivenessScore/.test(analyserSource),
+    'C7-STATIC-ANA analyser introduces no primary skill or canonical scalar score');
 
   return { name: 'C7 summary and dashboard consumer parity', total, failures };
 };

@@ -825,7 +825,40 @@ const Engine = {
    * Colony Optimizer - analyzes pawn assignments and recommends improvements.
    * Returns { gaps, recommendations, singlePoints }
    */
-  analyzeColony(pawns, priorities, jobs) {
+  _c7AnalyserEligible(pawn, job, pawnContext) {
+    if (pawnContext) {
+      const permission = pawnContext.permission(job);
+      const permissionParticipates = permission
+        && (permission.state === 'allowed' || permission.state === 'unknown');
+      if (!permissionParticipates) return false;
+      const availability = pawnContext.availability(job);
+      return !!availability
+        && (availability.state === 'available' || availability.state === 'unknown');
+    }
+    const legacyPermission = typeof this.evaluateJobPermission === 'function'
+      ? this.evaluateJobPermission(pawn, job) : null;
+    return legacyPermission
+      ? (legacyPermission.status === 'allowed' || legacyPermission.status === 'uncertain')
+      : !App.isIncapable(pawn, job);
+  },
+
+  _c7AnalyserProjection(pawn, job, pawnContext) {
+    const hasSkill = !!job.skill;
+    const skill = hasSkill
+      ? (typeof C5LegacyCompatibility !== 'undefined'
+          && C5LegacyCompatibility.evaluateLegacySkill
+        ? C5LegacyCompatibility.evaluateLegacySkill(pawn, job.skill)
+        : App.effectiveSkill(pawn, job.skill))
+      : 0;
+    const passion = hasSkill ? this.passionBucket(pawn, job.skill, pawnContext) : 0;
+    const realSpeed = typeof C5LegacyCompatibility !== 'undefined'
+        && C5LegacyCompatibility.evaluateLegacyJobWorkSpeed
+      ? C5LegacyCompatibility.evaluateLegacyJobWorkSpeed(pawn, job)
+      : this.calculateRealWorkSpeed(pawn, job);
+    return { skill, passion, realSpeed, hasSkill };
+  },
+
+  analyzeColony(pawns, priorities, jobs, contextMap) {
     if (pawns.length === 0) return { gaps: [], recommendations: [], singlePoints: [] };
     // Analyse only the provided job set (visible columns) when given.
     const allJobs = jobs && jobs.length ? jobs : [...JOBS, ...(App.state.customJobs || [])];
@@ -834,7 +867,17 @@ const Engine = {
     const singlePoints = [];
 
     allJobs.forEach(j => {
-      const capable = pawns.filter(p => !App.isIncapable(p, j));
+      const evaluationMap = new Map();
+      pawns.forEach(p => {
+        const pawnContext = contextMap && contextMap.get(p.id);
+        const eligible = this._c7AnalyserEligible(p, j, pawnContext);
+        evaluationMap.set(p.id, {
+          eligible,
+          projection: eligible ? this._c7AnalyserProjection(p, j, pawnContext) : null,
+        });
+      });
+
+      const capable = pawns.filter(p => evaluationMap.get(p.id).eligible);
       if (capable.length === 0 && j.important) {
         gaps.push({ jobId: j.id, jobName: j.name, severity: 'critical', reason: `No pawn is capable of ${j.name}`, bestPawn: null });
         return;
@@ -845,25 +888,27 @@ const Engine = {
 
       // Gap: important job with no assignment
       if (j.important && assigned.length === 0) {
-        const best = this._bestPawnForJob(capable, j);
+        const best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
         gaps.push({ jobId: j.id, jobName: j.name, severity: 'critical', reason: `No pawn assigned to ${j.name}`, bestPawn: best });
       }
       // Gap: important job with no P1
       else if (j.important && atP1.length === 0 && assigned.length > 0) {
-        const best = this._bestPawnForJob(capable, j);
+        const best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
         gaps.push({ jobId: j.id, jobName: j.name, severity: 'warning', reason: `${j.name} has no P1 assignment (best assigned at P${priorities[assigned[0].id][j.id]})`, bestPawn: best });
       }
       // Gap: skill-linked important job with low effective speed
       else if (j.important && j.skill && atP1.length > 0) {
-        const bestSkill = Math.max(...atP1.map(p => App.effectiveSkill(p, j.skill)));
-        const bestSpeed = Math.max(...atP1.map(p => Engine.calculateRealWorkSpeed(p, j)));
+        const bestSkill = Math.max(...atP1.map(p =>
+          evaluationMap.get(p.id).projection.skill));
+        const bestSpeed = Math.max(...atP1.map(p =>
+          evaluationMap.get(p.id).projection.realSpeed));
         // Warn if real work speed is below 60% (slow worker) or raw skill < 4
         if (bestSpeed < 0.6 || bestSkill < 4) {
           const speedPct = (bestSpeed * 100).toFixed(0);
           // If the best candidate is already at P1 there is nothing to apply - a
           // "Set P1" button would be a no-op and the warning could never dismiss.
           // Keep the warning informational instead (no pawn = no button).
-          let best = this._bestPawnForJob(capable, j);
+          let best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
           if (best && priorities[best.pawnId]?.[j.id] === 1) best = null;
           gaps.push({ jobId: j.id, jobName: j.name, severity: 'warning', reason: `Best ${j.name} pawn: skill ${bestSkill}, ${speedPct}% speed (recommend 80%+)${best ? '' : ' - a skill limitation, not an assignment problem'}`, bestPawn: best });
         }
@@ -876,7 +921,7 @@ const Engine = {
 
       // Recommendations: find best capable pawn who isn't assigned but should be
       if (j.skill && capable.length > 0) {
-        const best = this._bestPawnForJob(capable, j);
+        const best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
         if (best) {
           const currentPrio = priorities[best.pawnId]?.[j.id];
           const speedPct = best.realSpeed ? (best.realSpeed * 100).toFixed(0) + '% speed' : '';
@@ -906,15 +951,18 @@ const Engine = {
     return { gaps, recommendations: uniqueRecs, singlePoints };
   },
 
-  _bestPawnForJob(capable, job) {
+  _bestPawnForJob(capable, job, contextMap, evaluationMap) {
     if (capable.length === 0) return null;
     const ranked = capable.map(p => {
-      const skill = job.skill ? App.effectiveSkill(p, job.skill) : 0;
-      const passion = Engine.passionBucket(p, job.skill);
-      const realSpeed = this.calculateRealWorkSpeed(p, job);
+      const cached = evaluationMap && evaluationMap.get(p.id);
+      const projection = cached && cached.projection
+        ? cached.projection
+        : this._c7AnalyserProjection(p, job, contextMap && contextMap.get(p.id));
+      const { skill, passion, realSpeed, hasSkill } = projection;
       // Score combines real work speed (dominant) with passion for growth potential
       const score = (realSpeed * 100) + (passion * 25);
-      return { pawnId: p.id, pawnName: p.nickname || p.name, skill, passion, score, realSpeed, hasSkill: !!job.skill };
+      return { pawnId: p.id, pawnName: p.nickname || p.name,
+        skill, passion, score, realSpeed, hasSkill };
     }).sort((a, b) => b.score - a.score);
     return ranked[0];
   },
