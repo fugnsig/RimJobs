@@ -2144,7 +2144,7 @@ const CapabilityEvidence = {
         'derived',
         { fields: {
           activity: 'meditation', hours: 2,
-          obligation: 'required',
+          obligation: 'recommended',
           satisfiesNeeds: ['recreation'],
           composition: { resolved: true, rule: 'singleSource' },
         } }

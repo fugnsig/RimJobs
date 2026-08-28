@@ -385,7 +385,7 @@ data
 - `test/c6-activity-provider-semantics.test.js` - typed obligation, satisfiesNeeds, and composition fields via C2 paths (18 checks).
 - `test/c6-temporal-coverage.test.js` - 5-family temporalCoverage structure and completeness semantics (84 checks).
 - `test/c6-undergrounder-uv.test.js` - UV evidence emits for all UV-sensitive pawns including Undergrounders (10 checks).
-- `test/temporal-profile-resolver.test.js` - full TemporalProfileResolver test matrix across all 5 dimensions (101 checks).
+- `test/temporal-profile-resolver.test.js` - full TemporalProfileResolver test matrix across all 5 dimensions (109 checks).
 - `test/c6-static-gates.test.js` - static architecture gate proving no forbidden references (22 checks).
 
 **Known conservative unknowns:**
@@ -442,7 +442,7 @@ data
 | C6 activity provider semantics | `test/c6-activity-provider-semantics.test.js` | 18 | Typed obligation, satisfiesNeeds, and composition fields |
 | C6 temporal-family coverage | `test/c6-temporal-coverage.test.js` | 84 | 5-family temporalCoverage structure and completeness |
 | C6 Undergrounder UV | `test/c6-undergrounder-uv.test.js` | 10 | UV evidence for all UV-sensitive pawns including Undergrounders |
-| C6 TemporalProfileResolver | `test/temporal-profile-resolver.test.js` | 101 | Full 5-dimension resolver with three-way needState, stat routing, and coverage |
+| C6 TemporalProfileResolver | `test/temporal-profile-resolver.test.js` | 109 | Full 5-dimension resolver with three-way needState, stat routing, and coverage |
 | C6 static architecture gates | `test/c6-static-gates.test.js` | 22 | No forbidden references, identity strings, or policy leaks |
 
 The verified suite runs 44 suites, 0 skipped, 0 failures. Logic tests use the vm harness with stubbed globals. XML parser checks use the existing `@xmldom/xmldom` test shim; production remains browser `DOMParser` based.

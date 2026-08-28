@@ -303,37 +303,74 @@ module.exports = function run() {
       'C6-J-002d joyNeedModifiers remains null');
   }
 
-  // -- C6-J-003: Depressive trait (no recreation output) --
+  // -- C6-J-003: Multiple recreation recommendations accumulate --
   {
-    // Depressive does NOT produce recreationHoursRecommendation evidence in C2
-    const c5 = makeContext();
+    const c5 = makeContext({
+      effects: [
+        ev('trait:ascetic:recHours', 'recreationHoursRecommendation',
+          { delta: -1, provenance: { sourceKind: 'trait', sourceId: 'ascetic' } }),
+        ev('mod:custom:recHours', 'recreationHoursRecommendation',
+          { delta: 0.5, provenance: { sourceKind: 'mod', sourceId: 'custom' } }),
+      ],
+    });
     const profile = Resolver.resolve(c5);
-    ok(profile.recreation.recommendations.length === 0,
-      'C6-J-003 depressive: no recreation recommendations (empty effects)');
+    ok(profile.recreation.recommendations.length === 2,
+      'C6-J-003a two recommendations from two sources');
+    ok(profile.recreation.recommendations[0].delta === -1,
+      'C6-J-003b first delta preserved');
+    ok(profile.recreation.recommendations[1].delta === 0.5,
+      'C6-J-003c second delta preserved');
+    ok(profile.recreation.recommendations[0].source.evidenceId === 'trait:ascetic:recHours',
+      'C6-J-003d first source evidenceId preserved');
+    ok(profile.recreation.recommendations[1].source.evidenceId === 'mod:custom:recHours',
+      'C6-J-003e second source evidenceId preserved');
   }
 
-  // -- C6-J-004: Neurotic trait (no recreation output) --
+  // -- C6-J-004: Recreation recommendation source provenance is preserved --
   {
-    const c5 = makeContext();
+    const c5 = makeContext({
+      effects: [
+        ev('trait:jogger:recHours', 'recreationHoursRecommendation',
+          { delta: 0.25, provenance: { sourceKind: 'trait', sourceId: 'jogger' } }),
+      ],
+    });
     const profile = Resolver.resolve(c5);
-    ok(profile.recreation.recommendations.length === 0,
-      'C6-J-004 neurotic: no recreation recommendations (empty effects)');
+    ok(profile.recreation.recommendations.length === 1,
+      'C6-J-004a one recommendation');
+    ok(profile.recreation.recommendations[0].delta === 0.25,
+      'C6-J-004b positive delta preserved');
+    ok(profile.recreation.recommendations[0].source.provenance.sourceKind === 'trait',
+      'C6-J-004c provenance sourceKind preserved');
   }
 
-  // -- C6-J-005: Depressive + Neurotic (no recreation output) --
+  // -- C6-J-005: Recreation with complete coverage reports verified confidence --
   {
-    const c5 = makeContext();
+    const c5 = makeContext({
+      effects: [
+        ev('trait:ascetic:recHours', 'recreationHoursRecommendation',
+          { delta: -1, provenance: { sourceKind: 'trait', sourceId: 'ascetic' } }),
+      ],
+      temporalCoverage: {
+        recreation: { completeness: 'complete', unresolvedEvidence: [] },
+      },
+    });
     const profile = Resolver.resolve(c5);
-    ok(profile.recreation.recommendations.length === 0,
-      'C6-J-005 depressive+neurotic: no recreation recommendations (empty effects)');
+    ok(profile.recreation.recommendations.length === 1,
+      'C6-J-005a recommendation present with complete coverage');
+    ok(profile.recreation.recommendations[0].delta === -1,
+      'C6-J-005b delta correct');
   }
 
-  // -- C6-J-006: High break risk traits (no recreation output) --
+  // -- C6-J-006: Depressive/neurotic/break-risk are C7 policy, not C6 recreation facts --
   {
+    // These traits affect scheduling hours (C7 policy), not recreation evidence.
+    // C6 emits no recreation recommendations for them - verify empty is correct.
     const c5 = makeContext();
     const profile = Resolver.resolve(c5);
     ok(profile.recreation.recommendations.length === 0,
-      'C6-J-006 high break risk: no recreation recommendations (empty effects)');
+      'C6-J-006 no recreation recommendations without recreation evidence');
+    ok(profile.recreation.joyNeedModifiers === null,
+      'C6-J-006b joyNeedModifiers null without evidence');
   }
 
   // =====================================================================
@@ -441,7 +478,7 @@ module.exports = function run() {
     const c5 = makeContext({
       effects: [
         ev('hediff:Hediff_Psylink:meditation', 'requiredActivity',
-          { activity: 'meditation', obligation: 'required',
+          { activity: 'meditation', obligation: 'recommended',
             satisfiesNeeds: ['recreation'], hours: 1,
             composition: { resolved: true, rule: 'singleSource' },
             provenance: { sourceKind: 'hediff', sourceId: 'Hediff_Psylink' } }),
@@ -450,7 +487,7 @@ module.exports = function run() {
     const profile = Resolver.resolve(c5);
     ok(profile.activities.length === 1, 'C6-A-001a one activity');
     ok(profile.activities[0].activity === 'meditation', 'C6-A-001b activity is meditation');
-    ok(profile.activities[0].obligation === 'required', 'C6-A-001c obligation is required');
+    ok(profile.activities[0].obligation === 'recommended', 'C6-A-001c obligation is recommended');
     ok(JSON.stringify(profile.activities[0].satisfiesNeeds) === '["recreation"]',
       'C6-A-001d satisfiesNeeds is [recreation]');
     ok(profile.activities[0].compositionResolved === true, 'C6-A-001e compositionResolved is true');
@@ -470,7 +507,7 @@ module.exports = function run() {
     const c5 = makeContext({
       effects: [
         ev('hediff:Hediff_Psylink:meditation', 'requiredActivity',
-          { activity: 'meditation', obligation: 'required',
+          { activity: 'meditation', obligation: 'recommended',
             satisfiesNeeds: ['recreation'], hours: 1,
             composition: { resolved: true, rule: 'singleSource' },
             provenance: { sourceKind: 'hediff', sourceId: 'Hediff_Psylink' } }),

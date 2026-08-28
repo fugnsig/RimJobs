@@ -41,8 +41,8 @@ module.exports = function run() {
       return e.type === 'requiredActivity' && e.activity === 'meditation';
     });
     ok(!!med, 'C6-ACT-001a psycaster meditation evidence exists');
-    ok(med && med.obligation === 'required',
-      'C6-ACT-001b meditation obligation is "required"');
+    ok(med && med.obligation === 'recommended',
+      'C6-ACT-001b meditation obligation is "recommended"');
   }
 
   // -- C6-ACT-002: Meditation requiredActivity evidence has typed satisfiesNeeds array --
