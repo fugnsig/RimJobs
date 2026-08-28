@@ -43,18 +43,29 @@ const Engine = {
    * Calculates the theoretical work output for a specific job across the whole colony.
    * Uses real RimWorld work speed formulas for accuracy.
    */
-  calculateWorkCapacity(pawns, job, priorities) {
+  calculateWorkCapacity(pawns, job, priorities, contextMap) {
     let capacity = 0;
     pawns.forEach(p => {
       const prio = Number(priorities[p.id]?.[job.id]);
       if (!Number.isFinite(prio) || prio <= 0) return;
 
-      const speed = this.calculateRealWorkSpeed(p, job);
-      // Priority 1 = full attention, 2 = half, 3 = third, 4 = quarter
+      const pawnContext = contextMap && contextMap.get(p.id);
+      const speed = this._c7WorkCapacitySpeed(p, job, pawnContext);
       const efficiency = speed * (1 / prio);
       capacity += efficiency;
     });
     return capacity;
+  },
+
+  // C5 deliberately has no scalar effectiveness score. C7 therefore retains
+  // this frozen numeric projection as compatibility policy while carrying the
+  // request-scoped pawn context alongside it for later reviewed migrations.
+  _c7WorkCapacitySpeed(pawn, job, _pawnContext) {
+    if (typeof C5LegacyCompatibility !== 'undefined'
+        && C5LegacyCompatibility.evaluateLegacyJobWorkSpeed) {
+      return C5LegacyCompatibility.evaluateLegacyJobWorkSpeed(pawn, job);
+    }
+    return this.calculateRealWorkSpeed(pawn, job);
   },
 
   /**
@@ -177,8 +188,27 @@ const Engine = {
   // Resolves modded passion defs through the scanned catalogue at read time instead
   // of trusting the bucket baked into p.passions at import, so a bad passion is
   // never mistaken for a minor one in auto-assign or recommendations.
-  passionBucket(p, skillId) {
+  passionBucket(p, skillId, pawnContext) {
     if (!p || !skillId) return 0;
+    const c5Context = pawnContext && pawnContext.c5Context;
+    const policies = c5Context && c5Context.effectivenessSnapshot
+      && c5Context.effectivenessSnapshot.skillPolicies || {};
+    if (c5Context && typeof StructuralPassionResolver !== 'undefined') {
+      let matches = [];
+      if (policies[skillId]) {
+        matches = [skillId];
+      } else {
+        matches = Object.keys(policies).filter(skillDefId =>
+          policies[skillDefId] && policies[skillDefId].appSkillId === skillId);
+      }
+      if (matches.length === 1) {
+        const fact = StructuralPassionResolver.resolve(c5Context, matches[0]);
+        if (fact && fact.state === 'resolved' && fact.completeness === 'complete'
+            && Number.isInteger(fact.compatibilityBucket)) {
+          return fact.compatibilityBucket;
+        }
+      }
+    }
     try { return App._passionMeta(App._passionValue(p, skillId)).bucket | 0; }
     catch (_) { return ((p.passions || {})[skillId] | 0); }
   },
@@ -711,6 +741,58 @@ const Engine = {
       dayCount: report.filter(r => r.mode === 'day').length,
       manualCount: report.filter(r => r.mode === 'manual').length,
     };
+  },
+
+  calculateTemporalCoverage(pawns, schedules, job, contextMap) {
+    const types = App.state.shiftTypes || [];
+    const idxSleep = types.indexOf('Sleep');
+
+    const capable = [];
+    for (let i = 0; i < pawns.length; i++) {
+      const p = pawns[i];
+      const pawnContext = contextMap && contextMap.get(p.id);
+      if (pawnContext) {
+        const permission = pawnContext.permission(job);
+        const permissionParticipates = permission
+          && (permission.state === 'allowed' || permission.state === 'unknown');
+        if (!permissionParticipates) continue;
+        const availability = pawnContext.availability(job);
+        const availabilityParticipates = availability
+          && (availability.state === 'available' || availability.state === 'unknown');
+        if (!availabilityParticipates) continue;
+      } else {
+        // Compatibility for callers not migrated until Task 8. The C7 path above
+        // always uses canonical Permission plus Availability.
+        const legacyPermission = typeof this.evaluateJobPermission === 'function'
+          ? this.evaluateJobPermission(p, job) : null;
+        const legacyParticipates = legacyPermission
+          ? (legacyPermission.status === 'allowed' || legacyPermission.status === 'uncertain')
+          : !App.isIncapable(p, job);
+        if (!legacyParticipates) continue;
+      }
+      capable.push(p);
+    }
+
+    const hours = [];
+    for (let h = 0; h < 24; h++) {
+      const awake = [];
+      for (let i = 0; i < capable.length; i++) {
+        const p = capable[i];
+        const sched = schedules[p.id];
+        const hasSchedule = Array.isArray(sched) && sched.length === 24;
+        if (hasSchedule && idxSleep >= 0 && sched[h] === idxSleep) continue;
+        awake.push({ id: p.id, name: p.nickname || p.name, inferredAwake: !hasSchedule });
+      }
+      const count = awake.length;
+      hours.push({
+        hour: h,
+        capablePawns: awake,
+        count,
+        status: count === 0 ? 'gap' : count === 1 ? 'fragile' : 'healthy'
+      });
+    }
+
+    return hours;
   },
 
   calculateWorkSpeedMod(p) {
