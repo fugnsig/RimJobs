@@ -47,9 +47,15 @@ module.exports = function run() {
   const unknownResolution = { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['test'] };
 
   const vanillaWorkType = {
-    _provenance: { modId: 'ludeon.rimworld' },
+    defName: 'Firefighter',
+    workTags: ['Firefighting'],
+    workTagsCompleteness: 'complete',
+    workTagsCompletenessReasons: [],
     pathCatalogueCompleteness: 'complete',
     pathCatalogueCompletenessReasons: [],
+    _completeness: 'complete',
+    _completenessReasons: [],
+    _provenance: { modId: 'ludeon.rimworld', sources: [] },
   };
 
   const snapshotComplete = Registry.createSnapshot({
@@ -215,6 +221,101 @@ module.exports = function run() {
     'PKG-013 resolution includes mods from restored importMeta');
   ok(App2.state.activePackageResolution.ids.includes('ludeon.rimworld.biotech'),
     'PKG-013 resolution includes DLC from restored importMeta');
+
+  // --- Dataset-level uncertainty must not taint individual definitions ---
+
+  const vanillaWorkGiver = {
+    defName: 'FirefighterEmergency',
+    workTypeDefName: 'Firefighter',
+    workTypeCompleteness: 'complete',
+    workTypeCompletenessReasons: [],
+    requiredCapacities: [],
+    requiredCapacitiesCompleteness: 'complete',
+    requiredCapacitiesCompletenessReasons: [],
+    catalogueMembershipCompleteness: 'complete',
+    catalogueMembershipCompletenessReasons: [],
+    priorityInType: 100,
+    _provenance: { modId: 'ludeon.rimworld', sources: [] },
+  };
+
+  const vanillaCapacity = {
+    defName: 'Manipulation',
+    workerClass: 'PawnCapacityWorker_Manipulation',
+    minForCapable: 0.01,
+    _completeness: 'complete',
+    _completenessReasons: [],
+    _provenance: { modId: 'ludeon.rimworld', sources: [] },
+  };
+
+  const vanillaRaceWork = {
+    catalogueCompleteness: 'complete',
+    catalogueCompletenessReasons: [],
+    entries: {},
+    entryCompleteness: {},
+    entryCompletenessReasons: {},
+    _provenance: { modId: 'ludeon.rimworld', sources: [] },
+  };
+
+  const fullSnapshot = permCtx.RequirementRegistry.createSnapshot({
+    jobCatalog: [{ id: 'firefight' }],
+    workTypeDefs: { Firefighter: vanillaWorkType },
+    workGiverDefs: { FirefighterEmergency: vanillaWorkGiver },
+    capacityDefs: { Manipulation: vanillaCapacity },
+    raceWorkPolicies: { Human: vanillaRaceWork },
+    activePackageIds: completeResolution,
+  });
+
+  const fullPolicy = permCtx.RequirementRegistry.getJobPolicy(fullSnapshot, 'firefight');
+  ok(fullPolicy.completeness === 'complete',
+    'PKG-014 complete Core definitions yield complete policy');
+
+  const fullContext = Object.freeze({
+    pawnId: 'test-pawn',
+    evidence: { pawnState: { raceDefName: 'Human', age: 25 } },
+    capacities: { capacities: {
+      manipulation: { capacity: 'Manipulation', structural: { state: 'resolved', value: 1.0 } },
+    } },
+    statusFacts: {},
+    definitionSnapshot: fullSnapshot,
+  });
+  const fullResult = PermResolver.resolve(fullContext, 'firefight');
+  ok(fullResult.state !== 'unknown',
+    'PKG-014 complete Core definitions produce non-unknown permission (got ' + fullResult.state + ')');
+  ok(!fullResult.unknowns.some(u => u.explanation && u.explanation.code === 'permission.policy.partial'),
+    'PKG-014 no policy.partial unknown');
+  ok(!fullResult.unknowns.some(u => u.explanation && u.explanation.code === 'permission.age.unknown'),
+    'PKG-014 no age.unknown');
+
+  const taintedWorkType = Object.assign({}, vanillaWorkType, {
+    pathCatalogueCompleteness: 'partial',
+    pathCatalogueCompletenessReasons: ['relevantPatchNotApplied'],
+  });
+  const taintedSnapshot = permCtx.RequirementRegistry.createSnapshot({
+    jobCatalog: [{ id: 'firefight' }],
+    workTypeDefs: { Firefighter: taintedWorkType },
+    workGiverDefs: { FirefighterEmergency: vanillaWorkGiver },
+    capacityDefs: { Manipulation: vanillaCapacity },
+    raceWorkPolicies: { Human: vanillaRaceWork },
+    activePackageIds: completeResolution,
+  });
+  const taintedPolicy = permCtx.RequirementRegistry.getJobPolicy(taintedSnapshot, 'firefight');
+  ok(taintedPolicy.completeness === 'partial',
+    'PKG-015 dataset-tainted definition produces partial policy (regression pattern)');
+
+  const narrowWorkType = Object.assign({}, vanillaWorkType, {
+    pathCatalogueCompleteness: 'partial',
+    pathCatalogueCompletenessReasons: ['specificModPatch'],
+  });
+  const narrowSnapshot = permCtx.RequirementRegistry.createSnapshot({
+    jobCatalog: [{ id: 'firefight' }],
+    workTypeDefs: { Firefighter: narrowWorkType },
+    workGiverDefs: {},
+    capacityDefs: {},
+    activePackageIds: completeResolution,
+  });
+  const narrowPolicy = permCtx.RequirementRegistry.getJobPolicy(narrowSnapshot, 'firefight');
+  ok(narrowPolicy.completeness === 'partial',
+    'PKG-016 per-definition uncertainty still produces partial policy');
 
   return { name: 'C7 package resolution regression', total, failures };
 };
