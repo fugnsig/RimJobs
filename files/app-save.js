@@ -3537,6 +3537,7 @@ Object.assign(App, {
     if (data.settings)        this.state.settings        = { ...this.state.settings, ...data.settings };
     if (data.uiScroll)        this.state.uiScroll        = data.uiScroll;
     if (data.activeTab)       this.state.activeTab       = data.activeTab;
+    if (data.importMeta)      this.state.importMeta      = data.importMeta;
     if (data.lastSaveFilePath) this._lastSaveFilePath    = data.lastSaveFilePath;
     this._normalizeLoadedState();
     this.state.pawns.forEach(p => {

@@ -168,5 +168,53 @@ module.exports = function run() {
   ok(App.state.activePackageResolution.completeness === 'unknown',
     'PKG-011 helper resolves to unknown when modIds absent');
 
+  // --- _applyLoadedData restores importMeta ---
+
+  const App2 = {
+    state: {
+      pawns: [], priorities: {}, customJobs: [],
+      customXenotypes: {}, customTraits: {}, customGenes: {},
+      customBuildings: {}, customBackstories: {}, customMaterials: [],
+      customBiomes: [], ideology: { memes: [], precepts: {}, name: '', type: 'fixed', rituals: [], notes: '' },
+      precepts: {}, raid: {}, notes: [], timeline: [], savedIdeologies: [],
+      manualRelations: [], ghostPawns: [], weapons: [], apparel: [], materials: [],
+      settings: {}, defSources: {}, blueprintName: '', buildingOverrides: {},
+      blueprintCatCollapsed: {}, deletedMaterials: [], deletedPresetBuildings: [],
+      deletedPresetBiomes: [], roomLabels: {}, catLabels: {},
+      shiftTypes: ['Anything', 'Work', 'Joy', 'Sleep'], shiftColors: [],
+      activePackageResolution: { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['initial'] },
+      scannedWorkTypeDefs: {}, scannedWorkGiverDefs: {},
+      scannedCapacityDefs: {}, scannedRaceWorkPolicies: {},
+      requirementUncertainty: {},
+    },
+    allJobs: [],
+    _invalidateBsCache() {},
+    _coercePawn() {},
+  };
+  loadScripts(['data.js', 'app-save.js'], {
+    App: App2,
+    document: { getElementById() { return null; }, querySelector() { return null; },
+      querySelectorAll() { return []; }, addEventListener() {} },
+    window: { addEventListener() {} },
+    _showModal() {}, _showConfirmModal() {},
+    Engine: { normaliseState() { return {}; }, stateVersion: 1 },
+    Charts: {},
+    RequirementRegistry: { createSnapshot() { return {}; } },
+  });
+
+  App2._applyLoadedData({
+    importMeta: { modIds: ['ludeon.rimworld', 'test.mod.two'], biotech: true },
+  });
+  ok(App2.state.importMeta && Array.isArray(App2.state.importMeta.modIds),
+    'PKG-012 _applyLoadedData restores importMeta from saved data');
+  ok(App2.state.importMeta.modIds.includes('test.mod.two'),
+    'PKG-012 restored importMeta has original modIds');
+  ok(App2.state.activePackageResolution.completeness === 'complete',
+    'PKG-013 _normalizeLoadedState resolves complete after importMeta restore');
+  ok(App2.state.activePackageResolution.ids.includes('test.mod.two'),
+    'PKG-013 resolution includes mods from restored importMeta');
+  ok(App2.state.activePackageResolution.ids.includes('ludeon.rimworld.biotech'),
+    'PKG-013 resolution includes DLC from restored importMeta');
+
   return { name: 'C7 package resolution regression', total, failures };
 };
