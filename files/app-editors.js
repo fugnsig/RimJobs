@@ -429,8 +429,7 @@ Object.assign(App, {
         }
         const modIds = Array.from(new Set(effectiveSources.map(source => source.modId).filter(Boolean)));
         const reasons = Array.from(new Set((entry._completenessReasons || [])
-          .concat(((c3Uncertainty.byType || {})[type] || {})[defName] || [])
-          .concat(((c3Uncertainty.dataset || {})[type]) || [])));
+          .concat(((c3Uncertainty.byType || {})[type] || {})[defName] || [])));
         if (sources.length > 1) {
           if (reasons.indexOf('duplicateDefinitionConflict') < 0) reasons.push('duplicateDefinitionConflict');
           if (reasons.indexOf('sourceOrderingUncertain') < 0) reasons.push('sourceOrderingUncertain');
@@ -487,9 +486,9 @@ Object.assign(App, {
         for (const [defName, entry] of Object.entries(workTypes)) {
           const narrow = (requirementUncertainty.workType || {})[defName] || {};
           appendRequirementReasons(entry, 'workTagsCompleteness', 'workTagsCompletenessReasons',
-            (narrow.workTags || []).concat(((requirementUncertainty.dataset || {}).workTags) || []));
+            narrow.workTags || []);
           appendRequirementReasons(entry, 'pathCatalogueCompleteness', 'pathCatalogueCompletenessReasons',
-            (narrow.pathCatalogue || []).concat(((requirementUncertainty.dataset || {}).pathCatalogue) || []));
+            narrow.pathCatalogue || []);
         }
         const workGivers = typeof parseWorkGiverDefsFromXML === 'function'
           ? parseWorkGiverDefsFromXML(result.workGiverDefsXml, {
@@ -498,15 +497,13 @@ Object.assign(App, {
         for (const [defName, entry] of Object.entries(workGivers)) {
           const narrow = (requirementUncertainty.workGiver || {})[defName] || {};
           appendRequirementReasons(entry, 'workTypeCompleteness', 'workTypeCompletenessReasons',
-            (narrow.workType || []).concat(((requirementUncertainty.dataset || {}).workType) || []));
+            narrow.workType || []);
           appendRequirementReasons(entry, 'requiredCapacitiesCompleteness',
             'requiredCapacitiesCompletenessReasons',
-            (narrow.requiredCapacities || []).concat(
-              ((requirementUncertainty.dataset || {}).requiredCapacities) || []));
+            narrow.requiredCapacities || []);
           appendRequirementReasons(entry, 'catalogueMembershipCompleteness',
             'catalogueMembershipCompletenessReasons',
-            (narrow.catalogueMembership || []).concat(
-              ((requirementUncertainty.dataset || {}).pathCatalogue) || []));
+            narrow.catalogueMembership || []);
         }
         const racePolicies = typeof parseRaceWorkSettingsFromXML === 'function'
           ? parseRaceWorkSettingsFromXML(result.raceThingDefsXml, {
@@ -516,7 +513,7 @@ Object.assign(App, {
           const narrow = (requirementUncertainty.raceWork || {})[raceDefName]
             || { dataset: [], entries: {} };
           appendRequirementReasons(entry, 'catalogueCompleteness', 'catalogueCompletenessReasons',
-            (narrow.dataset || []).concat(((requirementUncertainty.dataset || {}).raceWork) || []));
+            narrow.dataset || []);
           for (const [workType, reasons] of Object.entries(narrow.entries || {})) {
             entry.entryCompleteness[workType] = reasons.length ? 'partial'
               : (entry.entryCompleteness[workType] || entry.catalogueCompleteness);
