@@ -7,12 +7,14 @@
 Object.assign(App, {
   renderAll(opts) {
     const safe = (fn, name) => { try { fn(); } catch(e) { console.error(`renderAll: ${name} failed`, e); } };
-    if (!opts || !opts.skipSidebar) safe(() => this.renderSidebar(), 'sidebar');
-    safe(() => this.renderSummary(), 'summary');
-    safe(() => this.renderTable(), 'table');
-    if (this.state.activeTab === 'dash') safe(() => this.renderDashboard(), 'dashboard');
+    let _c7Map;
+    const c7Map = () => _c7Map ||= this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    if (!opts || !opts.skipSidebar) safe(() => this.renderSidebar(c7Map()), 'sidebar');
+    safe(() => this.renderSummary(c7Map()), 'summary');
+    safe(() => this.renderTable(c7Map()), 'table');
+    if (this.state.activeTab === 'dash') safe(() => this.renderDashboard(c7Map()), 'dashboard');
     if (this.state.activeTab === 'blue') safe(() => this.renderBlueprint(), 'blueprint');
-    if (this.state.activeTab === 'sched') safe(() => this.renderSchedule(), 'schedule');
+    if (this.state.activeTab === 'sched') safe(() => this.renderSchedule(c7Map()), 'schedule');
     if (this.state.activeTab === 'armoury') safe(() => this.renderArmoury(), 'armoury');
     if (this.state.activeTab === 'relations') safe(() => this._relRefresh(), 'relations');
     if (this.state.activeTab === 'records') safe(() => this.renderRecords(), 'records');
@@ -246,7 +248,7 @@ Object.assign(App, {
   _lastSidebarOrder: null,
   _lastCompactMode: null,
 
-  renderSidebar() {
+  renderSidebar(c7ContextMap) {
     const el = document.getElementById('pawnList');
     if (!el) return;
     // #pawnList is the scroll container; preserve its position across re-renders
@@ -258,7 +260,7 @@ Object.assign(App, {
     this.state.pawnFilter = search;
     const filteredPawns = this._sortPawns(this.state.pawns.filter(p => p.name.toLowerCase().includes(search)));
     const compact = this.state.settings.compactSidebar;
-    const pawnContexts = this._c7PawnContextMap(
+    const pawnContexts = c7ContextMap || this._c7PawnContextMap(
       filteredPawns, this._c7EvidenceOptionsByPawn);
 
     // Populate sort dropdown (only rebuild if options missing)
@@ -357,7 +359,7 @@ Object.assign(App, {
 
   _isPortrait() { return window.innerHeight > window.innerWidth; },
 
-  renderTable() {
+  renderTable(c7ContextMap) {
     if (typeof this._syncPriorityLockControls === 'function') this._syncPriorityLockControls();
     const wrap = document.getElementById('tableWrap'); if (!wrap) return;
     // Reflect the current priorities mode on the toolbar toggle.
@@ -367,11 +369,9 @@ Object.assign(App, {
       mpBtn.textContent = manual ? 'Manual (1-4)' : 'Simple (on/off)';
       mpBtn.classList.toggle('btn-accent', !manual);
     }
-    if (this._isPortrait()) { this._renderTableVertical(wrap); } else { this._renderTableHorizontal(wrap); }
-    // Keep the summary pills (P1 counts, uncovered/conflict alerts) in sync with every
-    // table change - auto-assign, planner suggestions and single cell edits all route
-    // through renderTable, so the pills can never go stale.
-    this.renderSummary();
+    const contextMap = c7ContextMap || this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    if (this._isPortrait()) { this._renderTableVertical(wrap, contextMap); } else { this._renderTableHorizontal(wrap, contextMap); }
+    this.renderSummary(contextMap);
   },
 
   // Source key for a job column (vanilla / Biotech / Anomaly / Odyssey / modded).
@@ -577,7 +577,7 @@ Object.assign(App, {
     return '<td class="td-job">' + cell + '</td>';
   },
 
-  _renderTableHorizontal(wrap) {
+  _renderTableHorizontal(wrap, c7ContextMap) {
     const tooltip = `
       <div class="info-btn" style="margin-left:8px">?
         <div class="tooltip">
@@ -593,7 +593,7 @@ Object.assign(App, {
     const pSearch = (this.state.pawnFilter || "").toLowerCase();
     const filteredJobs = this._visibleJobs();
     const filteredPawns = this.state.pawns.filter(p => !pSearch || (p.nickname || p.name).toLowerCase().includes(pSearch));
-    const pawnContexts = this._c7PawnContextMap(filteredPawns, this._c7EvidenceOptionsByPawn);
+    const pawnContexts = c7ContextMap || this._c7PawnContextMap(filteredPawns, this._c7EvidenceOptionsByPawn);
 
     const catSpans = [];
     filteredJobs.forEach(j => { 
@@ -630,7 +630,7 @@ Object.assign(App, {
   },
 
   // Portrait: jobs = rows, pawns = columns
-  _renderTableVertical(wrap) {
+  _renderTableVertical(wrap, c7ContextMap) {
     const tooltip = `
       <div class="info-btn" style="margin-left:8px">?
         <div class="tooltip">
@@ -646,7 +646,7 @@ Object.assign(App, {
     const pSearch = (this.state.pawnFilter || "").toLowerCase();
     const filteredJobs = this._visibleJobs();
     const filteredPawns = this.state.pawns.filter(p => !pSearch || (p.nickname || p.name).toLowerCase().includes(pSearch));
-    const pawnContexts = this._c7PawnContextMap(filteredPawns, this._c7EvidenceOptionsByPawn);
+    const pawnContexts = c7ContextMap || this._c7PawnContextMap(filteredPawns, this._c7EvidenceOptionsByPawn);
 
     // Pawn header cells
     const pawnHeaders = filteredPawns.map(p => { try {
@@ -679,10 +679,10 @@ Object.assign(App, {
     wrap.innerHTML = `<div class="h-table-scroll"><table class="h-table"><thead><tr class="job-header-row"><th class="th-pawn-name" style="position:sticky;left:0;top:0;z-index:13;background:var(--surface2)">Job ${tooltip}</th>${pawnHeaders}</tr></thead><tbody>${rows}</tbody></table></div>`;
   },
 
-  renderDashboard() {
+  renderDashboard(c7ContextMap) {
     const container = document.getElementById('view-dash');
     if (!container) return;
-    const contextMap = this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const contextMap = c7ContextMap || this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
     const viability = Engine.calculateViability(
       this.state.pawns, this.state.priorities, this.state.precepts, contextMap);
     const alerts = Engine.getBottlenecks(this.state.pawns, this.state.priorities, contextMap);
@@ -782,11 +782,11 @@ Object.assign(App, {
     this.toast(`World seed "${seed}" copied.`);
   },
 
-  renderSummary() {
+  renderSummary(c7ContextMap) {
     const el = document.getElementById('summaryBar');
     if (!el) return;
     const total = this.state.pawns.length;
-    const contextMap = this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const contextMap = c7ContextMap || this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
     
     // 1. Important Job Pills (existing)
     const pills = JOBS.filter(j => j.important).map(j => {

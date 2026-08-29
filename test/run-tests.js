@@ -60,6 +60,7 @@ const tests = [
   './c7-scheduler-parity.test.js',
   './c7-temporal-parity.test.js',
   './c7-package-resolution.test.js',
+  './c7-render-sharing.test.js',
 ];
 
 (async () => {

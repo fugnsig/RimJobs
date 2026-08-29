@@ -159,10 +159,10 @@ module.exports = function run() {
     'C7-GRID-007 snapshot forwards scanned capacity definitions');
 
   const source = fs.readFileSync(path.join(__dirname, '..', 'files', 'app-render.js'), 'utf8');
-  const horizontal = source.slice(source.indexOf('  _renderTableHorizontal(wrap)'),
-    source.indexOf('  _renderTableVertical(wrap)'));
-  const vertical = source.slice(source.indexOf('  _renderTableVertical(wrap)'),
-    source.indexOf('  renderDashboard()'));
+  const horizontal = source.slice(source.indexOf('  _renderTableHorizontal(wrap'),
+    source.indexOf('  _renderTableVertical(wrap'));
+  const vertical = source.slice(source.indexOf('  _renderTableVertical(wrap'),
+    source.indexOf('  renderDashboard('));
   ok(!/isIncapable/.test(horizontal), 'C7-GRID-008 horizontal renderer has no legacy call');
   ok(!/isIncapable/.test(vertical), 'C7-GRID-008 vertical renderer has no legacy call');
   ok(/_c7GridCellHTML/.test(horizontal) && /_c7GridCellHTML/.test(vertical),

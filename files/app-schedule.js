@@ -191,9 +191,9 @@ Object.assign(App, {
 
   _schedProposals: null,
 
-  _schedResilienceHTML() {
+  _schedResilienceHTML(c7ContextMap) {
     if (!this.state.pawns.length) return '';
-    const contextMap = this._c7PawnContextMap(
+    const contextMap = c7ContextMap || this._c7PawnContextMap(
       this.state.pawns, this._c7EvidenceOptionsByPawn);
     const schedMap = {};
     this.state.pawns.forEach(p => {
@@ -301,7 +301,7 @@ Object.assign(App, {
   // -- CONTENT HUB ACTIONS --
 
   _schedFilter: '',
-  renderSchedule() {
+  renderSchedule(c7ContextMap) {
     const container = document.getElementById('schedContainer');
     if (!container) return;
     const types = this.state.shiftTypes;
@@ -367,7 +367,7 @@ Object.assign(App, {
         </div>
       </div>`;
 
-      container.innerHTML = `${this._schedSummaryHTML()}${this._schedResilienceHTML()}<div class="sched-panel">${legend}
+      container.innerHTML = `${this._schedSummaryHTML()}${this._schedResilienceHTML(c7ContextMap)}<div class="sched-panel">${legend}
         <div style="padding:var(--gap-sm) var(--gap-sm)">
           ${hourMarkers}
           ${pawnStrips}
@@ -378,7 +378,7 @@ Object.assign(App, {
         </div>
       </div>`;
     } else {
-      container.innerHTML = `${this._schedSummaryHTML()}${this._schedResilienceHTML()}<div class="sched-panel">${legend}
+      container.innerHTML = `${this._schedSummaryHTML()}${this._schedResilienceHTML(c7ContextMap)}<div class="sched-panel">${legend}
         <div class="sched-table-wrap">
           <table class="sched-table" onmouseup="App._schedPainting=false" onmouseleave="App._schedPainting=false">
             <thead><tr>
