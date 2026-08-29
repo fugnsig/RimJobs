@@ -59,6 +59,7 @@ const tests = [
   './c7-ranking-parity.test.js',
   './c7-scheduler-parity.test.js',
   './c7-temporal-parity.test.js',
+  './c7-package-resolution.test.js',
 ];
 
 (async () => {

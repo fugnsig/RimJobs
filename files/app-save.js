@@ -10,6 +10,12 @@ Object.assign(App, {
   _saveImportData: null, // Temp storage for parsed save data during import flow
   _lastSaveFilePath: null, // Path to last imported .rws file (for refresh)
 
+  _refreshC4ActivePackageResolution() {
+    this.state.activePackageResolution = typeof resolveC4ActivePackageIds === 'function'
+      ? resolveC4ActivePackageIds(this.state.importMeta)
+      : { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['providerUnavailable'] };
+  },
+
   _parsePermissionSourceValue(rawValue, sourceField) {
     const present = rawValue != null;
     const raw = present ? String(rawValue).trim() : null;
@@ -2404,6 +2410,7 @@ Object.assign(App, {
     // Fast lookup set of this save's active mod packageIds (lowercased), for the
     // "content from a mod not in this save" warning across the editors.
     this.state.saveModIdSet = new Set(this.state.importMeta.modIds);
+    this._refreshC4ActivePackageResolution();
 
     this.closeSaveImport();
     // Future-proof: surface any modded passion the imported pawns actually carry,
@@ -2958,6 +2965,7 @@ Object.assign(App, {
     // Rebuild the save-modlist lookup (it isn't serialised) so the mod-not-in-save
     // warnings survive a reload, not only a fresh import.
     this.state.saveModIdSet = new Set((this.state.importMeta && Array.isArray(this.state.importMeta.modIds)) ? this.state.importMeta.modIds : []);
+    this._refreshC4ActivePackageResolution();
     if (!this.state.defSources || typeof this.state.defSources !== 'object' || Array.isArray(this.state.defSources)) this.state.defSources = {};
     this.state.blueprintName = typeof this.state.blueprintName === 'string' ? this.state.blueprintName : '';
     if (!this.state.buildingOverrides || typeof this.state.buildingOverrides !== 'object' || Array.isArray(this.state.buildingOverrides)) this.state.buildingOverrides = {};

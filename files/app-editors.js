@@ -338,6 +338,7 @@ Object.assign(App, {
         try {
           if (this._isUserTyping && this._isUserTyping()) return;
           if (typeof this._renderTabView === 'function') this._renderTabView(this.state.activeTab);
+          if (this.state.activeTab === 'work' && typeof this.renderTable === 'function') this.renderTable();
           const pm = document.getElementById('pawnManagerModal');
           if (pm && pm.classList.contains('show') && typeof this.renderPawnManager === 'function') this.renderPawnManager();
         } catch (_) { /* ignore */ }
@@ -528,9 +529,7 @@ Object.assign(App, {
         this.state.scannedWorkGiverDefs = workGivers;
         this.state.scannedRaceWorkPolicies = racePolicies;
         this.state.requirementUncertainty = requirementUncertainty;
-        this.state.activePackageResolution = typeof resolveC4ActivePackageIds === 'function'
-          ? resolveC4ActivePackageIds(this.state.importMeta)
-          : { ids: ['ludeon.rimworld'], completeness: 'unknown', reasons: ['providerUnavailable'] };
+        if (typeof this._refreshC4ActivePackageResolution === 'function') this._refreshC4ActivePackageResolution();
         this.state.definitionSources = c3Sources;
         this.state.definitionUncertainty = c3Uncertainty;
         if (typeof parseEffectivenessProviderFromXML === 'function') {
