@@ -2554,6 +2554,18 @@ Object.assign(App, {
 
     this._saveBeforeImportWasPending = false;
     this.closeSaveImport();
+    // Add the import event before rendering so an open Journal updates immediately.
+    if (!this.state.timeline) this.state.timeline = [];
+    this.state.timeline.push({
+      id: 'evt_' + Math.random().toString(36).slice(2, 9),
+      title: `Imported ${imported} pawn${imported !== 1 ? 's' : ''} from save`,
+      category: 'recruit',
+      year: meta.year || 5500,
+      quadrum: QUADRUMS.indexOf(meta.quadrum) + 1 || 1,
+      day: meta.day || 1,
+      description: `Colony: ${meta.colonyName} (${meta.storytellerClean}, ${meta.quadrum} ${meta.day} ${meta.year})`,
+      ts: Date.now()
+    });
     // Future-proof: surface any modded passion the imported pawns actually carry,
     // even if no matching def was scanned, so they show + are pickable + persist.
     if (typeof this._mergeSeenPassionsIntoCatalog === 'function') this._mergeSeenPassionsIntoCatalog();
@@ -2567,19 +2579,6 @@ Object.assign(App, {
     });
     this._updateLogoDate(); // switch the logo date line to the save's in-game time
     this.triggerAutoSave();
-
-    // Silently add timeline event for the import (no modal)
-    if (!this.state.timeline) this.state.timeline = [];
-    this.state.timeline.push({
-      id: Math.random().toString(36).slice(2, 9),
-      title: `Imported ${imported} pawn${imported !== 1 ? 's' : ''} from save`,
-      category: 'recruit',
-      year: meta.year || 5500,
-      quadrum: QUADRUMS.indexOf(meta.quadrum) + 1 || 1,
-      day: meta.day || 1,
-      description: `Colony: ${meta.colonyName} (${meta.storytellerClean}, ${meta.quadrum} ${meta.day} ${meta.year})`,
-      ts: Date.now()
-    });
 
     // Auto-populate raid calculator from save metadata
     this._applyRaidFromSave(meta, imported);
@@ -2613,10 +2612,13 @@ Object.assign(App, {
 
   _applyIdeoFromSave(ideoData) {
     if (!ideoData || !Array.isArray(ideoData.memes)) return;
+    const cleanNarrative = value => typeof _unityRichToPlainText === 'function'
+      ? _unityRichToPlainText(value)
+      : String(value == null ? '' : value).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/<\/?(?:color|size|b|i|uppercase|lowercase|link)(?:=[^>]*?)?>/gi, '');
     // Replacement is a fresh plan. Empty imports must clear previous choices,
     // rituals and narrative; never merge two colonies' ideology settings.
     const ideo = { name: typeof ideoData.name === 'string' ? ideoData.name : '',
-      type: ideoData.type === 'fluid' ? 'fluid' : 'fixed', narrative: typeof ideoData.description === 'string' ? ideoData.description : '',
+      type: ideoData.type === 'fluid' ? 'fluid' : 'fixed', narrative: typeof ideoData.description === 'string' ? cleanNarrative(ideoData.description) : '',
       memes: [], precepts: {}, rituals: [], notes: '', unmappedPrecepts: [] };
     this.state.customMemes = this.state.customMemes || {};
     this.state.customRituals = this.state.customRituals || {};
@@ -3056,6 +3058,44 @@ Object.assign(App, {
       const n = Number(v);
       return Number.isFinite(n) ? n : fallback;
     };
+    const boundedInt = (v, fallback, min, max) => {
+      const n = Math.trunc(finite(v, fallback));
+      return Math.max(min, Math.min(max, n));
+    };
+    const normaliseJournalRecords = (list, kind) => {
+      const isNote = kind === 'note';
+      const prefix = isNote ? 'note' : 'evt';
+      const normaliseNow = Date.now();
+      const seen = new Set();
+      const noteColours = new Set(['default', 'amber', 'green', 'red', 'blue', 'purple']);
+      const timelineCategories = new Set(TIMELINE_CATEGORIES.map(category => category.id));
+      return recordList(list).map((item, index) => {
+        let id = asText(item.id).trim();
+        if (!/^[A-Za-z0-9_-]{1,80}$/.test(id) || seen.has(id)) id = prefix + '_' + index;
+        while (seen.has(id)) id += '_';
+        seen.add(id);
+        if (isNote) {
+          return {
+            id,
+            title: asText(item.title),
+            body: asText(item.body),
+            color: noteColours.has(item.color) ? item.color : 'default',
+            pinned: item.pinned === true,
+            ts: Math.max(0, Math.trunc(finite(item.ts, normaliseNow)))
+          };
+        }
+        return {
+          id,
+          title: asText(item.title),
+          description: asText(item.description),
+          category: timelineCategories.has(item.category) ? item.category : 'custom',
+          year: boundedInt(item.year, 5500, 1, 99999),
+          quadrum: boundedInt(item.quadrum, 1, 1, 4),
+          day: boundedInt(item.day, 1, 1, 15),
+          ts: Math.max(0, Math.trunc(finite(item.ts, normaliseNow)))
+        };
+      });
+    };
     const normaliseGear = (list, prefix, apparel = false) => {
       const seen = new Set();
       return recordList(list).map((item, index) => {
@@ -3130,6 +3170,9 @@ Object.assign(App, {
     for (const key of ['name', 'narrative']) {
       if (typeof this.state.ideology[key] !== 'string') this.state.ideology[key] = '';
     }
+    this.state.ideology.narrative = (typeof _unityRichToPlainText === 'function')
+      ? _unityRichToPlainText(this.state.ideology.narrative)
+      : this.state.ideology.narrative.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/<\/?(?:color|size|b|i|uppercase|lowercase|link)(?:=[^>]*?)?>/gi, '');
     if (typeof this.state.ideology.notes !== 'string') this.state.ideology.notes = '';
     this.state.customBuildings = recordMap(this.state.customBuildings);
     this.state.customBackstories = recordMap(this.state.customBackstories);
@@ -3138,8 +3181,8 @@ Object.assign(App, {
     this.state.prostheticEfficiency = isRecord(this.state.prostheticEfficiency) ? this.state.prostheticEfficiency : {};
     this.state.weapons = normaliseGear(this.state.weapons, 'weapon');
     this.state.apparel = normaliseGear(this.state.apparel, 'apparel', true);
-    this.state.notes = recordList(this.state.notes);
-    this.state.timeline = recordList(this.state.timeline);
+    this.state.notes = normaliseJournalRecords(this.state.notes, 'note');
+    this.state.timeline = normaliseJournalRecords(this.state.timeline, 'event');
     this.state.savedIdeologies = recordList(this.state.savedIdeologies);
     this.state.manualRelations = recordList(this.state.manualRelations);
     this.state.ghostPawns = recordList(this.state.ghostPawns);
@@ -3151,10 +3194,55 @@ Object.assign(App, {
       ? this.state.shiftColors.map(v => _safeColor(v, '#555555')) : [];
     if (!this.state.shiftTypes.length) this.state.shiftTypes = ['Anything', 'Work', 'Recreation', 'Sleep', 'Meditate', 'Clean'];
     while (this.state.shiftColors.length < this.state.shiftTypes.length) this.state.shiftColors.push('#555555');
-    this.state.blueprints = recordMap(this.state.blueprints);
-    this.state.roomLabels = recordMap(this.state.roomLabels);
-    this.state.prefabs = recordMap(this.state.prefabs);
-    this.state.stamps = recordMap(this.state.stamps);
+    this.state.blueprints = typeof this._sanitizeBlueprintMap === 'function'
+      ? this._sanitizeBlueprintMap(this.state.blueprints) : recordMap(this.state.blueprints);
+    const blueprintLimit = typeof this._blueprintLimits === 'function' ? this._blueprintLimits().maxDimension : 512;
+    const cleanRoomLabels = {};
+    Object.entries(recordMap(this.state.roomLabels)).slice(0, 2000).forEach(([id, label], index) => {
+      const x = Math.trunc(finite(label.x, 0)), y = Math.trunc(finite(label.y, 0));
+      if (x < 0 || y < 0 || x >= blueprintLimit || y >= blueprintLimit) return;
+      const cleanId = /^[A-Za-z0-9_-]{1,80}$/.test(id) ? id : 'tag_' + index;
+      cleanRoomLabels[cleanId] = {
+        name: asText(label.name, 'Room').slice(0, 200),
+        type: asText(label.type, 'custom').slice(0, 40), x, y
+      };
+    });
+    this.state.roomLabels = cleanRoomLabels;
+    const cleanPrefabs = {};
+    Object.entries(recordMap(this.state.prefabs)).slice(0, 200).forEach(([id, prefab], index) => {
+      const cleanId = /^[A-Za-z0-9_-]{1,80}$/.test(id) ? id : 'pre_' + index;
+      cleanPrefabs[cleanId] = {
+        id: cleanId,
+        name: asText(prefab.name, 'Saved Blueprint').slice(0, 200),
+        data: typeof this._sanitizeBlueprintMap === 'function' ? this._sanitizeBlueprintMap(prefab.data) : recordMap(prefab.data)
+      };
+    });
+    this.state.prefabs = cleanPrefabs;
+    const cleanStamps = {};
+    Object.entries(recordMap(this.state.stamps)).slice(0, 500).forEach(([id, stamp], index) => {
+      const cleanId = /^[A-Za-z0-9_-]{1,80}$/.test(id) ? id : 'stmp_' + index;
+      const cells = typeof this._sanitizeBlueprintMap === 'function' ? this._sanitizeBlueprintMap(stamp.cells) : recordMap(stamp.cells);
+      let maxX = 0, maxY = 0;
+      Object.keys(cells).forEach(key => { const [x, y] = key.split(',').map(Number); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); });
+      const width = Math.min(blueprintLimit, Math.max(1, maxX + 1));
+      const height = Math.min(blueprintLimit, Math.max(1, maxY + 1));
+      const tags = {};
+      Object.entries(recordMap(stamp.tags)).slice(0, 2000).forEach(([tagId, tag], tagIndex) => {
+        const x = Math.trunc(finite(tag.x, 0)), y = Math.trunc(finite(tag.y, 0));
+        if (x < 0 || y < 0 || x >= width || y >= height) return;
+        const cleanTagId = /^[A-Za-z0-9_-]{1,80}$/.test(tagId) ? tagId : 'tag_' + tagIndex;
+        tags[cleanTagId] = { name: asText(tag.name, 'Room').slice(0, 200), type: asText(tag.type, 'custom').slice(0, 40), x, y };
+      });
+      cleanStamps[cleanId] = {
+        id: cleanId,
+        name: asText(stamp.name, 'Stamp').slice(0, 200),
+        w: width,
+        h: height,
+        cells,
+        tags
+      };
+    });
+    this.state.stamps = cleanStamps;
     this.state.materials = recordList(this.state.materials);
     this.state.savedLoadouts = recordList(this.state.savedLoadouts).map((preset, index) => ({
       ...preset,

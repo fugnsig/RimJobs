@@ -35,6 +35,15 @@ function _unityRichToHtml(raw) {
   return s;
 }
 
+// Textareas cannot render Unity rich text. Decode one XML-escaped layer and remove
+// only known formatting tags, keeping the readable narrative and leaving unknown
+// markup as literal text for the normal HTML escaper to handle safely.
+function _unityRichToPlainText(raw) {
+  let s = String(raw == null ? '' : raw);
+  s = s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&');
+  return s.replace(/<\/?(?:color|size|b|i|uppercase|lowercase|link)(?:=[^>]*?)?>/gi, '');
+}
+
 function _safeColor(value, fallback = '#888888') {
   const color = String(value || '').trim();
   if (/^#[0-9a-fA-F]{3,8}$/.test(color)) return color;
@@ -278,7 +287,8 @@ const App = {
     customBuildings: 50,
     customStorytellers: 10,
     savedLoadouts: 20,
-    prefabs: 30
+    prefabs: 30,
+    stamps: 50
   },
 
   // Returns true if adding is allowed; toasts a warning and returns false if at cap
@@ -347,22 +357,23 @@ const App = {
   _calculateAdaptiveGrid() {
     const zoom = this._getCurrentZoom();
     const baseMin = Math.round(60 / zoom);
+    const maxDimension = this._blueprintLimits ? this._blueprintLimits().maxDimension : 512;
 
     let maxP = 60;
     Object.keys(this.state.blueprints).forEach(key => {
       const [x, y] = key.split(',').map(Number);
-      maxP = Math.max(maxP, x + 5, y + 5);
+      if (Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0) maxP = Math.max(maxP, Math.min(maxDimension, x + 5), Math.min(maxDimension, y + 5));
     });
 
     const grid = document.querySelector('.blueprint-grid');
     if (grid) {
       const rect = grid.getBoundingClientRect();
       const ts = Math.min(rect.width, rect.height) / Math.max(maxP, baseMin);
-      this.GRID_W = Math.max(maxP, baseMin, Math.floor(rect.width / ts));
-      this.GRID_H = Math.max(maxP, baseMin, Math.floor(rect.height / ts));
+      this.GRID_W = Math.min(maxDimension, Math.max(maxP, baseMin, Math.floor(rect.width / ts)));
+      this.GRID_H = Math.min(maxDimension, Math.max(maxP, baseMin, Math.floor(rect.height / ts)));
     } else {
-      this.GRID_W = Math.max(maxP, baseMin);
-      this.GRID_H = Math.max(maxP, baseMin);
+      this.GRID_W = Math.min(maxDimension, Math.max(maxP, baseMin));
+      this.GRID_H = Math.min(maxDimension, Math.max(maxP, baseMin));
     }
   },
 
@@ -559,7 +570,7 @@ const App = {
 
     // Initialize undo/redo history
     this.blueprintHistoryIdx = 0;
-    this.state.blueprintHistory = [JSON.stringify({ blueprints: this.state.blueprints, roomLabels: this.state.roomLabels })];
+    this.state.blueprintHistory = [this._blueprintSnapshot ? this._blueprintSnapshot() : JSON.stringify({ blueprints: this.state.blueprints, roomLabels: this.state.roomLabels })];
 
     if (this.state.pawns.length === 0) {
       this.addPawn(); this.addPawn(); this.addPawn();
@@ -739,6 +750,8 @@ const App = {
         }
         if (this.state.activeTab !== 'blue') return;
         if (document.querySelector('.modal-overlay.show')) return;
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable)) return;
         if (d.key === 'f') { if (this.state.drawMode === 'stamp_place' && this.flipStamp) this.flipStamp(); return; }
         const dir = d.key === 'q' ? -1 : d.key === 'e' ? 1 : 0;
         if (!dir) return;
@@ -1048,9 +1061,14 @@ const App = {
     });
 
     window.addEventListener('keydown', (e) => {
-      // Undo/Redo
-      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); this.undo(); }
-      if (e.ctrlKey && e.key === 'y') { e.preventDefault(); this.redo(); }
+      // Blueprint Undo/Redo only while the Blueprint canvas is active. Text fields
+      // and every other tab retain their native editing history.
+      const shortcutTarget = e.target;
+      const shortcutTyping = shortcutTarget && (shortcutTarget.tagName === 'INPUT' || shortcutTarget.tagName === 'TEXTAREA' || shortcutTarget.tagName === 'SELECT' || shortcutTarget.isContentEditable);
+      if (this.state.activeTab === 'blue' && !shortcutTyping && !document.querySelector('.modal-overlay.show')) {
+        if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); this.undo(); }
+        if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); this.redo(); }
+      }
 
       // Blueprint: Q/E rotate the object you're placing (and its hover ghost) - Q
       // left, E right. While placing a cut/stamp clipboard, Q/E rotate that stamp.
@@ -1134,8 +1152,12 @@ const App = {
         if (this.state.activeTab === 'dash') this.renderDashboard();
       }
       if (this.state.activeTab === 'blue') {
-        this._calculateAdaptiveGrid();
-        this._canvasResizeAndDraw();
+        clearTimeout(this._blueprintResizeTimer);
+        this._blueprintResizeTimer = setTimeout(() => {
+          this._blueprintResizeTimer = null;
+          this._calculateAdaptiveGrid();
+          this._canvasResizeAndDraw();
+        }, 100);
       }
     }).observe(document.body);
 

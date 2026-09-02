@@ -61,13 +61,13 @@ function _comparePawnGameOrder(a, b) {
 }
 
 const TIMELINE_CATEGORIES = [
-  { id: 'raid',      label: 'Raid',      icon: 'R', color: '#f0857a' },
-  { id: 'recruit',   label: 'Recruit',   icon: '+',       color: '#7de85a' },
-  { id: 'death',     label: 'Death',     icon: '†', color: '#e05555' },
-  { id: 'build',     label: 'Build',     icon: 'B', color: '#e8c55a' },
-  { id: 'milestone', label: 'Milestone', icon: '★',       color: '#73b8f5' },
-  { id: 'trade',     label: 'Trade',     icon: '$', color: '#d4aa50' },
-  { id: 'custom',    label: 'Custom',    icon: '•', color: '#c97af5' },
+  { id: 'raid',      label: 'Raid',      icon: 'R', color: 'var(--timeline-raid)' },
+  { id: 'recruit',   label: 'Recruit',   icon: '+', color: 'var(--timeline-recruit)' },
+  { id: 'death',     label: 'Death',     icon: '†', color: 'var(--timeline-death)' },
+  { id: 'build',     label: 'Build',     icon: 'B', color: 'var(--timeline-build)' },
+  { id: 'milestone', label: 'Milestone', icon: '★', color: 'var(--timeline-milestone)' },
+  { id: 'trade',     label: 'Trade',     icon: '$', color: 'var(--timeline-trade)' },
+  { id: 'custom',    label: 'Custom',    icon: '•', color: 'var(--timeline-custom)' },
 ];
 
 const QUADRUMS = ['Aprimay', 'Jugust', 'Septober', 'Decembary'];

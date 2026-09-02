@@ -29,9 +29,12 @@ _assignModule(App, {
     const p = this.state.prefabs[id];
     if (!p) return;
     this.showConfirm(`Load '${p.name}'?`, 'Load', 'This will replace your current layout.').then(() => {
-      this.state.blueprints = JSON.parse(JSON.stringify(p.data));
-      this._canvasFullDraw();
-      this._updateBill();
+      const next = this._sanitizeBlueprintMap(p.data);
+      this.recordBlueprintHistory();
+      this.state.blueprints = next;
+      this._calculateAdaptiveGrid();
+      this.renderBlueprint();
+      this.triggerAutoSave();
     }).catch(() => {});
   },
 
@@ -62,17 +65,39 @@ _assignModule(App, {
     this.renderBlueprintSidebar();
     this.toast('Drag a box to cut, then click to place it (Q/E rotate, F flip)');
   },
+  _selectionSplitsObject(ox, oy, w, h) {
+    const checked = new Set();
+    for (let ix = ox; ix < ox + w; ix++) for (let iy = oy; iy < oy + h; iy++) {
+      const cell = this.state.blueprints[ix + ',' + iy];
+      if (!cell?.struct) continue;
+      const identity = cell.inst || (ix + ',' + iy);
+      if (checked.has(identity)) continue;
+      checked.add(identity);
+      const group = this._objectCellsAt(ix, iy) || [[ix, iy]];
+      if (group.some(([gx, gy]) => gx < ox || gx >= ox + w || gy < oy || gy >= oy + h)) return true;
+    }
+    return false;
+  },
   _doCut(x1, y1, x2, y2) {
     const ox = Math.min(x1, x2), oy = Math.min(y1, y2);
     const w = Math.abs(x2 - x1) + 1, h = Math.abs(y2 - y1) + 1;
+    if (this._selectionSplitsObject(ox, oy, w, h)) {
+      this.state.drawMode = 'box';
+      this.renderBlueprintSidebar();
+      this._canvasFullDraw();
+      this.toast('Selection crosses a multi-cell object - include the whole object.');
+      return;
+    }
     const cells = {};
+    const restoreSnapshot = this._blueprintSnapshot();
     this.recordBlueprintHistory();
     for (let ix = ox; ix < ox + w; ix++) for (let iy = oy; iy < oy + h; iy++) {
       const cell = this.state.blueprints[ix + ',' + iy];
       if (cell && (cell.floor || cell.struct || (Array.isArray(cell.wires) && cell.wires.length))) {
         cells[(ix - ox) + ',' + (iy - oy)] = {
           floor: cell.floor || null, struct: cell.struct || null,
-          rot: cell.rot, wires: Array.isArray(cell.wires) ? [...cell.wires] : undefined,
+          rot: cell.rot, inst: cell.inst,
+          wires: Array.isArray(cell.wires) ? [...cell.wires] : undefined,
         };
         delete this.state.blueprints[ix + ',' + iy]; // lift it off the grid
       }
@@ -84,7 +109,7 @@ _assignModule(App, {
       this._canvasFullDraw();
       return;
     }
-    this._stampPlacing = { name: 'Cut selection', w, h, cells, tags: {}, _clipboard: true };
+    this._stampPlacing = { name: 'Cut selection', w, h, cells, tags: {}, _clipboard: true, _restoreSnapshot: restoreSnapshot };
     this.state.drawMode = 'stamp_place';
     this._stampPreview = null;
     this._canvasFullDraw();
@@ -109,15 +134,16 @@ _assignModule(App, {
     const cells = (grp && grp.length) ? grp : [[x, y]];
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     cells.forEach(([gx, gy]) => { if (gx < minX) minX = gx; if (gx > maxX) maxX = gx; if (gy < minY) minY = gy; if (gy > maxY) maxY = gy; });
+    const restoreSnapshot = this._blueprintSnapshot();
     this.recordBlueprintHistory();
     const clip = {};
     cells.forEach(([gx, gy]) => {
       const c = this.state.blueprints[gx + ',' + gy];
       if (!c || !c.struct) return;
-      clip[(gx - minX) + ',' + (gy - minY)] = { floor: null, struct: c.struct, rot: c.rot };
+      clip[(gx - minX) + ',' + (gy - minY)] = { floor: null, struct: c.struct, rot: c.rot, inst: c.inst };
       c.struct = null; delete c.rot; delete c.inst; // lift the object layer; floors/wires stay
     });
-    this._stampPlacing = { name: 'Grabbed object', w: maxX - minX + 1, h: maxY - minY + 1, cells: clip, tags: {}, _clipboard: true, _grab: true };
+    this._stampPlacing = { name: 'Grabbed object', w: maxX - minX + 1, h: maxY - minY + 1, cells: clip, tags: {}, _clipboard: true, _grab: true, _restoreSnapshot: restoreSnapshot };
     this.state.drawMode = 'stamp_place';
     this._stampPreview = null;
     this._canvasFullDraw();
@@ -190,11 +216,23 @@ _assignModule(App, {
     const cells = {};
     const ox = Math.min(x1, x2), oy = Math.min(y1, y2);
     const w = Math.abs(x2 - x1) + 1, h = Math.abs(y2 - y1) + 1;
+    if (this._selectionSplitsObject(ox, oy, w, h)) {
+      this.state.drawMode = 'box';
+      this.renderBlueprintSidebar();
+      this.toast('Selection crosses a multi-cell object - include the whole object.');
+      return;
+    }
     for (let ix = ox; ix < ox + w; ix++) {
       for (let iy = oy; iy < oy + h; iy++) {
         const cell = this.state.blueprints[ix + ',' + iy];
-        if (cell && (cell.floor || cell.struct)) {
-          cells[(ix - ox) + ',' + (iy - oy)] = { floor: cell.floor || null, struct: cell.struct || null };
+        if (cell && (cell.floor || cell.struct || (Array.isArray(cell.wires) && cell.wires.length))) {
+          cells[(ix - ox) + ',' + (iy - oy)] = {
+            floor: cell.floor || null,
+            struct: cell.struct || null,
+            rot: cell.rot,
+            inst: cell.inst,
+            wires: Array.isArray(cell.wires) ? [...cell.wires] : undefined,
+          };
         }
       }
     }
@@ -254,6 +292,7 @@ _assignModule(App, {
   },
 
   submitStamp() {
+    if (!this._checkCap(this.state.stamps, 'stamps', 'blueprint stamps')) return;
     const name = document.getElementById('stampName')?.value.trim();
     if (!name) { this.toast('Enter a name'); return; }
     const stamp = this._pendingStamp;
@@ -288,13 +327,36 @@ _assignModule(App, {
     const snapX = stamp._grab ? x : this._snapToGrid(x, snapThreshold);
     const snapY = stamp._grab ? y : this._snapToGrid(y, snapThreshold);
 
-    this.recordBlueprintHistory();
-
     // A cut or grabbed clipboard lays down only its actual content, transparently: the
     // blank cells inside its bounding box must NOT erase what is already at the
     // destination (that was the "empty tiles override" bug). Saved prefab stamps keep
     // the clean clear-then-place so a stamp drops as a clean block.
     const transparent = !!stamp._clipboard;
+
+    // Work out every destination cell before changing state. With Force Replace
+    // disabled, a stamp cannot overwrite any existing furniture. With it enabled,
+    // clear the whole existing object so multi-cell furniture never fragments.
+    const affected = [];
+    if (transparent) {
+      Object.keys(stamp.cells).forEach(key => {
+        const [cx, cy] = key.split(',').map(Number);
+        const src = stamp.cells[key];
+        const tx = snapX + cx, ty = snapY + cy;
+        if (src && src.struct && tx >= 0 && tx < this.GRID_W && ty >= 0 && ty < this.GRID_H) affected.push([tx, ty]);
+      });
+    } else {
+      for (let cx = 0; cx < stamp.w; cx++) for (let cy = 0; cy < stamp.h; cy++) {
+        const tx = snapX + cx, ty = snapY + cy;
+        if (tx >= 0 && tx < this.GRID_W && ty >= 0 && ty < this.GRID_H) affected.push([tx, ty]);
+      }
+    }
+    const collisions = affected.filter(([tx, ty]) => this.state.blueprints[tx + ',' + ty]?.struct);
+    if (collisions.length && !this.state.bpForceReplace) {
+      this.toast('Placement blocked - enable Force Replace to overwrite objects.');
+      return;
+    }
+    if (!stamp._clipboard) this.recordBlueprintHistory();
+    if (collisions.length) collisions.forEach(([tx, ty]) => this._clearObjectAt(tx, ty));
 
     if (!transparent) {
       // Clear the entire stamp footprint first
@@ -304,6 +366,7 @@ _assignModule(App, {
           if (tx >= 0 && tx < this.GRID_W && ty >= 0 && ty < this.GRID_H) {
             const tKey = tx + ',' + ty;
             if (this.state.blueprints[tKey]) {
+              if (this.state.blueprints[tKey].struct) this._clearObjectAt(tx, ty);
               this.state.blueprints[tKey].floor = null;
               this.state.blueprints[tKey].struct = null;
               delete this.state.blueprints[tKey].rot;
@@ -322,7 +385,9 @@ _assignModule(App, {
       });
     }
 
-    // Place stamp cells
+    // Place stamp cells. Remap stored instance ids on every placement so repeated
+    // stamps remain separate furniture objects even when they touch.
+    const instanceMap = {};
     Object.keys(stamp.cells).forEach(key => {
       const [cx, cy] = key.split(',').map(Number);
       const tx = snapX + cx, ty = snapY + cy;
@@ -334,6 +399,13 @@ _assignModule(App, {
         if (src.struct) {
           this.state.blueprints[tKey].struct = src.struct;
           if (src.rot != null) this.state.blueprints[tKey].rot = src.rot;
+          else delete this.state.blueprints[tKey].rot;
+          if (src.inst != null) {
+            if (!instanceMap[src.inst]) instanceMap[src.inst] = this._newInstanceId();
+            this.state.blueprints[tKey].inst = instanceMap[src.inst];
+          } else {
+            delete this.state.blueprints[tKey].inst;
+          }
         }
         if (Array.isArray(src.wires) && src.wires.length) this.state.blueprints[tKey].wires = [...src.wires];
       }
@@ -348,16 +420,19 @@ _assignModule(App, {
       });
     }
 
-    // A grabbed single object keeps its identity: stamp one instance id across its
-    // dropped tiles so it stays a grouped object (outline, facing arrow, future grabs),
-    // then return to grab mode so you can move the next object.
+    // A grabbed single object keeps its identity. Older saved data may not carry an
+    // instance id, so group its cells here as a compatibility fallback.
     if (stamp._grab) {
       const structKeys = Object.keys(stamp.cells).filter(k => stamp.cells[k].struct);
-      const inst = structKeys.length > 1 ? this._newInstanceId() : null;
+      const alreadyGrouped = structKeys.some(key => {
+        const [cx, cy] = key.split(',').map(Number);
+        return this.state.blueprints[(snapX + cx) + ',' + (snapY + cy)]?.inst;
+      });
+      const inst = !alreadyGrouped && structKeys.length > 1 ? this._newInstanceId() : null;
       structKeys.forEach(key => {
         const [cx, cy] = key.split(',').map(Number);
         const c = this.state.blueprints[(snapX + cx) + ',' + (snapY + cy)];
-        if (c && c.struct) { if (inst) c.inst = inst; else delete c.inst; }
+        if (c && c.struct && inst) c.inst = inst;
       });
       this._stampPlacing = null;
       this._stampPreview = null;
@@ -371,6 +446,8 @@ _assignModule(App, {
   },
 
   cancelStampPlace() {
+    const restore = this._stampPlacing?._restoreSnapshot;
+    if (restore) this._applyBlueprintSnapshot(JSON.parse(restore));
     this._stampPlacing = null;
     this._stampPreview = null;
     this.state.drawMode = 'box';
@@ -461,25 +538,79 @@ _assignModule(App, {
     this.toast('Copied.');
   },
 
-  // Coerce arbitrary parsed JSON into a safe blueprint map: an object keyed by
-  // "x,y" whose values are cell objects. Drops anything that does not fit so a
-  // pasted/corrupt layout can never replace state.blueprints with a non-map.
-  _sanitizeBlueprintMap(parsed) {
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  _blueprintLimits() {
+    return { maxDimension: 512, maxCells: 150000, maxXmlItems: 150000 };
+  },
+
+  // Coerce arbitrary parsed JSON into a bounded blueprint map. Strict mode is
+  // used for clipboard imports so malformed data is rejected instead of being
+  // assigned and crashing later. Project recovery uses non-strict mode to retain
+  // every valid cell it safely can.
+  _sanitizeBlueprintMap(parsed, options) {
+    const strict = !!options?.strict;
+    const fail = message => { if (strict) throw new Error(message); return null; };
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      fail('Not a layout object');
+      return {};
+    }
+    const limits = this._blueprintLimits();
+    let keys = Object.keys(parsed);
+    if (keys.length > limits.maxCells) {
+      if (strict) fail(`Layout has more than ${limits.maxCells.toLocaleString()} cells`);
+      keys = keys.slice(0, limits.maxCells);
+    }
+    const safeId = value => typeof value === 'string' && value.length <= 240 ? value : null;
     const clean = {};
-    Object.keys(parsed).forEach(key => {
-      if (!/^-?\d+,-?\d+$/.test(key)) return;
+    for (const key of keys) {
+      const match = /^(\d+),(\d+)$/.exec(key);
+      if (!match) { fail(`Invalid tile coordinate: ${key}`); continue; }
+      const x = Number(match[1]), y = Number(match[2]);
+      if (x >= limits.maxDimension || y >= limits.maxDimension) {
+        fail(`Layout exceeds the ${limits.maxDimension} by ${limits.maxDimension} safety limit`);
+        continue;
+      }
       const cell = parsed[key];
-      if (!cell || typeof cell !== 'object' || Array.isArray(cell)) return;
-      clean[key] = cell;
-    });
+      if (!cell || typeof cell !== 'object' || Array.isArray(cell)) { fail(`Invalid tile at ${key}`); continue; }
+      const floor = cell.floor == null ? null : safeId(cell.floor);
+      const struct = cell.struct == null ? null : safeId(cell.struct);
+      if ((cell.floor != null && floor == null) || (cell.struct != null && struct == null)) {
+        fail(`Invalid object identifier at ${key}`);
+        continue;
+      }
+      const out = { floor, struct };
+      if (cell.rot != null) {
+        const rot = Number(cell.rot);
+        if (!Number.isFinite(rot)) { fail(`Invalid rotation at ${key}`); continue; }
+        out.rot = ((Math.trunc(rot) % 4) + 4) % 4;
+      }
+      if (cell.inst != null) {
+        const inst = safeId(cell.inst);
+        if (!inst) { fail(`Invalid object instance at ${key}`); continue; }
+        out.inst = inst;
+      }
+      if (cell.room != null) {
+        const room = safeId(cell.room);
+        if (!room) { fail(`Invalid room identifier at ${key}`); continue; }
+        out.room = room;
+      }
+      if (cell.wires != null) {
+        if (!Array.isArray(cell.wires)) { fail(`Invalid wire list at ${key}`); continue; }
+        out.wires = [...new Set(cell.wires.map(safeId).filter(Boolean))].slice(0, 32);
+        if (strict && out.wires.length !== cell.wires.length) { fail(`Invalid wire identifier at ${key}`); continue; }
+      }
+      if (out.floor || out.struct || out.room || (out.wires && out.wires.length)) clean[key] = out;
+    }
     return clean;
   },
 
   // Unique id for one furniture object: every cell of a single placed item shares
   // it, so a multi-cell piece can be drawn and hovered as ONE unit and two identical
   // abutting items stay distinguishable. Only stamped onto multi-cell footprints.
-  _newInstanceId() { this._instSeq = (this._instSeq || 0) + 1; return 'o' + this._instSeq.toString(36); },
+  _newInstanceId() {
+    if (!this._instPrefix) this._instPrefix = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    this._instSeq = (this._instSeq || 0) + 1;
+    return 'o' + this._instPrefix + '_' + this._instSeq.toString(36);
+  },
 
   // Do two cells belong to the SAME furniture object? Only multi-cell objects carry
   // an instance id (assigned at import/stamp), so grouping requires a matching id.
@@ -583,19 +714,23 @@ _assignModule(App, {
   },
 
   importLayoutFromJSON() {
-    this.showPrompt('Paste Layout JSON here').then(str => {
+    this.showPrompt('Paste Layout JSON here').then(async str => {
       if (!str) return;
       try {
+        if (str.length > 16 * 1024 * 1024) throw new Error('Blueprint JSON is larger than the 16 MB safety limit');
         const parsed = JSON.parse(str);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Not a layout object');
-        // Validate/sanitise BEFORE assigning, so an invalid paste cannot corrupt
-        // state (the old code assigned first, then drew - garbage persisted even
-        // when the draw threw).
-        this.state.blueprints = this._sanitizeBlueprintMap(parsed);
-        this._canvasFullDraw();
-        this._updateBill();
-        this.toast(" Layout Imported!");
-      } catch(e) { this.showAlert('Invalid JSON!'); }
+        const next = this._sanitizeBlueprintMap(parsed, { strict: true });
+        if (Object.keys(this.state.blueprints || {}).length) {
+          try { await this.showConfirm('Replace the current Blueprint layout?', 'Replace', 'You can undo this replacement.'); }
+          catch (_) { return; }
+        }
+        this.recordBlueprintHistory();
+        this.state.blueprints = next;
+        this._calculateAdaptiveGrid();
+        this.renderBlueprint();
+        this.triggerAutoSave();
+        this.toast('Layout imported.');
+      } catch(e) { this.showAlert('Invalid Blueprint JSON: ' + (e.message || 'unknown error')); }
     }).catch(() => {});
   },
 
@@ -750,6 +885,7 @@ ${allLis}
   // Blueprints-mod XML string -> { blueprints, stats, name }. Pure; never throws.
   parseBlueprintXML(xmlString) {
     if (typeof xmlString !== 'string' || !xmlString) return { blueprints: {}, stats: { placed: 0, terrain: 0, unknown: 0 }, name: '' };
+    const limits = this._blueprintLimits();
     const bpName = ((xmlString.match(/<Name>([\s\S]*?)<\/Name>/) || [])[1] || '').trim();
     // The mod stores both things and terrain in one <BuildableThings> list, each
     // <li> carrying a <ThingDef> OR a <TerrainDef>. Also tolerate a separate
@@ -760,10 +896,12 @@ ${allLis}
     const parsePos = (s) => { const m = s && s.match(/\(\s*(-?\d+)\s*,\s*-?\d+\s*,\s*(-?\d+)\s*\)/); return m ? { x: parseInt(m[1]), z: parseInt(m[2]) } : null; };
 
     const items = [];
+    let limitError = '';
     const scan = (block, terrainOnly) => {
       const liRe = /<li>([\s\S]*?)<\/li>/g;
       let m;
       while ((m = liRe.exec(block))) {
+        if (items.length >= limits.maxXmlItems) { limitError = `Blueprint contains more than ${limits.maxXmlItems.toLocaleString()} items`; break; }
         const li = m[1];
         const pos = parsePos(tag(li, 'Position'));
         if (!pos) continue;
@@ -774,7 +912,8 @@ ${allLis}
       }
     };
     scan(buildBlock, false);
-    scan(terrainBlock, true);
+    if (!limitError) scan(terrainBlock, true);
+    if (limitError) return { blueprints: {}, stats: { placed: 0, terrain: 0, unknown: 0 }, name: bpName, error: limitError };
     if (!items.length) return { blueprints: {}, stats: { placed: 0, terrain: 0, unknown: 0 }, name: bpName };
 
     // Compute each thing's occupied WORLD rect with RimWorld's exact rule
@@ -792,10 +931,30 @@ ${allLis}
     };
     items.forEach(it => { it._rect = rectOf(it); });
 
+    let minRectX = Infinity, maxRectX = -Infinity, minRectZ = Infinity, maxRectZ = -Infinity;
+    items.forEach(item => {
+      minRectX = Math.min(minRectX, item._rect.x0);
+      maxRectX = Math.max(maxRectX, item._rect.x1);
+      minRectZ = Math.min(minRectZ, item._rect.z0);
+      maxRectZ = Math.max(maxRectZ, item._rect.z1);
+    });
+    const width = maxRectX - minRectX + 1;
+    const height = maxRectZ - minRectZ + 1;
+    const expandedCells = items.reduce((sum, item) => {
+      const r = item._rect;
+      return sum + (r.x1 - r.x0 + 1) * (r.z1 - r.z0 + 1);
+    }, 0);
+    if (width > limits.maxDimension || height > limits.maxDimension) {
+      return { blueprints: {}, stats: { placed: 0, terrain: 0, unknown: 0 }, name: bpName, error: `Blueprint exceeds the ${limits.maxDimension} by ${limits.maxDimension} safety limit` };
+    }
+    if (expandedCells > limits.maxCells) {
+      return { blueprints: {}, stats: { placed: 0, terrain: 0, unknown: 0 }, name: bpName, error: `Blueprint expands to more than ${limits.maxCells.toLocaleString()} cells` };
+    }
+
     // Normalise to a 0-based grid and flip z back to top-down y. Bounds come from
     // the expanded rects so a centred footprint never maps to a negative cell.
-    const minX = Math.min(...items.map(i => i._rect.x0));
-    const maxZ = Math.max(...items.map(i => i._rect.z1));
+    const minX = minRectX;
+    const maxZ = maxRectZ;
     const bp = {};
     let placed = 0, terrainCount = 0, unknown = 0;
     items.forEach(it => {
@@ -1061,13 +1220,15 @@ ${allLis}
       if (!n) this.toast('No modded tile sizes found - check the RimWorld path in Settings, or fully restart the app.');
     }
     const parsed = this.parseBlueprintXML(res.xml);
+    if (parsed.error) { this.showAlert('Import failed: ' + parsed.error); return; }
     const cellCount = parsed.stats.placed + parsed.stats.terrain;
     if (!cellCount) { this.showAlert('No buildable items found in that file.'); return; }
     const ghost = parsed.stats.unknown
       ? ` ${parsed.stats.unknown} modded/unknown item(s) will appear as generic placeholders.`
       : '';
-    const ok = await this.showConfirm(`Import ${parsed.stats.placed} object(s) and ${parsed.stats.terrain} floor tile(s)?${ghost} This replaces the current layout.`);
-    if (!ok) return;
+    try { await this.showConfirm(`Import ${parsed.stats.placed} object(s) and ${parsed.stats.terrain} floor tile(s)?${ghost} This replaces the current layout.`); }
+    catch (_) { return; }
+    this.recordBlueprintHistory();
     // Register every unique imported (non-palette) def as its own coloured
     // swatch, so each item is distinct and identifiable on the canvas rather
     // than a generic grey/concrete block.
@@ -1090,9 +1251,8 @@ ${allLis}
     // Prefer the blueprint's embedded <Name>; fall back to the file name.
     const fname = String(res.filePath || '').replace(/\\/g, '/').split('/').pop() || '';
     this.state.blueprintName = (parsed.name && parsed.name.trim()) || fname.replace(/\.xml$/i, '') || 'Imported blueprint';
-    if (this._canvasFullDraw) this._canvasFullDraw();
-    if (this._updateBill) this._updateBill();
-    if (this.renderBlueprintSidebar) this.renderBlueprintSidebar();
+    this._calculateAdaptiveGrid();
+    this.renderBlueprint();
     this.triggerAutoSave();
     this.toast(`Imported "${this.state.blueprintName}" - ${cellCount} cell(s)${parsed.stats.unknown ? ` (${parsed.stats.unknown} placeholder(s))` : ''}.`);
     } finally {
@@ -1211,6 +1371,7 @@ ${allLis}
     this.showConfirm('Delete this material?', 'Delete').then(() => { this._doDeleteMaterial(id); }).catch(() => {});
   },
   _doDeleteMaterial(id) {
+    this.recordBlueprintHistory();
     // Remove from custom list (user-defined) or blocklist built-ins
     this.state.customMaterials = this.state.customMaterials.filter(m => m.id !== id);
     if (!this.state.deletedMaterials) this.state.deletedMaterials = [];
@@ -1233,6 +1394,7 @@ ${allLis}
     this.showConfirm('Delete object definition?', 'Delete').then(() => { this._doDeleteBuilding(id); }).catch(() => {});
   },
   _doDeleteBuilding(id) {
+    this.recordBlueprintHistory();
     const isPreset = PRESET_BUILDINGS.some(b => b.id === id);
     if (isPreset) {
       if (!this.state.deletedPresetBuildings.includes(id)) {
@@ -1412,7 +1574,7 @@ ${allLis}
     const meta = this._bpEaselMeta(kind);
     const items = this._bpEaselItems(kind);
     const tiles = items.map(it => `
-      <button onclick="App._bpPalettePick('${kind}', '${it.id}')" title="${_escapeHtml(it.label)}"
+      <button data-palette-kind="${_escapeHtml(kind)}" data-palette-id="${_escapeHtml(it.id)}" onclick="App._bpPalettePick(this.dataset.paletteKind, this.dataset.paletteId)" title="${_escapeHtml(it.label)}"
         style="display:flex; flex-direction:column; align-items:center; gap:5px; padding:7px 4px; border-radius:8px; cursor:pointer; background:${it.active ? 'var(--accent-glow)' : 'var(--surface2)'}; border:1px solid ${it.active ? 'var(--accent)' : 'var(--border)'}">
         <span style="width:34px; height:34px; border-radius:6px; background:${it.color}; border:1px solid var(--border-bright)"></span>
         <span style="font-size:calc(9px * var(--font-scale)); color:var(--text2); text-align:center; line-height:1.2; width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${_escapeHtml(it.label)}</span>
@@ -2219,7 +2381,8 @@ ${allLis}
     if (!grid) return;
     const rect = grid.getBoundingClientRect();
     const zoom = this._getCurrentZoom();
-    const minTile = this._isWidgetMode() ? 14 : 2;
+    const longestSide = Math.max(1, this.GRID_W, this.GRID_H);
+    const minTile = this._isWidgetMode() ? Math.min(14, Math.max(2, 840 / longestSide)) : 2;
     // Base tile size fits grid into container; zoom multiplier makes canvas larger → scrollable
     const baseTile = Math.max(minTile, Math.min(rect.width / this.GRID_W, rect.height / this.GRID_H));
     const ts = baseTile * zoom;
@@ -2246,9 +2409,15 @@ ${allLis}
 
   calculateBlueprintCosts() {
     const totals = {};
+    const countedInstances = new Set();
     Object.values(this.state.blueprints).forEach(cell => {
-      [cell.floor, cell.struct].forEach(bid => {
-        if (!bid || bid.startsWith('mat__')) return; // material tiles have no build cost
+      [cell.floor, cell.struct].forEach((bid, layerIndex) => {
+        if (typeof bid !== 'string' || !bid || bid.startsWith('mat__')) return; // material tiles have no build cost
+        if (layerIndex === 1 && cell.inst) {
+          const instanceKey = bid + '|' + cell.inst;
+          if (countedInstances.has(instanceKey)) return;
+          countedInstances.add(instanceKey);
+        }
         const b = this.allBuildings.find(x => x.id === bid);
         if (b && b.costs) {
           Object.entries(b.costs).forEach(([res, amt]) => {
@@ -2260,33 +2429,54 @@ ${allLis}
     return totals;
   },
 
-  recordBlueprintHistory() {
-    // Basic snapshot - limit to 20 steps
-    const snapshot = JSON.stringify({ 
-      blueprints: this.state.blueprints, 
-      roomLabels: this.state.roomLabels 
+  _blueprintSnapshot() {
+    return JSON.stringify({
+      blueprints: this.state.blueprints || {},
+      roomLabels: this.state.roomLabels || {},
+      customMaterials: this.state.customMaterials || [],
+      customBuildings: this.state.customBuildings || {},
+      deletedMaterials: this.state.deletedMaterials || [],
+      deletedPresetBuildings: this.state.deletedPresetBuildings || [],
     });
-    
-    // If we're not at the end of history, truncate future steps
+  },
+
+  _applyBlueprintSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    this.state.blueprints = this._sanitizeBlueprintMap(snapshot.blueprints || {});
+    this.state.roomLabels = snapshot.roomLabels && typeof snapshot.roomLabels === 'object' && !Array.isArray(snapshot.roomLabels)
+      ? JSON.parse(JSON.stringify(snapshot.roomLabels)) : {};
+    if (Array.isArray(snapshot.customMaterials)) this.state.customMaterials = JSON.parse(JSON.stringify(snapshot.customMaterials));
+    if (snapshot.customBuildings && typeof snapshot.customBuildings === 'object' && !Array.isArray(snapshot.customBuildings)) this.state.customBuildings = JSON.parse(JSON.stringify(snapshot.customBuildings));
+    if (Array.isArray(snapshot.deletedMaterials)) this.state.deletedMaterials = [...snapshot.deletedMaterials];
+    if (Array.isArray(snapshot.deletedPresetBuildings)) this.state.deletedPresetBuildings = [...snapshot.deletedPresetBuildings];
+    this._refreshCaches?.();
+  },
+
+  _pushBlueprintHistorySnapshot(snapshot) {
+    if (!Array.isArray(this.state.blueprintHistory)) this.state.blueprintHistory = [];
     if (this.blueprintHistoryIdx < this.state.blueprintHistory.length - 1) {
       this.state.blueprintHistory = this.state.blueprintHistory.slice(0, this.blueprintHistoryIdx + 1);
     }
-    
+    if (this.state.blueprintHistory[this.blueprintHistoryIdx] === snapshot) return;
     this.state.blueprintHistory.push(snapshot);
-    if (this.state.blueprintHistory.length > 200) {
-      this.state.blueprintHistory.shift();
-    } else {
-      this.blueprintHistoryIdx++;
-    }
+    if (this.state.blueprintHistory.length > 200) this.state.blueprintHistory.shift();
+    this.blueprintHistoryIdx = this.state.blueprintHistory.length - 1;
+  },
+
+  recordBlueprintHistory() {
+    this._pushBlueprintHistorySnapshot(this._blueprintSnapshot());
   },
 
   undo() {
+    // Mutations record their before-state. Capture the current after-state lazily
+    // the first time Undo is requested so Redo has an exact destination.
+    this._pushBlueprintHistorySnapshot(this._blueprintSnapshot());
     if (this.blueprintHistoryIdx > 0) {
       this.blueprintHistoryIdx--;
       const state = JSON.parse(this.state.blueprintHistory[this.blueprintHistoryIdx]);
-      this.state.blueprints = state.blueprints;
-      this.state.roomLabels = state.roomLabels || {};
-      this.renderAll();
+      this._applyBlueprintSnapshot(state);
+      this._calculateAdaptiveGrid();
+      this.renderBlueprint();
       this.triggerAutoSave();
     } else {
       this.toast('Nothing to undo');
@@ -2297,9 +2487,9 @@ ${allLis}
     if (this.blueprintHistoryIdx < this.state.blueprintHistory.length - 1) {
       this.blueprintHistoryIdx++;
       const state = JSON.parse(this.state.blueprintHistory[this.blueprintHistoryIdx]);
-      this.state.blueprints = state.blueprints;
-      this.state.roomLabels = state.roomLabels || {};
-      this.renderAll();
+      this._applyBlueprintSnapshot(state);
+      this._calculateAdaptiveGrid();
+      this.renderBlueprint();
       this.triggerAutoSave();
     } else {
       this.redoToast = (this.redoToast || 0) + 1; // dummy for state change if needed
@@ -2412,7 +2602,7 @@ ${allLis}
   },
 
   submitRoomTag() {
-    const name = document.getElementById('roomTagName')?.value.trim();
+    const name = document.getElementById('roomTagName')?.value.trim().slice(0, 200);
     const type = document.getElementById('roomTagType')?.value || 'custom';
     if (!name) { this.toast('Enter a label!'); return; }
     const coord = this._pendingRoomTagCoord;
@@ -2428,6 +2618,7 @@ ${allLis}
   },
 
   clearRoomTag(rid) {
+    this.recordBlueprintHistory();
     delete this.state.roomLabels[rid];
     this.renderBlueprintSidebar();
     this._canvasFullDraw();
@@ -2509,8 +2700,8 @@ ${allLis}
             <span style="font-size:calc(8px * var(--font-scale)); color:var(--text3); font-weight:700; flex-shrink:0; text-transform:uppercase">Stp</span>
             ${Object.values(this.state.stamps).map(s => `
               <span style="display:inline-flex; align-items:center; gap:1px; flex-shrink:0">
-                <button onclick="App.enterStampPlaceMode('${s.id}')" title="${_escapeHtml(s.name)} (${s.w}×${s.h})" class="btn btn-sm" style="padding:2px 6px; font-size:calc(9px * var(--font-scale)); white-space:nowrap; border-radius:3px 0 0 3px; ${this.state.drawMode === 'stamp_place' && this._stampPlacing?.id === s.id ? 'background:var(--ok-bg); border-color:var(--ok-txt); color:var(--ok-txt)' : ''}">${_escapeHtml(s.name)}</button>
-                <button onclick="App.deleteStamp('${s.id}')" title="Delete stamp" class="btn btn-sm" style="padding:2px 4px; font-size:calc(9px * var(--font-scale)); border-radius:0 3px 3px 0; color:var(--warn-txt)">&times;</button>
+                <button data-stamp-id="${_escapeHtml(s.id)}" onclick="App.enterStampPlaceMode(this.dataset.stampId)" title="${_escapeHtml(s.name)} (${Number(s.w) || 0}×${Number(s.h) || 0})" class="btn btn-sm" style="padding:2px 6px; font-size:calc(9px * var(--font-scale)); white-space:nowrap; border-radius:3px 0 0 3px; ${this.state.drawMode === 'stamp_place' && this._stampPlacing?.id === s.id ? 'background:var(--ok-bg); border-color:var(--ok-txt); color:var(--ok-txt)' : ''}">${_escapeHtml(s.name)}</button>
+                <button data-stamp-id="${_escapeHtml(s.id)}" onclick="App.deleteStamp(this.dataset.stampId)" title="Delete stamp" class="btn btn-sm" style="padding:2px 4px; font-size:calc(9px * var(--font-scale)); border-radius:0 3px 3px 0; color:var(--warn-txt)">&times;</button>
               </span>
             `).join('')}
           </div>` : ''}
@@ -2660,13 +2851,13 @@ ${allLis}
                 : `background:${col}22; border-color:${isActive ? col : col + '55'}; color:${isActive ? '#fff' : 'var(--text)'}; ${isActive ? 'box-shadow:inset 0 0 12px ' + col + '44' : ''}`;
               return `
               <div style="display:flex; gap:6px; align-items:center">
-                <button class="btn btn-sm" onclick="App.setBiome('${b.id}')"
-                  data-biome-btn data-biome-btn-id="${b.id}" data-biome-color="${col || ''}"
+                <button class="btn btn-sm" onclick="App.setBiome(this.dataset.biomeBtnId)"
+                  data-biome-btn data-biome-btn-id="${_escapeHtml(b.id)}" data-biome-color="${_escapeHtml(col || '')}"
                   style="flex:1; justify-content:flex-start; padding:8px 12px; font-size:calc(var(--f-xs) * 0.9); ${bgStyle}">
                   <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${col || 'transparent'};margin-right:6px;flex-shrink:0;border:1px solid ${col ? col + '88' : 'var(--border)'}"></span>
                   ${_escapeHtml(b.icon || '')} ${_escapeHtml(b.label)}
                 </button>
-                <button class="pawn-del" onclick="App.deleteBiome('${b.id}')" style="width:24px; height:24px">&times;</button>
+                <button class="pawn-del" data-biome-id="${_escapeHtml(b.id)}" onclick="App.deleteBiome(this.dataset.biomeId)" style="width:24px; height:24px">&times;</button>
               </div>`;
             }).join('')}
           </div>
@@ -2678,8 +2869,8 @@ ${allLis}
           <div style="display:grid; gap:6px; margin-bottom:10px">
             ${Object.values(this.state.prefabs).map(p => `
               <div style="display:flex; gap:6px; align-items:center">
-                <button class="btn btn-sm" onclick="App.applyPrefab('${p.id}')" style="flex:1; justify-content:flex-start; padding:8px 12px; font-size:calc(var(--f-xs) * 0.9)"> ${_escapeHtml(p.name)}</button>
-                <button class="pawn-del" onclick="App.deletePrefab('${p.id}')" style="width:24px; height:24px">&times;</button>
+                <button class="btn btn-sm" data-prefab-id="${_escapeHtml(p.id)}" onclick="App.applyPrefab(this.dataset.prefabId)" style="flex:1; justify-content:flex-start; padding:8px 12px; font-size:calc(var(--f-xs) * 0.9)"> ${_escapeHtml(p.name)}</button>
+                <button class="pawn-del" data-prefab-id="${_escapeHtml(p.id)}" onclick="App.deletePrefab(this.dataset.prefabId)" style="width:24px; height:24px">&times;</button>
               </div>
             `).join('')}
             ${Object.keys(this.state.prefabs).length === 0 ? '<div style="font-size:calc(var(--f-xs) * 0.85); color:var(--text3); text-align:center; padding:10px">Empty</div>' : ''}
@@ -2692,11 +2883,11 @@ ${allLis}
           <div style="display:grid; gap:6px; margin-bottom:10px">
             ${Object.values(this.state.stamps).map(s => `
               <div style="display:flex; gap:6px; align-items:center">
-                <button class="btn btn-sm" onclick="App.enterStampPlaceMode('${s.id}')"
+                <button class="btn btn-sm" data-stamp-id="${_escapeHtml(s.id)}" onclick="App.enterStampPlaceMode(this.dataset.stampId)"
                   style="flex:1; justify-content:flex-start; padding:8px 12px; font-size:calc(var(--f-xs) * 0.9); ${this.state.drawMode === 'stamp_place' && this._stampPlacing?.id === s.id ? 'background:var(--ok-bg); border-color:var(--ok-txt); color:var(--ok-txt)' : ''}">
-                  <span style="font-size:calc(var(--f-xs) * 0.8); color:var(--text3); margin-right:4px">${s.w}×${s.h}</span> ${_escapeHtml(s.name)}
+                  <span style="font-size:calc(var(--f-xs) * 0.8); color:var(--text3); margin-right:4px">${Number(s.w) || 0}×${Number(s.h) || 0}</span> ${_escapeHtml(s.name)}
                 </button>
-                <button class="pawn-del" onclick="App.deleteStamp('${s.id}')" style="width:24px; height:24px">&times;</button>
+                <button class="pawn-del" data-stamp-id="${_escapeHtml(s.id)}" onclick="App.deleteStamp(this.dataset.stampId)" style="width:24px; height:24px">&times;</button>
               </div>
             `).join('')}
             ${Object.keys(this.state.stamps).length === 0 ? '<div style="font-size:calc(var(--f-xs) * 0.85); color:var(--text3); text-align:center; padding:10px">No stamps yet</div>' : ''}
@@ -2713,12 +2904,12 @@ ${allLis}
           <div style="display:grid; gap:6px; margin-bottom:10px">
             ${this.allMaterials.map(m => `
               <div style="display:flex; gap:6px; align-items:center">
-                <button class="btn btn-sm" onclick="App.setBlueprintTool('mat__${m.id}')"
-                  title="${_escapeHtml(m.label)}${m.modSource ? ' ['+m.modSource+']' : ''}"
+                <button class="btn btn-sm" data-tool-id="${_escapeHtml('mat__' + m.id)}" onclick="App.setBlueprintTool(this.dataset.toolId)"
+                  title="${_escapeHtml(m.label + (m.modSource ? ' [' + m.modSource + ']' : ''))}"
                   style="flex:1; justify-content:flex-start; padding:8px 12px; font-size:calc(var(--f-xs) * 0.9); border-left:4px solid ${_safeColor(m.color)}; ${this.state.activeTool === 'mat__' + m.id ? 'background:var(--accent-glow); border-color:var(--accent)' : ''}">
                   ${_escapeHtml(m.label)}${_modBadge(m)}
                 </button>
-                <button class="pawn-del" onclick="App.deleteCustomMaterial('${m.id}')" style="width:24px; height:24px">&times;</button>
+                <button class="pawn-del" data-material-id="${_escapeHtml(m.id)}" onclick="App.deleteCustomMaterial(this.dataset.materialId)" style="width:24px; height:24px">&times;</button>
               </div>`).join('')}
           </div>
           <button class="btn btn-sm" style="width:100%; padding:8px; font-size:calc(var(--f-xs) * 0.9)" onclick="App.addCustomMaterial()">+ Add</button>
@@ -2743,23 +2934,23 @@ ${allLis}
               const cats = this._blueprintCategoriesPresent();
               return cats.map(cat => {
                 const isCol = !!collapsed[cat];
-                const header = `<div onclick="App.toggleBlueprintCat('${cat.replace(/'/g, "\\'")}')"
+                const header = `<div data-blueprint-category="${_escapeHtml(cat)}" onclick="App.toggleBlueprintCat(this.dataset.blueprintCategory)"
                   style="display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; font-size:calc(var(--f-xs) * 0.78); color:var(--text3); font-weight:800; text-transform:uppercase; letter-spacing:0.06em; margin:8px 0 2px; padding:3px 2px; border-radius:4px">
                   <span style="display:inline-block; transition:transform 0.15s; transform:rotate(${isCol ? '-90' : '0'}deg); color:var(--accent)">&#9662;</span>
                   ${_escapeHtml(cat)} <span style="opacity:0.45">(${groups[cat].length})</span></div>`;
                 if (isCol) return header;
                 const items = groups[cat].map(b => `
                   <div style="display:flex; gap:4px; align-items:center; min-width:0">
-                    <button class="btn btn-sm" onclick="App.setBlueprintTool('${b.id}')"
-                      title="${_escapeHtml(b.label)}${b.modSource ? ' [' + b.modSource + ']' : ''}${b.def ? ' • ' + _escapeHtml(b.def) : ''}"
+                    <button class="btn btn-sm" data-tool-id="${_escapeHtml(b.id)}" onclick="App.setBlueprintTool(this.dataset.toolId)"
+                      title="${_escapeHtml(b.label + (b.modSource ? ' [' + b.modSource + ']' : '') + (b.def ? ' - ' + b.def : ''))}"
                       style="flex:1 1 0; min-width:0; overflow:hidden; justify-content:flex-start; padding:7px 10px; font-size:calc(var(--f-xs) * 0.9); border-left:4px solid ${_safeColor(b.color)}; ${this.state.activeTool === b.id ? 'background:var(--accent-glow); border-color:var(--accent)' : ''}">
                       <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${_escapeHtml(b.label)}${_modBadge(b)}</span>
                     </button>
-                    <input type="color" value="${this._hexForInput(b.color)}" onchange="App.setBuildingColor('${b.id}', this.value)" title="Recolour ${_escapeHtml(b.label)}" style="width:22px; height:22px; flex-shrink:0; padding:0; border:1px solid var(--border-med); border-radius:4px; background:none; cursor:pointer">
-                    <select onchange="App.setBuildingShape('${b.id}', this.value)" title="Shape" style="width:56px; flex-shrink:0; font-size:calc(var(--f-xs) * 0.8); padding:2px; cursor:pointer">
+                    <input type="color" data-building-id="${_escapeHtml(b.id)}" value="${this._hexForInput(b.color)}" onchange="App.setBuildingColor(this.dataset.buildingId, this.value)" title="Recolour ${_escapeHtml(b.label)}" style="width:22px; height:22px; flex-shrink:0; padding:0; border:1px solid var(--border-med); border-radius:4px; background:none; cursor:pointer">
+                    <select data-building-id="${_escapeHtml(b.id)}" onchange="App.setBuildingShape(this.dataset.buildingId, this.value)" title="Shape" style="width:56px; flex-shrink:0; font-size:calc(var(--f-xs) * 0.8); padding:2px; cursor:pointer">
                       ${this._shapeOptions(this._resolveShape(b.id))}
                     </select>
-                    <button class="pawn-del" onclick="App.deleteCustomBuilding('${b.id}')" style="width:22px; height:22px; flex-shrink:0">&times;</button>
+                    <button class="pawn-del" data-building-id="${_escapeHtml(b.id)}" onclick="App.deleteCustomBuilding(this.dataset.buildingId)" style="width:22px; height:22px; flex-shrink:0">&times;</button>
                   </div>`).join('');
                 return header + items;
               }).join('');
@@ -2775,8 +2966,8 @@ ${allLis}
               const label = this.state.roomLabels[rid];
               const icon  = { bedroom:'Bed', barracks:'Brk', kitchen:'Kit', hospital:'Med', workshop:'Wrk', freezer:'Frz', storage:'Str', prison:'Prs', rec_room:'Rec', dining:'Din', lab:'Lab', barn:'Brn', custom:'Tag' }[label?.type] || 'Room';
               return `<div style="display:flex; align-items:center; justify-content:space-between; padding:6px 10px; background:var(--surface3); border-radius:6px; margin-bottom:2px">
-                <span style="font-size:calc(var(--f-xs) * 0.9); font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1">${icon} ${label?.name || '...'}</span>
-                <button class="pawn-del" onclick="App.clearRoomTag('${rid}')" style="width:18px; height:18px; font-size:var(--f-xs); margin-left:8px">&times;</button>
+                <span style="font-size:calc(var(--f-xs) * 0.9); font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1">${icon} ${_escapeHtml(label?.name || '...')}</span>
+                <button class="pawn-del" data-room-id="${_escapeHtml(rid)}" onclick="App.clearRoomTag(this.dataset.roomId)" style="width:18px; height:18px; font-size:var(--f-xs); margin-left:8px">&times;</button>
               </div>`;
             }).join('')}
           </div>
@@ -2788,8 +2979,9 @@ ${allLis}
 
   _blueprintGridHTML() {
     const hide = !this.state.settings.showBiomePatterns ? 'hide-patterns' : '';
-    return `<div class="blueprint-grid ${hide} biome-${this.state.biome}" style="width:100%; height:100%; overflow:auto; background:${this._biomeBgColor()}; border-radius:12px; cursor:crosshair; user-select:none; touch-action:none; position:relative" oncontextmenu="event.preventDefault()">
-      <canvas id="blueprintCanvas" width="2" height="2" style="display:block; background:${this._biomeBgColor()}"></canvas>
+    const biomeClass = String(this.state.biome || 'none').replace(/[^a-zA-Z0-9_-]/g, '');
+    return `<div class="blueprint-grid ${hide} biome-${biomeClass}" tabindex="0" role="grid" aria-rowcount="${this.GRID_H}" aria-colcount="${this.GRID_W}" aria-label="Blueprint grid. Use arrow keys to move, Space or Enter to use the active tool, Delete to erase, and Escape to cancel placement." style="width:100%; height:100%; overflow:auto; background:${this._biomeBgColor()}; border-radius:12px; cursor:crosshair; user-select:none; touch-action:none; position:relative" oncontextmenu="event.preventDefault()">
+      <canvas id="blueprintCanvas" aria-hidden="true" width="2" height="2" style="display:block; background:${this._biomeBgColor()}"></canvas>
     </div>`;
   },
 
@@ -2815,7 +3007,44 @@ ${allLis}
     let panning = false, panStartX = 0, panStartY = 0, panScrollX = 0, panScrollY = 0;
     const wrapper = canvas.parentElement;
 
+    const announceKeyboardTile = () => {
+      const pos = this._blueprintKeyboardTile || { x: 0, y: 0 };
+      wrapper.setAttribute('aria-label', `Blueprint grid. Selected tile ${pos.x + 1}, ${pos.y + 1}. Use arrow keys to move, Space or Enter to use the active tool, Delete to erase, and Escape to cancel placement.`);
+    };
+    wrapper.addEventListener('keydown', e => {
+      const pos = this._blueprintKeyboardTile || { x: 0, y: 0 };
+      let handled = true;
+      if (e.key === 'ArrowLeft') pos.x = Math.max(0, pos.x - 1);
+      else if (e.key === 'ArrowRight') pos.x = Math.min(this.GRID_W - 1, pos.x + 1);
+      else if (e.key === 'ArrowUp') pos.y = Math.max(0, pos.y - 1);
+      else if (e.key === 'ArrowDown') pos.y = Math.min(this.GRID_H - 1, pos.y + 1);
+      else if (e.key === 'Escape' && this.state.drawMode === 'stamp_place') this.cancelStampPlace();
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        this.recordBlueprintHistory();
+        this._writeTile(pos.x, pos.y, true);
+        this._updateBill();
+        this.triggerAutoSave();
+      } else if (e.key === ' ' || e.key === 'Enter') {
+        if (this.state.drawMode === 'stamp_place') this.placeStamp(pos.x, pos.y);
+        else if (this.state.drawMode === 'grab') this.grabObjectAt(pos.x, pos.y);
+        else if (this.state.activeTool === 'room_tag') this.openRoomTagModal(pos.x, pos.y);
+        else {
+          this.recordBlueprintHistory();
+          this._writeTile(pos.x, pos.y, false);
+          this._updateBill();
+          this.triggerAutoSave();
+        }
+      } else handled = false;
+      if (!handled) return;
+      e.preventDefault();
+      this._blueprintKeyboardTile = pos;
+      this._hoverTile = { hx: pos.x, hy: pos.y };
+      announceKeyboardTile();
+      this._scheduleCanvasRedraw();
+    });
+
     canvas.addEventListener('mousedown', (e) => {
+      wrapper.focus({ preventScroll: true });
       this._hideBlueprintTip();
       if (e.button === 1) {
         e.preventDefault();
@@ -2996,7 +3225,7 @@ ${allLis}
 
 
   _resolveTileColor(bid) {
-    if (!bid) return null;
+    if (typeof bid !== 'string' || !bid) return null;
     if (this._colorCache && this._colorCache[bid]) return this._colorCache[bid];
 
     let color = null;
@@ -3123,27 +3352,6 @@ ${allLis}
     this.toast(` ${label} Added!`);
   },
 
-  submitNewBiome() {
-    if (!this._checkCap(this.state.customBiomes, 'customBiomes', 'custom biomes')) return;
-    const label = document.getElementById('biomeLabel')?.value.trim();
-    if (!label) { this.toast('Enter a name!'); return; }
-    const color = document.getElementById('biomeColor')?.value || '#2a3d2a';
-    const id = "bio_" + Math.random().toString(36).slice(2, 7);
-    this.state.customBiomes.push({ id, label, color, icon: '' });
-    this._refreshCaches();
-    
-    // Restore footer
-    const footer = document.querySelector('#materialModal .modal-footer');
-    if (footer) footer.innerHTML = `<button class="btn" onclick="App.closeMaterialEditor()">Cancel</button><button class="btn btn-primary" onclick="App.submitNewMaterial()">Add Material</button>`;
-    const header = document.querySelector('#materialModal .modal-title');
-    if (header) header.textContent = 'New Material';
-
-    this.closeMaterialEditor();
-    this.renderBlueprint();
-    this.triggerAutoSave();
-    this.toast(' ' + label + ' added!');
-  },
-
   // -- WIDGET ADD MATERIAL / OBJECT (toast overlay) --
   showWidgetAddMaterial() {
     const el = document.getElementById('toast');
@@ -3266,12 +3474,14 @@ ${allLis}
   },
 
   submitNewBiome() {
+    if (!this._checkCap(this.state.customBiomes, 'customBiomes', 'custom biomes')) return;
     const name = document.getElementById('biomeName')?.value.trim();
-    const color = document.getElementById('biomeColor')?.value || '#3a4d3a';
+    const color = _safeColor(document.getElementById('biomeColor')?.value || '#3a4d3a', '#3a4d3a');
     if (!name) { this.toast('Enter a biome name!'); return; }
     const id = "bm_" + Math.random().toString(36).slice(2, 7);
     const modSource = (document.getElementById('biomeMod')?.value || '').trim();
     this.state.customBiomes.push({ id, label: name, color, icon: '', modSource });
+    this._refreshCaches();
     this.closeBiomeEditor();
     this.renderBlueprintSidebar();
     this.triggerAutoSave();
