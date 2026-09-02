@@ -2788,11 +2788,18 @@ ipcMain.handle('export-blueprint-xml', async (_, defaultName, xml) => {
 });
 ipcMain.handle('import-blueprint-xml', async () => {
   const fs = require('fs');
+  const maxBlueprintXmlBytes = 16 * 1024 * 1024;
   const opts = { title: 'Import Blueprint XML', filters: [{ name: 'Blueprint XML', extensions: ['xml'] }], properties: ['openFile'] };
   try { const d = blueprintsDir(); if (fs.existsSync(d)) opts.defaultPath = d; } catch (e) { /* default */ }
   const result = await dialog.showOpenDialog(win, opts);
   if (result.canceled || !result.filePaths || !result.filePaths[0]) return null;
-  try { const xml = fs.readFileSync(result.filePaths[0], 'utf-8'); return { ok: true, xml, filePath: result.filePaths[0] }; }
+  try {
+    const stat = fs.statSync(result.filePaths[0]);
+    if (!stat.isFile()) return { ok: false, error: 'The selected path is not a file.' };
+    if (stat.size > maxBlueprintXmlBytes) return { ok: false, error: 'Blueprint XML is larger than the 16 MB safety limit.' };
+    const xml = fs.readFileSync(result.filePaths[0], 'utf-8');
+    return { ok: true, xml, filePath: result.filePaths[0] };
+  }
   catch (e) { return { ok: false, error: e.message }; }
 });
 

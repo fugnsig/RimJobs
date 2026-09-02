@@ -518,7 +518,7 @@ Object.assign(App, {
           <div class="section-title section-title--sm">Narrative <span style="font-size:var(--f-xs); color:var(--text3); font-weight:400">(your ideology's story - lore, origins, tone)</span></div>
           <textarea placeholder="Describe your ideology - where it came from, what it believes, the story you want to tell…"
             oninput="App.state.ideology.narrative=this.value; App.triggerAutoSave()"
-            style="width:100%; box-sizing:border-box; min-height:72px; max-height:260px; resize:vertical; background:var(--surface3); color:var(--text); border:1px solid var(--border-med); border-radius:var(--radius-sm); padding:10px 12px; font-size:var(--f-sm); font-family:inherit; line-height:1.55">${_escapeHtml(ideo.narrative || '')}</textarea>
+            style="width:100%; box-sizing:border-box; min-height:72px; max-height:260px; resize:vertical; background:var(--surface3); color:var(--text); border:1px solid var(--border-med); border-radius:var(--radius-sm); padding:10px 12px; font-size:var(--f-sm); font-family:inherit; line-height:1.55">${_escapeHtml(_unityRichToPlainText(ideo.narrative || ''))}</textarea>
         </div>
 
         <div class="ideology-memes-impact-grid ${memesOpen ? '' : 'memes-collapsed'}"
@@ -1230,26 +1230,27 @@ Object.assign(App, {
             </details></div>
 
             <div><strong style="color:var(--text)">Blueprints</strong><br>
-            Draw colony layouts on a resizable grid across three layers, floors, structures, and power conduits (wires render as connected lines). Use Point mode for single tiles or Box mode for filled rectangles. Left-click draws, right-click erases.
+            Draw colony layouts on an adaptive grid across three layers: floors, structures, and power conduits. Wires render as connected lines. Use Point mode for single tiles or Box mode for filled rectangles. Left-click draws and right-click erases.
             <div style="margin-top:4px; padding-left:12px; border-left:2px solid var(--accent-glow)">
-              • <strong>Tools:</strong> Point, Box, Eraser, Eyedropper (or Alt+Click to pick the tile under the cursor), Grab (pick up and move a placed object), and Cut (lift a boxed region and place it elsewhere). Q and E rotate whatever you are placing, and F (or the Flip button) mirrors a held stamp, cut, or grabbed object horizontally, east and west facings swap so furniture lands on its true mirrored tiles, perfect for symmetric wings and killbox pairs.<br>
+              • <strong>Tools:</strong> Point, Box, Eraser, Eyedropper (or Alt+Click to pick the tile under the cursor), Grab (pick up and move a placed object), and Cut (lift a boxed region and place it elsewhere). Q and E rotate whatever you are placing, and F (or the Flip button) mirrors a held stamp, cut, or grabbed object horizontally. Right-click or Escape cancels a held cut or object and restores it to its original position.<br>
+              • <strong>Keyboard access:</strong> Focus the grid and use the arrow keys to select a tile. Space or Enter uses the active tool, Delete erases, and Escape cancels placement.<br>
               • <strong>Zoom:</strong> Use the zoom slider (50%-200%) to zoom in/out. The canvas scrolls when zoomed in.<br>
               • <strong>Materials &amp; Objects:</strong> Select from colour swatches. Use the + button to add custom materials or objects, and override any building's colour or shape from its swatch.<br>
               • <strong>Backgrounds:</strong> Pick a biome background colour (displayed with actual biome colours) or create custom ones.<br>
               • <strong>Room Tags:</strong> Label rooms (Bedroom, Kitchen, etc.) directly on the canvas.<br>
-              • <strong>Stamps:</strong> Select a region to save as a reusable stamp. Place it anywhere on the grid for repeated patterns (barracks, killboxes, etc.). Stamps and cuts snap to the thicker 11-tile gridlines by default; the <strong>Snap to thick gridlines</strong> toggle turns that off so you can place freely, tile by tile.<br>
+              • <strong>Stamps:</strong> Select a region to save as a reusable stamp. Floors, wires, furniture grouping, and facing are retained. Place it anywhere on the grid for repeated patterns such as barracks and killboxes. Stamps and cuts snap to the thicker 11-tile gridlines by default; the <strong>Snap to thick gridlines</strong> toggle turns that off so you can place freely, tile by tile.<br>
               • <strong>Bill of Materials:</strong> A live cost tally of every placed building, updated as you draw.<br>
-              • <strong>Library &amp; Export:</strong> Save layouts as prefabs, copy/import as JSON, export the canvas as a PNG or JPG image, or <strong>Export Game .xml</strong>, a file the in-game Blueprints mod can load directly (vanilla items only).<br>
-              • <strong>Import RimWorld Blueprints:</strong> Load a Blueprints-mod <code>.xml</code> export. Multi-cell furniture is placed on its true cells for every facing (matching the game's occupied-rect math), and the importer reads modded tile sizes from your installed mods.<br>
-              • <strong>Furniture rendering:</strong> A multi-cell piece (bed, table) is outlined as one linked unit rather than separate squares, and shows a single facing arrow (toggleable); hovering highlights the whole object. Force Replace lets a new placement overwrite what is under it.<br>
-              • <strong>Undo/Redo:</strong> Up to 200 steps of undo history (Ctrl+Z / Ctrl+Y).
+              • <strong>Library &amp; Export:</strong> Save layouts as prefabs, copy or import the grid as JSON, export the canvas as a PNG or JPG image, or <strong>Export Game .xml</strong>, a file the in-game Blueprints mod can load directly (vanilla items only). Grid JSON does not include custom swatch definitions, room tags, or the biome background.<br>
+              • <strong>Import RimWorld Blueprints:</strong> Load a Blueprints-mod <code>.xml</code> export up to 16 MB. Multi-cell furniture is placed on its true cells for every facing, matching the game's occupied-rectangle maths, and the importer reads modded tile sizes from your installed mods. Layouts are bounded to 512 by 512 tiles to protect renderer memory.<br>
+              • <strong>Furniture rendering:</strong> A multi-cell piece such as a bed or table is outlined as one linked unit rather than separate squares, and shows a single facing arrow (toggleable); hovering highlights the whole object. Overlapping furniture is blocked unless <strong>Force Replace</strong> is enabled, in which case the complete old object is removed before placement.<br>
+              • <strong>Undo/Redo:</strong> Up to 200 Blueprint actions, including layout replacement, can be undone with Ctrl+Z and restored with Ctrl+Y while the Blueprint tab is active.
             </div></div>
 
             <div><strong style="color:var(--text)">Journal</strong><br>
             Two sub-views for tracking your colony's story: <strong>Notes</strong> and <strong>Timeline</strong>. Switch between them with the toggle at the top.
             <div style="margin-top:4px; padding-left:12px; border-left:2px solid var(--accent-glow)">
-              • <strong>Notes:</strong> A scratchpad for colony plans, to-do lists, or reminders. Notes can be colour-coded (Slate, Amber, Green, Red, Blue) and pinned to the top. Each note has a title and body, all changes auto-save.<br>
-              • <strong>Timeline:</strong> A chronological event log for your colony. Record events by Quadrum, Day, and Year with categories (Raid, Recruit, Death, Build, Milestone, Trade, Custom). Filter by category, and events are sorted newest-first. Importing from a save file auto-logs an entry.
+              • <strong>Notes:</strong> A scratchpad for colony plans, to-do lists, or reminders. Notes can be colour-coded (Slate, Amber, Green, Red, Blue, Purple) and pinned to the top. Each note has a title and body, all changes auto-save.<br>
+              • <strong>Timeline:</strong> A chronological event log for your colony. Record and edit events by Quadrum, Day, and Year with categories (Raid, Recruit, Death, Build, Milestone, Trade, Custom). New events use the imported colony date when available. Filter by category, and events are sorted newest-first. Importing from a save file auto-logs an entry.
             </div></div>
 
             <div><strong style="color:var(--text)">Skills Web</strong><br>
@@ -1738,12 +1739,12 @@ Object.assign(App, {
 
   // -- JOURNAL TAB (Notes + Timeline) --
   NOTE_COLORS: [
-    { id: 'default', label: 'Slate',   bg: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.12)', text: '#e8e9eb' },
-    { id: 'amber',   label: 'Amber',   bg: 'rgba(232,168,56,0.10)',  border: 'rgba(232,168,56,0.35)',  text: '#e8c55a' },
-    { id: 'green',   label: 'Green',   bg: 'rgba(80,180,60,0.10)',   border: 'rgba(80,180,60,0.35)',   text: '#7de85a' },
-    { id: 'red',     label: 'Red',     bg: 'var(--p4-bg)',   border: 'var(--p4-border)',   text: 'var(--p4-txt)' },
-    { id: 'blue',    label: 'Blue',    bg: 'rgba(56,140,232,0.10)',  border: 'rgba(56,140,232,0.35)',  text: '#73b8f5' },
-    { id: 'purple',  label: 'Purple',  bg: 'rgba(160,80,220,0.10)',  border: 'rgba(160,80,220,0.35)',  text: '#c97af5' },
+    { id: 'default', label: 'Slate',  bg: 'var(--note-slate-bg)',  border: 'var(--note-slate-border)',  text: 'var(--note-slate-text)' },
+    { id: 'amber',   label: 'Amber',  bg: 'var(--note-amber-bg)',  border: 'var(--note-amber-border)',  text: 'var(--note-amber-text)' },
+    { id: 'green',   label: 'Green',  bg: 'var(--note-green-bg)',  border: 'var(--note-green-border)',  text: 'var(--note-green-text)' },
+    { id: 'red',     label: 'Red',    bg: 'var(--note-red-bg)',    border: 'var(--note-red-border)',    text: 'var(--note-red-text)' },
+    { id: 'blue',    label: 'Blue',   bg: 'var(--note-blue-bg)',   border: 'var(--note-blue-border)',   text: 'var(--note-blue-text)' },
+    { id: 'purple',  label: 'Purple', bg: 'var(--note-purple-bg)', border: 'var(--note-purple-border)', text: 'var(--note-purple-text)' },
   ],
 
   _noteColor(id) {
@@ -1793,7 +1794,7 @@ Object.assign(App, {
 
   updateNote(id, field, val) {
     const note = (this.state.notes || []).find(n => n.id === id);
-    if (!note) return;
+    if (!note || !['title', 'body'].includes(field)) return;
     note[field] = val;
     note.ts = Date.now();
     this.triggerAutoSave();
@@ -1809,7 +1810,7 @@ Object.assign(App, {
 
   setNoteColor(id, colorId) {
     const note = (this.state.notes || []).find(n => n.id === id);
-    if (!note) return;
+    if (!note || !this.NOTE_COLORS.some(c => c.id === colorId)) return;
     note.color = colorId;
     this.renderJournal();
     this.triggerAutoSave();
@@ -1827,28 +1828,31 @@ Object.assign(App, {
 
     const noteCard = (n) => {
       const col = this._noteColor(n.color);
+      const noteId = _escapeHtml(n.id);
       const colorDots = this.NOTE_COLORS.map(c =>
-        `<button title="${c.label}" onclick="App.setNoteColor('${n.id}', '${c.id}')"
-          style="width:14px;height:14px;border-radius:50%;border:2px solid ${n.color===c.id?'var(--text)':'transparent'};background:${c.border};cursor:pointer;padding:0;transition:all .15s;flex-shrink:0"></button>`
+        `<button type="button" class="journal-colour-btn" data-journal-action="note-colour"
+          data-note-id="${noteId}" data-colour-id="${c.id}" title="${c.label}"
+          aria-label="Set note colour to ${c.label}" aria-pressed="${n.color === c.id}"
+          style="background:${c.border}"><span aria-hidden="true">${n.color === c.id ? '&#10003;' : ''}</span></button>`
       ).join('');
 
       const dateStr = new Date(n.ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 
-      return `<div class="note-card" data-note-id="${n.id}"
+      return `<div class="note-card" data-note-id="${noteId}"
         style="background:${col.bg};border:1px solid ${col.border};border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;position:relative;transition:border-color .2s,box-shadow .2s">
         <div style="display:flex;align-items:center;gap:6px">
           <input class="note-title" placeholder="Note title…"
             value="${_escapeHtml(n.title)}"
-            oninput="App.updateNote('${n.id}', 'title', this.value)"
+            data-note-id="${noteId}" data-note-field="title" aria-label="Note title"
             style="flex:1;background:transparent;border:none;outline:none;font-family:inherit;font-size:calc(15px * var(--font-scale));font-weight:700;color:${col.text};padding:0;min-width:0">
-          <button onclick="App.toggleNotePin('${n.id}')" title="${n.pinned?'Unpin':'Pin'} note"
-            style="background:none;border:none;font-size:var(--f-base);cursor:pointer;opacity:${n.pinned?1:0.3};transition:opacity .15s;padding:2px;line-height:1"></button>
-          <button onclick="App.deleteNote('${n.id}')" title="Delete note"
-            style="background:none;border:none;font-size:calc(18px * var(--font-scale));cursor:pointer;color:var(--text3);line-height:1;padding:2px;transition:color .15s"
-            onmouseover="this.style.color='var(--p4-txt)'" onmouseout="this.style.color='var(--text3)'">&times;</button>
+          <button type="button" class="journal-icon-btn${n.pinned ? ' is-active' : ''}" data-journal-action="note-pin"
+            data-note-id="${noteId}" title="${n.pinned?'Unpin':'Pin'} note" aria-label="${n.pinned?'Unpin':'Pin'} note"
+            aria-pressed="${n.pinned}"><span aria-hidden="true">&#128204;</span></button>
+          <button type="button" class="journal-icon-btn journal-delete-btn" data-journal-action="note-delete"
+            data-note-id="${noteId}" title="Delete note" aria-label="Delete note">&times;</button>
         </div>
         <textarea class="note-body" placeholder="Write your note…"
-          oninput="App.updateNote('${n.id}', 'body', this.value); this.style.height='auto'; this.style.height=this.scrollHeight+'px'"
+          data-note-id="${noteId}" data-note-field="body" aria-label="Note body"
           style="background:transparent;border:none;outline:none;font-family:inherit;font-size:var(--f-sm);color:var(--text2);resize:none;line-height:1.65;padding:0;min-height:80px;overflow:hidden"
         >${_escapeHtml(n.body)}</textarea>
         <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid ${col.border};padding-top:8px;gap:8px">
@@ -1862,7 +1866,7 @@ Object.assign(App, {
     const unpinned = notes.filter(n => !n.pinned);
 
     const jv = this.state.journalView || 'notes';
-    const tabBtn = (id, label) => `<button class="btn btn-sm ${jv===id?'btn-accent':''}" onclick="App.setJournalView('${id}')" style="padding:6px 16px">${label}</button>`;
+    const tabBtn = (id, label) => `<button role="tab" aria-selected="${jv === id}" class="btn btn-sm ${jv===id?'btn-accent':''}" onclick="App.setJournalView('${id}')" style="padding:6px 16px">${label}</button>`;
 
     let content = '';
     if (jv === 'notes') {
@@ -1876,7 +1880,7 @@ Object.assign(App, {
         <div class="view-header">
           <div class="view-header-content">
             <h2 class="view-title">Colony Journal</h2>
-            <div style="display:flex; gap:6px; margin-top:6px">
+            <div role="tablist" aria-label="Journal view" style="display:flex; gap:6px; margin-top:6px">
               ${tabBtn('notes', 'Notes')}
               ${tabBtn('timeline', 'Timeline')}
             </div>
@@ -1891,6 +1895,8 @@ Object.assign(App, {
       </div>
     `;
 
+    this._bindJournalActions(container);
+
     // Auto-resize textareas to fit content
     if (jv === 'notes') {
       container.querySelectorAll('.note-body').forEach(ta => {
@@ -1898,6 +1904,32 @@ Object.assign(App, {
         ta.style.height = ta.scrollHeight + 'px';
       });
     }
+  },
+
+  _bindJournalActions(container) {
+    if (container._journalActionsBound) return;
+    container._journalActionsBound = true;
+    container.addEventListener('click', event => {
+      const control = event.target.closest?.('[data-journal-action]');
+      if (!control || !container.contains(control)) return;
+      const action = control.dataset.journalAction;
+      const noteId = control.dataset.noteId;
+      const eventId = control.dataset.eventId;
+      if (action === 'note-colour') this.setNoteColor(noteId, control.dataset.colourId);
+      else if (action === 'note-pin') this.toggleNotePin(noteId);
+      else if (action === 'note-delete') this.deleteNote(noteId);
+      else if (action === 'event-edit') this.editTimelineEvent(eventId);
+      else if (action === 'event-delete') this.deleteTimelineEvent(eventId);
+    });
+    container.addEventListener('input', event => {
+      const input = event.target.closest?.('[data-note-field]');
+      if (!input || !container.contains(input)) return;
+      this.updateNote(input.dataset.noteId, input.dataset.noteField, input.value);
+      if (input.classList.contains('note-body')) {
+        input.style.height = 'auto';
+        input.style.height = input.scrollHeight + 'px';
+      }
+    });
   },
 
   _renderNotesView(notes, pinned, unpinned, noteCard) {
@@ -1911,13 +1943,13 @@ Object.assign(App, {
     let html = '';
     if (pinned.length > 0) {
       html += `<div class="section-title section-title--sm">Pinned</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%, 320px),1fr));gap:var(--gap-md);margin-bottom:24px">
+        <div class="notes-grid" style="margin-bottom:24px">
           ${pinned.map(noteCard).join('')}
         </div>`;
     }
     if (unpinned.length > 0) {
       html += `${pinned.length > 0 ? '<div class="section-title section-title--sm">All Notes</div>' : ''}
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%, 320px),1fr));gap:var(--gap-md)">
+        <div class="notes-grid">
           ${unpinned.map(noteCard).join('')}
         </div>`;
     }
@@ -1930,8 +1962,8 @@ Object.assign(App, {
 
     // Filter pills
     const pills = `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px">
-      <button class="btn btn-sm ${filter==='all'?'btn-accent':''}" onclick="App.setTimelineCategoryFilter('all')" style="padding:4px 12px; font-size:var(--f-xs)">All</button>
-      ${TIMELINE_CATEGORIES.map(c => `<button class="btn btn-sm ${filter===c.id?'btn-accent':''}" onclick="App.setTimelineCategoryFilter('${c.id}')" style="padding:4px 12px; font-size:var(--f-xs); ${filter===c.id ? '' : 'border-color:'+c.color+'55; color:'+c.color}">${c.icon} ${c.label}</button>`).join('')}
+      <button class="btn btn-sm ${filter==='all'?'btn-accent':''}" aria-pressed="${filter === 'all'}" onclick="App.setTimelineCategoryFilter('all')" style="padding:4px 12px; font-size:var(--f-xs)">All</button>
+      ${TIMELINE_CATEGORIES.map(c => `<button class="btn btn-sm ${filter===c.id?'btn-accent':''}" aria-pressed="${filter === c.id}" onclick="App.setTimelineCategoryFilter('${c.id}')" style="padding:4px 12px; font-size:var(--f-xs); ${filter===c.id ? '' : 'border-color:'+c.color+'; color:'+c.color}">${c.icon} ${c.label}</button>`).join('')}
     </div>`;
 
     // Filter and sort (newest RimWorld date first)
@@ -1944,7 +1976,7 @@ Object.assign(App, {
 
     if (filtered.length === 0) {
       return pills + `<div style="text-align:center;padding:60px 20px;color:var(--text3);border:1px dashed var(--border-med);border-radius:12px">
-        <div style="font-weight:700;margin-bottom:6px;color:var(--text2)">${filter === 'all' ? 'No events logged yet' : 'No '+filter+' events'}</div>
+        <div style="font-weight:700;margin-bottom:6px;color:var(--text2)">${filter === 'all' ? 'No events logged yet' : 'No '+_escapeHtml((TIMELINE_CATEGORIES.find(c => c.id === filter) || {}).label || 'matching')+' events'}</div>
         <div style="font-size:var(--f-sm)">Record raids, recruits, deaths, milestones, and other colony events.</div>
         <button class="btn btn-accent" onclick="App.addTimelineEvent()" style="margin-top:16px">Log your first event</button>
       </div>`;
@@ -1953,6 +1985,7 @@ Object.assign(App, {
     const cards = filtered.map(e => {
       const cat = TIMELINE_CATEGORIES.find(c => c.id === e.category) || TIMELINE_CATEGORIES[TIMELINE_CATEGORIES.length - 1];
       const dateStr = `${QUADRUMS[(e.quadrum||1)-1]} ${e.day||1}, ${e.year||5500}`;
+      const eventId = _escapeHtml(e.id);
       return `<div class="timeline-card" style="display:flex; gap:12px; align-items:flex-start; background:var(--surface2); padding:12px 16px; border-radius:10px; border-left:4px solid ${cat.color}; position:relative">
         <div style="font-size:calc(20px * var(--font-scale)); flex-shrink:0; line-height:1; margin-top:2px" title="${cat.label}">${cat.icon}</div>
         <div style="flex:1; min-width:0">
@@ -1960,10 +1993,13 @@ Object.assign(App, {
             <span style="font-weight:700; color:var(--text)">${_escapeHtml(e.title)}</span>
             <span style="font-size:var(--f-xs); color:${cat.color}; font-weight:600">${cat.label}</span>
           </div>
-          <div style="font-size:var(--f-xs); color:var(--text3); margin-top:3px">${dateStr}</div>
+          <div style="font-size:var(--f-xs); color:var(--text3); margin-top:3px">${_escapeHtml(dateStr)}</div>
           ${e.description ? `<div style="font-size:var(--f-sm); color:var(--text2); margin-top:6px; line-height:1.5">${_escapeHtml(e.description)}</div>` : ''}
         </div>
-        <button class="pawn-del" onclick="App.deleteTimelineEvent('${e.id}')" title="Delete event" style="flex-shrink:0">&times;</button>
+        <div class="timeline-card-actions">
+          <button type="button" class="btn btn-sm" data-journal-action="event-edit" data-event-id="${eventId}" aria-label="Edit event">Edit</button>
+          <button type="button" class="journal-icon-btn journal-delete-btn" data-journal-action="event-delete" data-event-id="${eventId}" title="Delete event" aria-label="Delete event">&times;</button>
+        </div>
       </div>`;
     }).join('');
 
@@ -1972,30 +2008,59 @@ Object.assign(App, {
   },
 
   setJournalView(view) {
-    this.state.journalView = view;
+    this.state.journalView = ['notes', 'timeline'].includes(view) ? view : 'notes';
     this.renderJournal();
   },
 
   setTimelineCategoryFilter(cat) {
-    this.state.timelineCategoryFilter = cat;
+    this.state.timelineCategoryFilter = cat === 'all' || TIMELINE_CATEGORIES.some(c => c.id === cat) ? cat : 'all';
     this.renderJournal();
   },
 
   addTimelineEvent() {
     if (!this.state.timeline) this.state.timeline = [];
     if (!this._checkCap(this.state.timeline, 'timeline', 'timeline events')) return;
-    // Build a form modal for adding an event
-    const cats = TIMELINE_CATEGORIES.map(c => `<option value="${c.id}">${c.icon} ${c.label}</option>`).join('');
-    const quads = QUADRUMS.map((q, i) => `<option value="${i+1}">${q}</option>`).join('');
-    // Default to the current raid day if available, otherwise a reasonable default
-    const defYear = 5500;
-    const defDay = 1;
+    this._openTimelineEventModal(null);
+  },
 
-    this.showCustomModal('Log Colony Event', `
+  editTimelineEvent(id) {
+    const event = (this.state.timeline || []).find(item => item.id === id);
+    if (event) this._openTimelineEventModal(event);
+  },
+
+  _currentJournalDate() {
+    const meta = this.state.importMeta;
+    const metaQuadrum = meta && (Number.isInteger(Number(meta.quadrum))
+      ? Number(meta.quadrum)
+      : QUADRUMS.indexOf(meta.quadrum) + 1);
+    const metaYear = meta && Number(meta.year);
+    const metaDay = meta && Number(meta.day);
+    if (Number.isInteger(metaYear) && metaYear >= 1 && metaYear <= 99999
+      && Number.isInteger(metaQuadrum) && metaQuadrum >= 1 && metaQuadrum <= 4
+      && Number.isInteger(metaDay) && metaDay >= 1 && metaDay <= 15) {
+      return { year: metaYear, quadrum: metaQuadrum, day: metaDay };
+    }
+    const raidDays = Number(this.state.raid && this.state.raid.daysPassed);
+    if (typeof this._daysToQuadrum === 'function' && typeof this._raidCalDays === 'function'
+      && Number.isFinite(raidDays)) {
+      const date = this._daysToQuadrum(this._raidCalDays(Math.max(1, raidDays)));
+      return { year: date.year, quadrum: date.quadrumIdx + 1, day: date.day };
+    }
+    return { year: 5500, quadrum: 1, day: 1 };
+  },
+
+  _openTimelineEventModal(event) {
+    const current = event || { ...this._currentJournalDate(), category: 'custom', title: '', description: '' };
+    const cats = TIMELINE_CATEGORIES.map(c => `<option value="${c.id}"${current.category === c.id ? ' selected' : ''}>${c.icon} ${c.label}</option>`).join('');
+    const quads = QUADRUMS.map((q, i) => `<option value="${i+1}"${current.quadrum === i + 1 ? ' selected' : ''}>${q}</option>`).join('');
+    this._timelineEditingId = event ? event.id : null;
+
+    this.showCustomModal(event ? 'Edit Colony Event' : 'Log Colony Event', `
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
         <div style="grid-column:1/-1">
           <label class="editor-label">Event Title</label>
-          <input type="text" id="evt-title" class="skill-input" style="width:100%; text-align:left; padding:8px 12px" placeholder="e.g. First raid survived">
+          <input type="text" id="evt-title" class="skill-input" style="width:100%; text-align:left; padding:8px 12px" placeholder="e.g. First raid survived" value="${_escapeHtml(current.title)}" aria-describedby="evt-title-error">
+          <div id="evt-title-error" role="alert" style="display:none;color:var(--warn-txt);font-size:var(--f-xs);margin-top:4px">Enter an event title.</div>
         </div>
         <div>
           <label class="editor-label">Category</label>
@@ -2003,7 +2068,7 @@ Object.assign(App, {
         </div>
         <div>
           <label class="editor-label">Year</label>
-          <input type="number" id="evt-year" class="skill-input" style="width:100%; text-align:center" value="${defYear}">
+          <input type="number" id="evt-year" class="skill-input" style="width:100%; text-align:center" min="1" max="99999" value="${current.year}">
         </div>
         <div>
           <label class="editor-label">Quadrum</label>
@@ -2011,32 +2076,63 @@ Object.assign(App, {
         </div>
         <div>
           <label class="editor-label">Day (1-15)</label>
-          <input type="number" id="evt-day" class="skill-input" style="width:100%; text-align:center" value="${defDay}" min="1" max="15">
+          <input type="number" id="evt-day" class="skill-input" style="width:100%; text-align:center" value="${current.day}" min="1" max="15">
         </div>
         <div style="grid-column:1/-1">
           <label class="editor-label">Description (optional)</label>
-          <textarea id="evt-desc" class="skill-input" style="width:100%; min-height:60px; resize:vertical; padding:8px; font-family:inherit; text-align:left" placeholder="Details about the event..."></textarea>
+          <textarea id="evt-desc" class="skill-input" style="width:100%; min-height:60px; resize:vertical; padding:8px; font-family:inherit; text-align:left" placeholder="Details about the event...">${_escapeHtml(current.description)}</textarea>
         </div>
       </div>
-    `, 'Log Event').then(() => {
-      const title = document.getElementById('evt-title')?.value.trim();
-      if (!title) return;
-      const id = 'evt_' + Math.random().toString(36).slice(2, 9);
+    `, event ? 'Save Changes' : 'Log Event').catch(() => {}).finally(() => {
+      this._timelineEditingId = null;
+    });
+    const footer = document.getElementById('genericModalFooter');
+    if (footer) footer.innerHTML = `
+      <button class="btn" onclick="App._dismissModal(false)">Cancel</button>
+      <button class="btn btn-primary" onclick="App.submitTimelineEvent()">${event ? 'Save Changes' : 'Log Event'}</button>
+    `;
+    setTimeout(() => document.getElementById('evt-title')?.focus(), 50);
+  },
+
+  submitTimelineEvent() {
+    const titleInput = document.getElementById('evt-title');
+    const title = titleInput?.value.trim();
+    const titleError = document.getElementById('evt-title-error');
+    if (!title) {
+      if (titleInput) titleInput.setAttribute('aria-invalid', 'true');
+      if (titleError) titleError.style.display = 'block';
+      titleInput?.focus();
+      return;
+    }
+    titleInput.removeAttribute('aria-invalid');
+    if (titleError) titleError.style.display = 'none';
+    const currentDate = this._currentJournalDate();
+    const categoryValue = document.getElementById('evt-cat')?.value;
+    const category = TIMELINE_CATEGORIES.some(c => c.id === categoryValue) ? categoryValue : 'custom';
+    const yearValue = Number.parseInt(document.getElementById('evt-year')?.value, 10);
+    const quadrumValue = Number.parseInt(document.getElementById('evt-quad')?.value, 10);
+    const dayValue = Number.parseInt(document.getElementById('evt-day')?.value, 10);
+    const values = {
+      title,
+      category,
+      year: Number.isInteger(yearValue) ? Math.max(1, Math.min(99999, yearValue)) : currentDate.year,
+      quadrum: Number.isInteger(quadrumValue) ? Math.max(1, Math.min(4, quadrumValue)) : currentDate.quadrum,
+      day: Number.isInteger(dayValue) ? Math.max(1, Math.min(15, dayValue)) : currentDate.day,
+      description: document.getElementById('evt-desc')?.value.trim() || '',
+      ts: Date.now()
+    };
+    const existing = this._timelineEditingId
+      ? (this.state.timeline || []).find(item => item.id === this._timelineEditingId)
+      : null;
+    if (existing) Object.assign(existing, values);
+    else {
       if (!this.state.timeline) this.state.timeline = [];
-      this.state.timeline.push({
-        id,
-        title,
-        category: document.getElementById('evt-cat')?.value || 'custom',
-        year: parseInt(document.getElementById('evt-year')?.value) || defYear,
-        quadrum: parseInt(document.getElementById('evt-quad')?.value) || 1,
-        day: Math.max(1, Math.min(15, parseInt(document.getElementById('evt-day')?.value) || 1)),
-        description: document.getElementById('evt-desc')?.value.trim() || '',
-        ts: Date.now()
-      });
-      this.renderJournal();
-      this.triggerAutoSave();
-      this.toast('Event logged!');
-    }).catch(() => {});
+      this.state.timeline.push({ id: 'evt_' + Math.random().toString(36).slice(2, 9), ...values });
+    }
+    this._dismissModal(true);
+    this.renderJournal();
+    this.triggerAutoSave();
+    this.toast(existing ? 'Event updated.' : 'Event logged!');
   },
 
   deleteTimelineEvent(id) {
