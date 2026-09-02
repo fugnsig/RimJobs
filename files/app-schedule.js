@@ -5,6 +5,18 @@
  * Auto-split from app.js - methods are assigned onto the App object.
  */
 Object.assign(App, {
+  _schedDisplayColour(type) {
+    const accessible = ['#999999', '#e69f00', '#cc79a7', '#0072b2', '#009e73', '#56b4e9', '#d55e00', '#f0e442'];
+    if (this.state.settings.colourBlindMode === true) {
+      return accessible[Math.abs(Math.trunc(Number(type)) || 0) % accessible.length];
+    }
+    return _safeColor(this.state.shiftColors[type], '#555555');
+  },
+
+  _schedMarker(type) {
+    return this.state.settings.colourBlindMode === true ? String(Number(type) + 1) : '';
+  },
+
   selectShiftType(idx) {
     this.state.selectedShiftType = idx;
     this.renderSchedule();
@@ -35,7 +47,8 @@ Object.assign(App, {
       const sum = document.getElementById('schedSummary');
       if (sum) sum.remove();
     }
-    const color = _safeColor(this.state.shiftColors[type], '#555555');
+    const color = this._schedDisplayColour(type);
+    const marker = this._schedMarker(type);
     const label = this.state.shiftTypes[type];
     // Try full-mode table rows first
     const rows = document.querySelectorAll('.sched-row');
@@ -44,13 +57,15 @@ Object.assign(App, {
       const cell = rows[pawnIdx].children[hour + 1]; // +1 for name column
       if (cell) {
         cell.style.background = color;
-        cell.title = `${p.name} ${hour}:00 - ${label}`;
+        cell.textContent = marker;
+        cell.title = `${_pawnDisplayName(p)} ${hour}:00 - ${label}`;
       }
     }
     // Also update strip-mode cells (widget)
     const stripCell = document.querySelector(`.sched-strip-cell[data-sched-pid="${pid}"][data-sched-hour="${hour}"]`);
     if (stripCell) {
       stripCell.style.background = color;
+      stripCell.textContent = marker;
       stripCell.title = `${hour}:00 - ${label}`;
     }
     // Update actives row
@@ -80,15 +95,16 @@ Object.assign(App, {
   },
 
   autoOptimizeSchedules() {
-    // Keep the rationale report so the grid can explain *why* it chose these hours.
+    Perf.start('scheduler.optimize');
+    Perf._activeOp = 'scheduler';
     const contextMap = this._c7PawnContextMap(
       this.state.pawns, this._c7EvidenceOptionsByPawn);
-    this._schedRationale = Engine.optimizeSchedules(
-      this.state.pawns, { contextMap });
-    // The shift planner piggy-backs ON the priorities table - it reads priorities
-    // (workload, critical cover) and must never write them. The auto-assign re-run
-    // that used to live here silently reset EVERY column, including manual choices.
-    this.renderSchedule();
+    this._schedRationale = Perf.measure('scheduler.execute', () =>
+      Engine.optimizeSchedules(this.state.pawns, { contextMap }));
+    this.renderSchedule(contextMap);
+    Perf._activeOp = null;
+    Perf.end('scheduler.optimize');
+    Perf.increment('scheduler.runs');
     this.toast('Shifts optimised around your priorities table.');
     this.triggerAutoSave();
   },
@@ -112,7 +128,9 @@ Object.assign(App, {
     // Drop any pawn that has since been deleted, so the summary can't list a
     // colonist who no longer exists. Refresh names in case they were renamed.
     const byId = new Map((this.state.pawns || []).map(p => [p.id, p]));
-    r.pawns = r.pawns.filter(rp => byId.has(rp.id)).map(rp => ({ ...rp, name: byId.get(rp.id).nickname || byId.get(rp.id).name || rp.name }));
+    r.pawns = r.pawns.filter(rp => byId.has(rp.id)).map(rp => ({
+      ...rp, name: _pawnDisplayName(byId.get(rp.id), rp.name)
+    }));
     if (!r.pawns.length) return '';
     const presetLabel = { panic: 'Panic (work-heavy)', chill: 'Chill (rest-heavy)', night: 'Night shift' };
 
@@ -123,7 +141,7 @@ Object.assign(App, {
     if (r.gapsRepaired) bits.push(`<strong>${r.gapsRepaired}</strong> coverage gap${r.gapsRepaired !== 1 ? 's' : ''} repaired`);
     bits.push(r.fullCoverage
       ? 'at least one colonist is awake every hour'
-      : '<span style="color:#e8a838">warning: some hours have nobody awake - add colonists or adjust sleep</span>');
+      : '<span style="color:var(--accent)">warning: some hours have nobody awake - add colonists or adjust sleep</span>');
 
     const rows = r.pawns.map(p => {
       let windows;
@@ -193,8 +211,9 @@ Object.assign(App, {
 
   _schedResilienceHTML(c7ContextMap) {
     if (!this.state.pawns.length) return '';
-    const contextMap = c7ContextMap || this._c7PawnContextMap(
-      this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const contextMap = c7ContextMap
+      ? (Perf._contextMapStats.requested++, Perf._contextMapStats.reused++, c7ContextMap)
+      : this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
     const schedMap = {};
     this.state.pawns.forEach(p => {
       if (Array.isArray(p.schedule) && p.schedule.length === 24) schedMap[p.id] = p.schedule;
@@ -224,12 +243,12 @@ Object.assign(App, {
         if (j.gapHours.length) {
           const ws = this._condenseHours(j.gapHours);
           const wStr = ws.map(w => this._schedFmtHour(w.from) + '-' + this._schedFmtHour(w.to)).join(', ');
-          lines.push(`<span style="color:#ef5350">No capable pawn awake ${wStr}</span>`);
+          lines.push(`<span style="color:var(--p4-txt)">No capable pawn awake ${wStr}</span>`);
         }
         if (j.fragileHours.length) {
           const ws = this._condenseHours(j.fragileHours);
           const wStr = ws.map(w => this._schedFmtHour(w.from) + '-' + this._schedFmtHour(w.to)).join(', ');
-          lines.push(`<span style="color:#e8a838">Single-pawn coverage ${wStr}</span>`);
+          lines.push(`<span style="color:var(--accent)">Single-pawn coverage ${wStr}</span>`);
         }
       }
 
@@ -264,7 +283,7 @@ Object.assign(App, {
       ? '<div style="font-size:var(--f-xs); color:var(--text3); margin-top:4px; font-style:italic">Some pawns have no schedule data - coverage is inferred, not confirmed.</div>' : '';
 
     return `<details class="sched-resilience" open style="max-width:940px; margin:0 auto var(--gap-sm); background:var(--surface); border:1px solid var(--border-med); border-radius:var(--radius-md); overflow:hidden">
-      <summary style="cursor:pointer; padding:var(--gap-sm) var(--gap-lg); font-weight:700; font-size:var(--f-sm); color:${resilience.gaps > 0 ? '#ef5350' : '#e8a838'}; list-style:none; background:var(--surface2); border-bottom:1px solid var(--border)">
+      <summary style="cursor:pointer; padding:var(--gap-sm) var(--gap-lg); font-weight:700; font-size:var(--f-sm); color:${resilience.gaps > 0 ? 'var(--p4-txt)' : 'var(--accent)'}; list-style:none; background:var(--surface2); border-bottom:1px solid var(--border)">
         Temporal resilience ${resilience.gaps > 0 ? '- ' + resilience.gaps + ' uncovered hour' + (resilience.gaps !== 1 ? 's' : '') : resilience.fragileHours > 0 ? '- ' + resilience.fragileHours + ' fragile hour' + (resilience.fragileHours !== 1 ? 's' : '') : ''}
       </summary>
       <div style="padding:var(--gap-sm) var(--gap-lg)">${sections}${inferredNote}</div>
@@ -302,14 +321,16 @@ Object.assign(App, {
 
   _schedFilter: '',
   renderSchedule(c7ContextMap) {
+    Perf.start('render.shiftPlanner');
     const container = document.getElementById('schedContainer');
-    if (!container) return;
+    if (!container) { Perf.end('render.shiftPlanner'); return; }
     const types = this.state.shiftTypes;
-    const colors = this.state.shiftColors;
+    const displayColors = types.map((_, index) => this._schedDisplayColour(index));
 
     // Filter pawns by schedule search
     const schedSearch = (this._schedFilter || '').toLowerCase();
-    const filteredPawns = this.state.pawns.filter(p => !schedSearch || (p.nickname || p.name).toLowerCase().includes(schedSearch));
+    const filteredPawns = this._sortPawns(this.state.pawns.filter(p => !schedSearch
+      || _pawnDisplayName(p, '').toLowerCase().includes(schedSearch)));
 
     // Calculate Coverage Heatmap (Any type EXCEPT Sleep is considered "Active")
     const sleepIdx = types.indexOf('Sleep');
@@ -328,7 +349,7 @@ Object.assign(App, {
       <div class="sched-legend-types">
         ${types.map((t,i) => `
           <div class="sched-legend-item${i === sel ? ' sched-legend-selected' : ''}" onclick="App.selectShiftType(${i})" style="cursor:pointer${i === sel ? ';outline:2px solid var(--accent);outline-offset:1px' : ''}">
-            <span class="sched-color-swatch" style="background:${colors[i]}"></span>
+            <span class="sched-color-swatch" style="background:${displayColors[i]}">${this._schedMarker(i)}</span>
             <span class="sched-type-label">${_escapeHtml(t)}</span>
           </div>`).join('')}
       </div>
@@ -343,10 +364,10 @@ Object.assign(App, {
         const sched = Array.isArray(p.schedule) && p.schedule.length===24 ? p.schedule : Array(24).fill(0);
         const cells = sched.map((type, hour) => {
           const t = (Number.isFinite(type) && type >= 0 && type < types.length) ? type : 0;
-          return `<div class="sched-strip-cell" data-sched-pid="${p.id}" data-sched-hour="${hour}" onmousedown="App._schedPaintStart('${p.id}',${hour},event)" onmouseover="App._schedPaintOver('${p.id}',${hour})" ontouchstart="App._schedPaintStart('${p.id}',${hour},event)" oncontextmenu="event.preventDefault()" title="${hour}:00 - ${_escapeHtml(types[t]||'?')}" style="background:${_safeColor(colors[t], '#555')}"></div>`;
+          return `<div class="sched-strip-cell" data-sched-pid="${p.id}" data-sched-hour="${hour}" onmousedown="App._schedPaintStart('${p.id}',${hour},event)" onmouseover="App._schedPaintOver('${p.id}',${hour})" ontouchstart="App._schedPaintStart('${p.id}',${hour},event)" oncontextmenu="event.preventDefault()" title="${hour}:00 - ${_escapeHtml(types[t]||'?')}" style="background:${displayColors[t]}">${this._schedMarker(t)}</div>`;
         }).join('');
         return `<div class="sched-strip-row">
-          <input class="sched-strip-name sched-name-input" value="${_escapeHtml(p.nickname || p.name)}" oninput="App.renameNickname('${p.id}', this.value)" ${p.downed ? 'style="color:var(--p4-txt)" title="Downed, incapacitated in bed; the game ignores their schedule until they recover"' : ''}>
+          <input class="sched-strip-name sched-name-input" value="${_escapeHtml(_pawnDisplayName(p, ''))}" oninput="App.renameNickname('${p.id}', this.value)" ${p.downed ? 'style="color:var(--p4-txt)" title="Downed, incapacitated in bed; the game ignores their schedule until they recover"' : ''}>
           <div class="sched-strip-bar" onmouseup="App._schedPainting=false" onmouseleave="App._schedPainting=false">${cells}</div>
         </div>`;
       } catch(err) { console.warn('Strip render error', p?.id, err); return ''; } }).join('');
@@ -387,7 +408,7 @@ Object.assign(App, {
             </tr></thead>
             <tbody>
               ${filteredPawns.map(p => { try { const isNightOwl = (p.traits||[]).includes('night_owl'); const xeno = this.getXeno(p.xenotype); const uvLvl = xeno.uvSensitivity||0; const sched = Array.isArray(p.schedule) && p.schedule.length===24 ? p.schedule : Array(24).fill(0); return `
-                <tr class="sched-row" draggable="true" ondragstart="App.handleTableDragStart(event, '${p.id}')" ondragover="App.handleTableDragOver(event)" ondragleave="App.handleTableDragLeave(event)" ondrop="App.handleTableDrop(event, '${p.id}')" ondragend="App.handleTableDragEnd(event)"><td class="sched-td-name"><span style="cursor:grab;color:var(--text3);font-size:calc(10px * var(--font-scale));margin-right:4px" title="Drag to reorder">⠿</span><input class="sched-name-input" value="${_escapeHtml(p.nickname||p.name)}" oninput="App.renameNickname('${p.id}', this.value)">${isNightOwl ? '<span style="font-size:calc(9px * var(--font-scale));color:var(--accent);margin-left:4px" title="Night Owl">NO</span>' : ''}${uvLvl >= 1 ? '<span style="font-size:calc(9px * var(--font-scale));color:#e8a838;margin-left:4px" title="'+(uvLvl===2?'Intense':'Mild')+' UV Sensitivity -schedule for night work">UV</span>' : ''}${p.downed ? '<span style="font-size:calc(9px * var(--font-scale));color:var(--p4-txt);font-weight:800;margin-left:4px" title="Downed, incapacitated in bed (from the save import). The game ignores their schedule and no jobs can be assigned until they recover.">DOWN</span>' : ''}</td>${sched.map((type, hour) => { const t = (Number.isFinite(type) && type >= 0 && type < types.length) ? type : 0; return `<td class="sched-td-cell" onmousedown="App._schedPaintStart('${p.id}',${hour},event)" onmouseover="App._schedPaintOver('${p.id}',${hour})" oncontextmenu="event.preventDefault()" title="${_escapeHtml(p.nickname||p.name)} ${hour}:00 - ${_escapeHtml(types[t]||'?')}" style="background:${_safeColor(colors[t], '#555555')}"></td>`; }).join('')}</tr>`; } catch(err) { console.warn('Sched render error', p?.id, err); return `<tr><td class="sched-td-name" style="color:#ef5350">! ${_escapeHtml(p?.nickname||p?.name||'?')}</td>${Array(24).fill('<td></td>').join('')}</tr>`; } }).join('')}
+                <tr class="sched-row" draggable="true" ondragstart="App.handleTableDragStart(event, '${p.id}')" ondragover="App.handleTableDragOver(event)" ondragleave="App.handleTableDragLeave(event)" ondrop="App.handleTableDrop(event, '${p.id}')" ondragend="App.handleTableDragEnd(event)"><td class="sched-td-name"><span style="cursor:grab;color:var(--text3);font-size:calc(10px * var(--font-scale));margin-right:4px" title="Drag to reorder">⠿</span><input class="sched-name-input" value="${_escapeHtml(_pawnDisplayName(p, ''))}" oninput="App.renameNickname('${p.id}', this.value)">${isNightOwl ? '<span style="font-size:calc(9px * var(--font-scale));color:var(--accent);margin-left:4px" title="Night Owl">NO</span>' : ''}${uvLvl >= 1 ? '<span style="font-size:calc(9px * var(--font-scale));color:var(--accent);margin-left:4px" title="'+(uvLvl===2?'Intense':'Mild')+' UV Sensitivity -schedule for night work">UV</span>' : ''}${p.downed ? '<span style="font-size:calc(9px * var(--font-scale));color:var(--p4-txt);font-weight:800;margin-left:4px" title="Downed, incapacitated in bed (from the save import). The game ignores their schedule and no jobs can be assigned until they recover.">DOWN</span>' : ''}</td>${sched.map((type, hour) => { const t = (Number.isFinite(type) && type >= 0 && type < types.length) ? type : 0; return `<td class="sched-td-cell" onmousedown="App._schedPaintStart('${p.id}',${hour},event)" onmouseover="App._schedPaintOver('${p.id}',${hour})" oncontextmenu="event.preventDefault()" title="${_escapeHtml(_pawnDisplayName(p, '?'))} ${hour}:00 - ${_escapeHtml(types[t]||'?')}" style="background:${displayColors[t]}">${this._schedMarker(t)}</td>`; }).join('')}</tr>`; } catch(err) { console.warn('Sched render error for pawn', p?.id, err); return `<tr><td class="sched-td-name" style="color:var(--p4-txt)">! ${_escapeHtml(_pawnDisplayName(p, '?'))}</td>${Array(24).fill('<td></td>').join('')}</tr>`; } }).join('')}
               <tr class="sched-row-actives">
                 <td class="sched-td-name" style="color:var(--accent)" title="Active pawns per hour - shows how many colonists are awake and working at each hour">Active</td>
                 ${hourlyCoverage.map(count => {
@@ -400,5 +421,6 @@ Object.assign(App, {
         </div>
       </div>`;
     }
+    Perf.end('render.shiftPlanner');
   },
 });

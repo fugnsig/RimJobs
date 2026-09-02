@@ -64,11 +64,16 @@ It started life as a way to *clearly and easily compare weapons and armour* (a 1
 - **Import your real colony:** read a RimWorld `.rws` save (colonists, skills, traits, health, relations, ideology, lifetime records) and auto-create any unknown modded content so nothing is lost.
 - **Offline mod scanning (the rabbit hole):** point it at your mods folder and it reads them entirely offline to pull in custom traits, passions, injuries and conditions, ideology memes and rituals, and weapon and armour stats, so even a 1200+ mod list is understood without a single online lookup. This part turned into a proper rabbit hole.
 - **Edit colonists and write back to your save:** change skill levels and passions (including modded passions from frameworks like Alpha Skills and Vanilla Skills Expanded, picked by name and preserved losslessly), add or remove any vanilla or modded trait (conflict-aware, no trait cap), add or remove injuries and conditions (with Heal all and Remove scars), edit relationships between colonists, and set ideology certainty. Then export a new `.rws` you can load straight back into RimWorld. It edits a fresh copy and never touches your original, and only the values you change are written, so the rest of the save is left exactly as it was.
-- **Work priorities and optimiser:** a full priority grid with click, scroll and keyboard editing, an auto-assigner that guarantees job coverage, and an optimiser that flags gaps, single-points-of-failure and weak assignments.
+- **Work priorities and optimiser:** a full priority grid with click, scroll and keyboard editing, and an optimiser that flags gaps, single-points-of-failure and weak assignments.
+  - Configurable 1-4 to 1-9 priority range with green-to-red colour scaling.
+  - Auto-assigner that guarantees job coverage across the selected range.
+  - Colony Focus choices (construction, farming, mining, etc.) to bias assignments towards a strategic goal.
 - **Armoury:** compare weapons, apparel and full kits side by side with a verdict, with DPS, range accuracy, armour-penetration and quality maths checked against RimWorld's own decompiled source rather than guessed at (the feature that started it all).
 - **Blueprints:** a grid layout designer with multi-cell furniture, correct footprints and facing, collision and force-replace, grab-and-move, reusable stamps, and Blueprints-mod XML import and export.
 - **Relations:** an interactive, force-directed social graph with romance compatibility, fight-risk and opinion estimates, including off-map and deceased relatives.
 - **Skills Web:** a dashboard with your colony's survival index, an interactive skill radar, and a list of labour bottlenecks.
+
+- **Accessibility:** a colour-blind friendly palette (blue-orange, with dash patterns on the relation graph so edges are distinguishable without colour alone) and an optional dyslexia-friendly font (OpenDyslexic), both independent of theme.
 
 Plus a **shift planner**, **ideology planner**, **raid-points calculator**, **journal and timeline**, and **records** browser, all documented in the in-app **Manual** tab.
 
@@ -79,6 +84,8 @@ Plus a **shift planner**, **ideology planner**, **raid-points calculator**, **jo
 - **Live save sync.** Watch the save file and refresh the overlay as you play, instead of re-importing each time.
 - **Wider mod coverage.** Keep broadening the offline parser as people report modded weapons, traits or conditions it reads oddly.
 - **Custom themes.** Recolour the overlay and accents to taste.
+- **Translations.** Support for other languages so the app is not English-only.
+- **In-game bridge mod.** A companion RimWorld mod that lets you push data like work priorities and shift schedules straight from the app into the running game, instead of going through a save file.
 - **Update checker.** A quiet nudge when a new version is out, since it is a portable exe with no auto-update.
 
 ## Install
@@ -94,6 +101,7 @@ Short answer: yes, and you can verify every line yourself.
 - **Open source.** The entire app is in this repo. If you would rather not trust a binary from a stranger, [build it yourself](#build-from-source).
 - **"Windows protected your PC"?** That is expected. RimJobs is not code-signed, so Microsoft SmartScreen flags it on first run. Code-signing certificates cost hundreds of dollars a year, and this is a free hobby project, so paying for one isn't on the cards. Click **More info**, then **Run anyway**, and scan it with whatever you like.
 - **Why administrator?** Only so it can capture its overlay hotkeys (like `F12`) while RimWorld holds keyboard focus. I think windowed RimWorld works around that, too.
+- **Crash resilience.** If the app hits a graphics driver issue or runs low on memory, it detects the problem and automatically switches to a safe rendering mode on the next launch so you are not stuck.
 
 ## Build from source
 
@@ -102,7 +110,7 @@ Requires [Node.js](https://nodejs.org/) (18+).
 ```bash
 npm install
 npm start          # run in dev
-npm run build      # produce a portable RimJobs.exe (electron-builder, Windows)
+npm run build      # produce a portable RimJobs.exe
 ```
 
 Built with Electron and a vanilla-JS renderer (no framework), [koffi](https://koffi.dev/) for the native Windows keyboard hook, and packaged with electron-builder.
@@ -134,8 +142,9 @@ RimJobs is free and always will be. If it saved you some hassle and you would li
 ## Acknowledgements
 
 - Game data is sourced from RimWorld's game files and the **[RimWorld Wiki](https://rimworldwiki.com)**.
-- **[RimSearcher](https://github.com/kearril/RimSearcher)** by kearril (MIT), an MCP server for fast searching of RimWorld's source code. The game-accurate combat, armour-penetration and raid maths in RimJobs were verified against RimWorld's decompiled source with it.
+- **[RimSearcher](https://github.com/kearril/RimSearcher)** by kearril (MIT), a tool for fast searching of RimWorld's source code. The game-accurate combat, armour-penetration and raid maths in RimJobs were verified against RimWorld's decompiled source with it.
 - Blueprint sharing is an offline take on the in-game **[Blueprints](https://steamcommunity.com/sharedfiles/filedetails/?id=708455313)** mod by **[Fluffy](https://steamcommunity.com/id/FluffyMods)**, whose work inspired the feature.
+- The optional **OpenDyslexic** typeface is copyright © 2019 Abbie Gonzalez and is distributed under the SIL Open Font License 1.1. OpenDyslexic is a Reserved Font Name.
 - Shoutouts to ferny and **[The Progression Modpack](https://steamcommunity.com/sharedfiles/filedetails/?id=3521297585)**, an inspiration for this project.
 
 RimJobs is a fan project and is not affiliated with, endorsed by, or associated with any of the mods, projects or people credited above.

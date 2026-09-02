@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win portable"
+    "build": "electron-builder --win portable --config.compression=store",
+    "build:compressed": "electron-builder --win portable"
   },
   "author": "Brodie Zotti",
   "license": "MIT",
@@ -26,8 +27,8 @@
       "preload.js",
       "keyboard-hook.js",
       "files/**/*",
-      "!files/.claude",
-      "!files/.claude/**",
+      "!files/.*",
+      "!files/.*/**",
       "node_modules/koffi/**/*"
     ],
     "portable": {

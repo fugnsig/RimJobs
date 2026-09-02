@@ -10,6 +10,86 @@ Object.assign(App, {
   _saveImportData: null, // Temp storage for parsed save data during import flow
   _lastSaveFilePath: null, // Path to last imported .rws file (for refresh)
 
+  // Read pawn role assignments from the exact ideology and precept that own
+  // them. Role precepts can be adjacent, including empty roles, so a forward
+  // character window can leak a pawn from the following role.
+  _extractIdeologyRoleAssignments(ideosText) {
+    const roleDefMap = typeof ROLE_DEF_TO_APP_ID !== 'undefined' ? ROLE_DEF_TO_APP_ID : {};
+    const directChild = (inner, tag) => {
+      const re = /<([a-zA-Z][\w.]*)(?:\s[^>]*?)?(\/?)>|<\/([a-zA-Z][\w.]*)>/g;
+      let match;
+      let depth = 0;
+      while ((match = re.exec(inner)) !== null) {
+        if (match[3]) { depth--; continue; }
+        if (match[2]) continue;
+        if (depth === 0 && match[1] === tag) {
+          const rest = inner.slice(re.lastIndex);
+          const close = rest.match(new RegExp(`^([\\s\\S]*?)<\\/${tag}>`));
+          return close ? close[1].trim() : '';
+        }
+        depth++;
+      }
+      return '';
+    };
+    const eachTopLevelLi = (text, callback) => {
+      const tagRe = /<li(?:\s[^>]*?)?>|<\/li>/g;
+      let match;
+      let depth = 0;
+      let liStart = -1;
+      while ((match = tagRe.exec(String(text || ''))) !== null) {
+        const tag = match[0];
+        if (tag.endsWith('/>')) continue;
+        if (tag === '</li>') {
+          depth--;
+          if (depth === 0 && liStart >= 0) {
+            const block = text.slice(liStart, tagRe.lastIndex);
+            callback(block.replace(/^<li(?:\s[^>]*?)?>/, '').replace(/<\/li>$/, ''));
+            liStart = -1;
+          }
+        } else {
+          if (depth === 0) liStart = match.index;
+          depth++;
+        }
+      }
+    };
+
+    const assignmentsByIdeology = {};
+    eachTopLevelLi(String(ideosText || ''), (ideologyInner) => {
+      const ideologyId = directChild(ideologyInner, 'id');
+      if (!ideologyId) return;
+      const assignments = {};
+      const precepts = directChild(ideologyInner, 'precepts');
+      if (precepts) {
+        eachTopLevelLi(precepts, (preceptInner) => {
+          const def = directChild(preceptInner, 'def');
+          if (!def || (!roleDefMap[def] && !/Role/i.test(def))) return;
+          const name = directChild(preceptInner, 'name');
+          const chosenPawns = directChild(preceptInner, 'chosenPawns');
+          const chosenPawn = directChild(preceptInner, 'chosenPawn');
+          const chosenXml = chosenPawns + chosenPawn;
+          for (const pawnMatch of chosenXml.matchAll(/<pawn>(Thing_\w+\d+)<\/pawn>/g)) {
+            assignments[pawnMatch[1]] = {
+              appRole: roleDefMap[def] || '',
+              def,
+              name,
+            };
+          }
+        });
+      }
+      assignmentsByIdeology['Ideo_' + ideologyId] = assignments;
+    });
+    return assignmentsByIdeology;
+  },
+
+  _saveRoleLabel(parsedPawn) {
+    if (!parsedPawn) return '';
+    const scanned = typeof this.getRoleByDefName === 'function'
+      ? this.getRoleByDefName(parsedPawn.ideoRoleDef) : null;
+    const fallback = this.allRoles && this.allRoles.find(role => role.id === parsedPawn.ideoRole);
+    return (scanned && scanned.label) || (fallback && fallback.label)
+      || parsedPawn.ideoRoleName || '';
+  },
+
   _refreshC4ActivePackageResolution() {
     this.state.activePackageResolution = typeof resolveC4ActivePackageIds === 'function'
       ? resolveC4ActivePackageIds(this.state.importMeta)
@@ -587,7 +667,7 @@ Object.assign(App, {
     for (const p of (this.state.pawns || [])) {
       if (!p.loadID) { skippedLocal++; continue; } // pawns created in-app aren't in the save
       const loc = this._locatePawnBlock(out, p.loadID);
-      if (!loc) { notFound.push(p.name || p.loadID); continue; }
+      if (!loc) { notFound.push(_pawnDisplayName(p, p.loadID)); continue; }
       const block = out.slice(loc.start, loc.end);
       let edited = this._applySkillEditsToBlock(block, p);
       edited = this._applyTraitEditsToBlock(edited, p._traitOps);
@@ -602,6 +682,45 @@ Object.assign(App, {
     return { text: out, count, notFound, skippedLocal };
   },
 
+  async _readSaveText(descriptor, onProgress) {
+    if (!descriptor || descriptor.error) {
+      throw new Error((descriptor && descriptor.error) || 'Save file is unavailable');
+    }
+    // Compatibility with older desktop builds and the parser test harness.
+    if (typeof descriptor.xml === 'string') return descriptor.xml;
+    if (!descriptor.filePath || !window.overlay?.readSaveFileChunk) {
+      throw new Error('This desktop build cannot stream save files');
+    }
+
+    const expectedBytes = Math.max(0, Number(descriptor.bytes) || 0);
+    const decoder = new TextDecoder('utf-8');
+    const chunks = [];
+    const chunkBytes = 1024 * 1024;
+    let offset = 0;
+    let nextProgress = 0.25;
+    while (!expectedBytes || offset < expectedBytes) {
+      const result = await window.overlay.readSaveFileChunk(descriptor.filePath, offset, chunkBytes);
+      if (!result || result.error) throw new Error((result && result.error) || 'Save read failed');
+      const raw = result.data;
+      const bytes = raw instanceof Uint8Array
+        ? raw
+        : (raw && Array.isArray(raw.data) ? Uint8Array.from(raw.data) : new Uint8Array(raw || 0));
+      if (!result.bytesRead || !bytes.length) break;
+      chunks.push(decoder.decode(bytes, { stream: true }));
+      offset += result.bytesRead;
+      const total = expectedBytes || Number(result.totalBytes) || 0;
+      if (total && offset / total >= nextProgress) {
+        if (onProgress) await onProgress(offset, total);
+        nextProgress += 0.25;
+      }
+    }
+    chunks.push(decoder.decode());
+    const text = chunks.join('');
+    chunks.length = 0;
+    if (expectedBytes && offset < expectedBytes) throw new Error('Save file ended before all bytes were read');
+    return text;
+  },
+
   async exportEditedSave() {
     if (!this._lastSaveFilePath) { this.toast('Import a RimWorld save first.'); return; }
     if (!window.overlay?.readSaveFile || !window.overlay?.exportEditedSave) {
@@ -611,8 +730,8 @@ Object.assign(App, {
     let original;
     try {
       const res = await window.overlay.readSaveFile(this._lastSaveFilePath);
-      if (!res || res.error || !res.xml) { this.toast('Could not read the original save. Has it moved or been deleted?'); return; }
-      original = res.xml;
+      if (!res || res.error) { this.toast('Could not read the original save. Has it moved or been deleted?'); return; }
+      original = await this._readSaveText(res);
     } catch (e) { this.toast('Failed to read the original save: ' + (e.message || 'error')); return; }
 
     let built;
@@ -648,26 +767,55 @@ Object.assign(App, {
     }
   },
 
-  // Open and parse a RimWorld save. The loading + mod-label scan run behind a
-  // NON-BLOCKING toast so you can keep using the app; the modal only opens for
-  // the (interactive) pawn-review step, or to show an error.
+  // Open and parse a RimWorld save. Loading runs behind a non-blocking toast so
+  // you can keep using the app; the modal only opens for the interactive review
+  // step, or to show an error.
   async importSaveFile() {
     let xml;
     let importWealth = null;
+    this._saveImportData = null;
+    this._ghostStepShown = false;
+    this._pendingImportMode = null;
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+      this._saveBeforeImportWasPending = true;
+    }
+    this._saveImportRequested = true;
+    const importStartedAt = Date.now();
+    const probe = async (eventName, details) => {
+      try { if (this._crashProbe) await this._crashProbe(eventName, details); } catch (_) {}
+    };
+    await probe('save.import-start');
     try {
+      await probe('save.import-picker-open');
       const result = await window.overlay.openSaveFile();
-      if (!result) return; // cancelled
-      xml = result.xml;
+      if (!result) {
+        this._saveImportRequested = false;
+        if (this._saveBeforeImportWasPending) {
+          this._saveBeforeImportWasPending = false;
+          this.triggerAutoSave();
+        }
+        await probe('save.import-cancelled');
+        return;
+      }
       importWealth = result.wealth || null; // colony wealth decoded in main (may be null)
+      await probe('save.import-file-descriptor', { saveBytes: result.bytes || 0, hasWealth: !!importWealth });
+      xml = await this._readSaveText(result, async (bytesRead, totalBytes) => {
+        await probe('save.import-read-progress', { bytesRead, totalBytes });
+      });
       if (result.filePath) this._lastSaveFilePath = result.filePath;
+      await probe('save.import-file-received', { saveBytes: xml.length, hasWealth: !!importWealth });
     } catch (e) {
+      this._saveImportRequested = false;
+      await probe('save.import-open-failed', { message: e && e.message });
       this._showSaveImportError("Failed to open file. Make sure you're running the desktop app.", e);
       return;
     }
-    if (!xml) return;
+    if (!xml) { this._saveImportRequested = false; return; }
     // Lock out other scans/imports while this one loads (release once it reaches
     // the interactive review; the review itself only writes state on confirm).
-    if (this._acquireIO && !this._acquireIO('Save import')) return;
+    if (this._acquireIO && !this._acquireIO('Save import')) { this._saveImportRequested = false; return; }
 
     const showT = (m) => { try { this._showScanToast && this._showScanToast('Importing save'); this._updateScanToast && this._updateScanToast(0, 0, m); } catch (_) {} };
     const closeT = (m, err) => { try { this._closeScanToast && this._closeScanToast(m, err); } catch (_) {} };
@@ -676,29 +824,37 @@ Object.assign(App, {
       await new Promise(r => setTimeout(r, 0)); // let the toast paint before the sync parse
 
       try {
-        this._saveImportData = this.parseSaveFile(xml);
+        await probe('save.import-parse-start', { saveBytes: xml.length });
+        Perf._activeOp = 'save.import';
+        this._saveImportData = await Perf.measureAsync('save.import', () => this.parseSaveFile(xml));
         if (importWealth && this._saveImportData.meta) this._saveImportData.meta.wealth = importWealth;
+        await probe('save.import-parse-complete', {
+          elapsedMs: Date.now() - importStartedAt,
+          pawns: this._saveImportData.pawns.length,
+          ghostPawns: (this._saveImportData.ghostPawns || []).length
+        });
       } catch (e) {
+        await probe('save.import-parse-failed', { elapsedMs: Date.now() - importStartedAt, message: e && e.message });
         closeT('Parse failed', true);
         this._showSaveImportError('Failed to parse save file.', e);
         return;
+      } finally {
+        Perf._activeOp = null;
+        // The parsed import data is much smaller than the raw save. Drop the raw
+        // XML before any further renderer work so large saves can be reclaimed.
+        xml = null;
       }
 
       if (!this._saveImportData.pawns.length) {
+        await probe('save.import-no-colonists', { elapsedMs: Date.now() - importStartedAt });
         closeT('No colonists found', true);
         this._showSaveImportError('No colonist pawns found in this save file.', null);
         return;
       }
 
-      // Load def labels from game XMLs (async batched, keeps UI responsive).
-      if (!this._defLabels) {
-        if (window.overlay?.onDefLabelProgress) {
-          window.overlay.onDefLabelProgress(d => { try { this._updateScanToast && this._updateScanToast(d.done, d.total, `Resolving mod labels... ${d.done} / ${d.total} files`); } catch (_) {} });
-        }
-        try { await this._ensureDefLabels(); } catch (_) { /* offline / no install */ }
-      }
-
-      // Re-resolve storyteller label now that def labels are loaded.
+      // A full def-label scan can read hundreds of megabytes from large mod
+      // libraries. Never start it while a parsed save is resident. If labels
+      // were already loaded by another feature, use them without extra I/O.
       if (this._saveImportData && this._saveImportData.meta) {
         const m = this._saveImportData.meta;
         const resolved = this._defLabel(m.storyteller);
@@ -707,16 +863,27 @@ Object.assign(App, {
 
       closeT(`Save ready - ${this._saveImportData.pawns.length} colonist(s) to review.`, false);
     } catch (e) {
+      await probe('save.import-failed', { elapsedMs: Date.now() - importStartedAt, message: e && e.message });
       closeT('Import failed', true);
       this._showSaveImportError('Save import failed unexpectedly.', e);
       return;
     } finally {
       this._releaseIO && this._releaseIO();
+      this._saveImportRequested = false;
     }
 
     // Open the interactive review modal (lock already released).
-    document.getElementById('saveImportModal')?.classList.add('show');
-    this.renderSaveImportPreview();
+    try {
+      await probe('save.import-preview-start', { elapsedMs: Date.now() - importStartedAt });
+      document.getElementById('saveImportModal')?.classList.add('show');
+      this.renderSaveImportPreview();
+      await probe('save.import-preview-complete', { elapsedMs: Date.now() - importStartedAt });
+    } catch (e) {
+      await probe('save.import-preview-failed', { elapsedMs: Date.now() - importStartedAt, message: e && e.message });
+      this._showSaveImportError('Save parsed, but the import preview could not be displayed.', e);
+    } finally {
+      this._saveImportRequested = false;
+    }
   },
 
   // Show the save-import modal with an error message (shared by all failure paths).
@@ -751,7 +918,8 @@ Object.assign(App, {
     return cleaned.trim();
   },
 
-  parseSaveFile(xmlString) {
+  async parseSaveFile(xmlString) {
+    const _yield = () => new Promise(r => setTimeout(r, 0));
     const _tag = (block, tag) => {
       const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`));
       return m ? m[1].trim() : '';
@@ -870,6 +1038,8 @@ Object.assign(App, {
     }
     meta.colonyName = colonyName;
 
+    await _yield();
+
     // -- Build ideology name map (Ideo_N -> display name) --
     // Ideos live in <ideoManager><ideos> as depth-aware top-level <li> blocks.
     // The ideo's own name/id are DIRECT children (depth-1); a naive first-match
@@ -902,7 +1072,7 @@ Object.assign(App, {
           if (depth === 0 && liStart >= 0) {
             const liBlock = text.slice(liStart, tagRe.lastIndex);
             const inner = liBlock.replace(/^<li(?:\s[^>]*?)?>/, '').replace(/<\/li>$/, '');
-            fn(inner);
+            fn(inner, (liBlock.match(/^<li([^>]*)>/) || [])[1] || '');
             liStart = -1;
           }
         } else {
@@ -912,13 +1082,25 @@ Object.assign(App, {
       }
     };
 
+    // Follow the player's own faction reference, never the first <ideos> block
+    // or another faction's ideology. Faction relation lists contain nested li's.
+    let playerPrimaryIdeoRef = '';
+    if (fmMatch && playerFactionRef) {
+      _eachTopLevelLi(fmMatch[1], inner => {
+        if ('Faction_' + _directChild(inner, 'loadID') !== playerFactionRef) return;
+        playerPrimaryIdeoRef = _directChild(_directChild(inner, 'ideos'), 'primaryIdeo');
+      });
+    }
+
     const ideoNameMap = {};
+    let pawnRoleMapByIdeo = {};
     // Full per-ideology detail records, for the "all ideologies" browser modal.
     const allIdeologies = [];
     const ideoMgrMatch = xmlString.match(/<ideoManager>([\s\S]*?)<\/ideoManager>/);
     if (ideoMgrMatch) {
       const ideosInner = ideoMgrMatch[1].match(/<ideos>([\s\S]*?)<\/ideos>/);
       if (ideosInner) {
+        pawnRoleMapByIdeo = this._extractIdeologyRoleAssignments(ideosInner[1]);
         _eachTopLevelLi(ideosInner[1], (inner) => {
           const ideoId = _directChild(inner, 'id');
           if (!ideoId) return;
@@ -949,13 +1131,19 @@ Object.assign(App, {
 
           // Precepts (each top-level li: its own name + def appear first)
           const precepts = [];
+          const rituals = [];
           const preceptsBlock = _directChild(inner, 'precepts');
           if (preceptsBlock) {
-            _eachTopLevelLi(preceptsBlock, (pInner) => {
-              const pDef = (pInner.match(/<def>([^<]+)<\/def>/) || [])[1];
+            _eachTopLevelLi(preceptsBlock, (pInner, attributes) => {
+              const pDef = _directChild(pInner, 'def');
               if (!pDef) return;
-              const pName = (pInner.match(/<name>([^<]+)<\/name>/) || [])[1] || '';
-              precepts.push({ name: pName.trim(), def: pDef.trim() });
+              const pName = _directChild(pInner, 'name');
+              const pClass = (attributes.match(/\bClass="([^"]*)"/) || [])[1] || '';
+              const tipLabel = _directChild(pInner, 'tipLabelOverride');
+              precepts.push({ name: pName, def: pDef, class: pClass, tipLabel });
+              if (/^(?:[\w.]+\.)?Precept_Ritual$/.test(pClass)) {
+                rituals.push({ def: pDef, label: tipLabel || pName || _directChild(pInner, 'label') });
+              }
             });
           }
 
@@ -973,7 +1161,9 @@ Object.assign(App, {
             place,
             deities,
             memes,
-            precepts
+            precepts,
+            rituals,
+            type: /^true$/i.test(_directChild(inner, 'fluid')) ? 'fluid' : 'fixed',
           });
         });
       }
@@ -988,95 +1178,12 @@ Object.assign(App, {
       return fac ? label + ' (' + fac + ')' : label;
     }).join(', ');
 
-    // -- Parse player ideology (memes + precepts) --
-    const ideoData = { memes: [], precepts: [], name: '', style: '' };
-    // Find the player's ideo: look in <ideos> for <li Class="Ideo"> blocks
-    const ideosMatch = xmlString.match(/<ideos>([\s\S]*?)<\/ideos>/);
-    if (ideosMatch) {
-      // Split into individual Ideo entries
-      const ideoBlocks = [...ideosMatch[1].matchAll(/<li\s+Class="Ideo">([\s\S]*?)(?=<li\s+Class="Ideo">|$)/g)];
-      // Find the player ideo - it's the one referenced by the player faction,
-      // or the first one (player ideo is typically first)
-      let playerIdeoBlock = '';
-      for (const ib of ideoBlocks) {
-        const block = ib[1];
-        // Check if this ideo belongs to the player faction
-        if (playerFactionRef) {
-          const foundRef = block.includes(playerFactionRef);
-          if (foundRef) { playerIdeoBlock = block; break; }
-        }
-      }
-      // Fallback: use first ideo if no faction match
-      if (!playerIdeoBlock && ideoBlocks.length > 0) playerIdeoBlock = ideoBlocks[0][1];
+    // Use the same depth-aware records as the browser, including final precepts
+    // and plain <li> entries. Missing references stay unresolved, not guessed.
+    meta.ideology = allIdeologies.find(ideo => ideo.id === playerPrimaryIdeoRef)
+      || { memes: [], precepts: [], rituals: [], name: '', type: 'fixed' };
 
-      if (playerIdeoBlock) {
-        // Ideo name
-        ideoData.name = _tag(playerIdeoBlock, 'name') || '';
-
-        // Extract memes
-        const memesMatch = playerIdeoBlock.match(/<memes>([\s\S]*?)<\/memes>/);
-        if (memesMatch) {
-          ideoData.memes = [...memesMatch[1].matchAll(/<li>(.*?)<\/li>/g)].map(m => m[1]);
-        }
-
-        // Extract precepts (defName + current level/stage)
-        const preceptsMatch = playerIdeoBlock.match(/<precepts>([\s\S]*?)<\/precepts>/);
-        if (preceptsMatch) {
-          const pLis = [...preceptsMatch[1].matchAll(/<li\s+Class="([^"]*)">([\s\S]*?)(?=<li\s+Class="|<\/precepts>)/g)];
-          for (const pl of pLis) {
-            const pClass = pl[1];
-            const pBlock = pl[2];
-            const pDef = _tag(pBlock, 'def');
-            if (pDef) {
-              const tipLabel = _tag(pBlock, 'tipLabelOverride') || '';
-              ideoData.precepts.push({ def: pDef, class: pClass, tipLabel });
-            }
-          }
-        }
-        // Extract rituals from precepts (Precept_Ritual, Precept_RitualSeat classes)
-        if (preceptsMatch) {
-          const ritualLis = [...preceptsMatch[1].matchAll(/<li\s+Class="(Precept_Ritual[^"]*)">([\s\S]*?)(?=<li\s+Class="|<\/precepts>)/g)];
-          for (const rl of ritualLis) {
-            const rBlock = rl[2];
-            const rDef = _tag(rBlock, 'def');
-            const rLabel = _tag(rBlock, 'tipLabelOverride') || _tag(rBlock, 'label') || '';
-            if (rDef) {
-              ideoData.rituals = ideoData.rituals || [];
-              ideoData.rituals.push({ def: rDef, label: rLabel });
-            }
-          }
-        }
-      }
-    }
-    meta.ideology = ideoData;
-
-    // -- Parse ideology roles (pawn loadID -> role def) --
-    // Scan for each IdeoRole_ def and find the <chosenPawn>/<chosenPawns> pawn refs
-    // that follow it. Uses indexOf for speed on large (60MB+) save files.
-    const pawnRoleMap = {};
-    const ideoRoleDefMap = {
-      'IdeoRole_Leader': 'leader', 'IdeoRole_Moralist': 'guide',
-      'IdeoRole_MedicalSpecialist': 'medical', 'IdeoRole_ResearchSpecialist': 'research',
-      'IdeoRole_ShootingSpecialist': 'shooting', 'IdeoRole_MeleeSpecialist': 'melee',
-      'IdeoRole_ProductionSpecialist': 'production', 'IdeoRole_PlantsSpecialist': 'plants',
-      'IdeoRole_AnimalsSpecialist': 'animal', 'IdeoRole_MiningSpecialist': 'mining',
-    };
-    for (const [ideoDef, appRole] of Object.entries(ideoRoleDefMap)) {
-      const defTag = '<def>' + ideoDef + '</def>';
-      let pos = 0;
-      while (true) {
-        pos = xmlString.indexOf(defTag, pos);
-        if (pos < 0) break;
-        // Scan forward from this def for chosenPawn/chosenPawns pawn refs (within 2000 chars)
-        const scanEnd = Math.min(pos + 2000, xmlString.length);
-        const after = xmlString.slice(pos, scanEnd);
-        const pawnMatches = after.matchAll(/<pawn>(Thing_\w+\d+)<\/pawn>/g);
-        for (const pm of pawnMatches) {
-          pawnRoleMap[pm[1]] = appRole;
-        }
-        pos += defTag.length;
-      }
-    }
+    await _yield();
 
     // -- Find player pawns (regex on maps section only) --
     // Scans all <thing Class="Pawn"> entries, not just Humans, so modded races
@@ -1319,11 +1426,18 @@ Object.assign(App, {
         }
       }
 
-      // Parse colonist bar display order (playerSettings.displayOrder)
-      // RimWorld sorts the colonist bar by displayOrder (asc), then thingIDNumber (asc)
-      const playerSettingsMatch = block.match(/<playerSettings>([\s\S]*?)<\/playerSettings>/);
-      const displayOrderStr = playerSettingsMatch ? _tag(playerSettingsMatch[1], 'displayOrder') : '';
-      const displayOrder = displayOrderStr ? parseInt(displayOrderStr) : 999999;
+      // Parse colonist bar display order (playerSettings.displayOrder). RimWorld's
+      // Scribe_Values call supplies 0 as the load default when the field is absent
+      // inside an existing playerSettings block. A wholly missing block remains
+      // unresolved and is placed last, matching the runtime sentinel behaviour.
+      const playerSettingsBlocks = [...block.matchAll(/<playerSettings>([\s\S]*?)<\/playerSettings>/g)];
+      const playerSettingsData = playerSettingsBlocks.length > 0
+        ? playerSettingsBlocks[hasNestedPawn ? playerSettingsBlocks.length - 1 : 0][1] : '';
+      const displayOrderStr = playerSettingsData ? _tag(playerSettingsData, 'displayOrder') : '';
+      const parsedDisplayOrder = displayOrderStr === '' ? NaN : parseInt(displayOrderStr, 10);
+      const displayOrder = playerSettingsBlocks.length === 0
+        ? -9999999
+        : (Number.isFinite(parsedDisplayOrder) ? parsedDisplayOrder : 0);
       // Extract thingIDNumber from loadID (e.g. "Thing_Human12345" -> 12345)
       const thingIDMatch = (loadID || '').match(/(\d+)$/);
       const thingIDNumber = thingIDMatch ? parseInt(thingIDMatch[1]) : 999999;
@@ -1558,6 +1672,7 @@ Object.assign(App, {
     };
 
     for (let i = 0; i < pawnPositions.length; i++) {
+      if (i % 40 === 0 && i > 0) await _yield();
       const blockStart = pawnPositions[i];
       const shortEnd = (i + 1 < pawnPositions.length) ? pawnPositions[i + 1] : mapsText.length;
       const shortBlock = mapsText.slice(blockStart, shortEnd);
@@ -1602,9 +1717,12 @@ Object.assign(App, {
 
       // Parse all pawn fields via the shared parser, then add colony context.
       const fields = parsePawnFields(block, shortBlock, loadID);
+      const roleAssignment = (pawnRoleMapByIdeo[fields.ideoRef] || {})[loadID] || null;
       pawns.push({
         ...fields,
-        ideoRole: pawnRoleMap[loadID] || '',
+        ideoRole: roleAssignment ? roleAssignment.appRole : '',
+        ideoRoleDef: roleAssignment ? roleAssignment.def : '',
+        ideoRoleName: roleAssignment ? roleAssignment.name : '',
         selected: true,
         factionRef: factionMatch[1],
         factionName: factionNameMap[factionMatch[1]] || '',
@@ -1618,9 +1736,12 @@ Object.assign(App, {
       });
     }
 
-    // Sort pawns to match in-game colonist bar order
-    // RimWorld uses: displayOrder (asc), then thingIDNumber (asc) as tiebreaker
-    pawns.sort((a, b) => (a.displayOrder - b.displayOrder) || (a.thingIDNumber - b.thingIDNumber));
+    // Sort pawns to match the in-game colonist bar. Vanilla and Colony Groups
+    // both call PlayerPawnsDisplayOrderUtility.Sort, which compares displayOrder.
+    pawns.sort(_comparePawnGameOrder);
+    pawns.forEach((pawn, gameOrder) => { pawn.gameOrder = gameOrder; });
+
+    await _yield();
 
     // -- Resolve ghost pawns (off-map relatives referenced by relations) --
     const colonyLoadIDs = new Set(pawns.map(p => p.loadID).filter(Boolean));
@@ -1803,11 +1924,11 @@ Object.assign(App, {
         <input type="checkbox" ${p.selected ? 'checked' : ''} style="accent-color:var(--accent); margin-top:2px; pointer-events:none">
         <div style="flex:1; min-width:0">
           <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap">
-            <span style="font-weight:600; font-size:var(--f-sm)">${_escapeHtml(p.name)}</span>
+            <span style="font-weight:600; font-size:var(--f-sm)">${_escapeHtml(_pawnDisplayName(p))}</span>
             ${kindLabel}
             ${p.gender ? `<span style="font-size:calc(10px * var(--font-scale)); color:var(--text3)">${p.gender === 'Male' ? 'M' : 'F'}</span>` : ''}
             <span style="font-size:calc(10px * var(--font-scale)); color:var(--text3)">${_escapeHtml(this._cleanModName(p.xenotype))}</span>
-            ${p.ideoRole ? `<span style="font-size:calc(10px * var(--font-scale)); padding:1px 5px; background:var(--accent-soft); border-radius:3px; color:var(--accent)">${_escapeHtml((this.allRoles.find(r => r.id === p.ideoRole) || {}).label || p.ideoRole)}</span>` : ''}
+            ${this._saveRoleLabel(p) ? `<span style="font-size:calc(10px * var(--font-scale)); padding:1px 5px; background:var(--accent-soft); border-radius:3px; color:var(--accent)">${_escapeHtml(this._saveRoleLabel(p))}</span>` : ''}
             ${ageStr ? `<span style="font-size:calc(10px * var(--font-scale)); color:var(--text3)">${ageStr}</span>` : ''}
           </div>
           ${topSkills.length ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px">${skillChips}</div>` : '<div style="font-size:calc(11px * var(--font-scale)); color:var(--text3); margin-top:4px">No notable skills</div>'}
@@ -1821,12 +1942,13 @@ Object.assign(App, {
 
     const selectedCount = pawns.filter(p => p.selected).length;
     const hasExisting = this.state.pawns.length > 0;
+    const replacingImportedSave = hasExisting && !!(this.state.importMeta || this._lastSaveFilePath);
     footer.innerHTML = `
       <button class="btn btn-sm" onclick="App.closeSaveImport()">Cancel</button>
-      ${hasExisting ? `<button class="btn btn-sm" onclick="App.confirmSaveImport('replace')" ${selectedCount === 0 ? 'disabled' : ''} title="Remove all existing pawns and import the selected ones">
-        Replace All (${selectedCount})
+      ${hasExisting ? `<button class="btn btn-sm${replacingImportedSave ? ' btn-accent' : ''}" onclick="App.confirmSaveImport('replace')" ${selectedCount === 0 ? 'disabled' : ''} title="Re-read this save and replace the currently imported colony">
+        ${replacingImportedSave ? 'Replace Imported Save' : 'Replace All'} (${selectedCount})
       </button>` : ''}
-      <button class="btn btn-sm btn-accent" onclick="App.confirmSaveImport('add')" ${selectedCount === 0 ? 'disabled' : ''}>
+      <button class="btn btn-sm${replacingImportedSave ? '' : ' btn-accent'}" onclick="App.confirmSaveImport('add')" ${selectedCount === 0 ? 'disabled' : ''}>
         ${hasExisting ? 'Add' : 'Import'} ${selectedCount} Pawn${selectedCount !== 1 ? 's' : ''}
       </button>`;
   },
@@ -2010,10 +2132,15 @@ Object.assign(App, {
   // Step 1 of import: colonists are chosen in the preview. If off-map relatives
   // (ghosts) were found and could be resolved from the save, offer an optional
   // second step letting the user import them as pawn cards too. Otherwise finish.
-  confirmSaveImport(mode = 'add') {
+  async confirmSaveImport(mode = 'add') {
     if (!this._saveImportData) return;
     const selected = this._saveImportData.pawns.filter(p => p.selected);
     if (!selected.length) return;
+    if (this._crashProbe) await this._crashProbe('save.import-confirm-clicked', {
+      mode,
+      selectedPawns: selected.length,
+      ghostPawns: (this._saveImportData.ghostPawns || []).length
+    });
 
     // Offer the off-map relative step whenever ANY off-map relatives were
     // referenced, even if none could be fully resolved from the save. Resolved
@@ -2025,10 +2152,10 @@ Object.assign(App, {
       this.renderGhostImportStep();
       return;
     }
-    this._finishSaveImport(mode);
+    await this._finishSaveImport(mode);
   },
 
-  _finishSaveImport(mode = 'add') {
+  async _finishSaveImport(mode = 'add') {
     if (!this._saveImportData) return;
     const selected = this._saveImportData.pawns.filter(p => p.selected);
     if (!selected.length) return;
@@ -2037,6 +2164,11 @@ Object.assign(App, {
     // the same parsed-field shape as colonists, so they run through this same loop.
     const chosenGhosts = (this._saveImportData.ghostPawns || []).filter(g => g.resolved && g.importSelected);
     const toImport = selected.concat(chosenGhosts);
+    if (this._crashProbe) await this._crashProbe('save.import-apply-start', {
+      mode,
+      selectedPawns: selected.length,
+      selectedGhosts: chosenGhosts.length
+    });
     const importedGhostIds = new Set();
 
     // Replace mode: clear all existing pawns first
@@ -2186,6 +2318,7 @@ Object.assign(App, {
       // Store colonist bar order for "Game Order" sort
       pawn.displayOrder = p.displayOrder ?? 999999;
       pawn.thingIDNumber = p.thingIDNumber ?? 999999;
+      pawn.gameOrder = p.gameOrder ?? 999999;
 
       // Store gender
       if (p.gender) {
@@ -2297,10 +2430,14 @@ Object.assign(App, {
       }
       pawn.permissionSources = Array.isArray(p.permissionSources) ? p.permissionSources : [];
 
-      // Apply ideology role detected from save file
-      if (p.ideoRole) {
-        pawn.role = p.ideoRole;
-      }
+      // Apply ideology role detected from the pawn's current ideology. Unknown
+      // modded roles retain their identity but do not inherit a known role's gates.
+      const scannedRole = typeof this.getRoleByDefName === 'function'
+        ? this.getRoleByDefName(p.ideoRoleDef) : null;
+      pawn.role = scannedRole ? scannedRole.id : (p.ideoRole || 'none');
+      pawn.roleSource = 'save';
+      pawn.saveRoleDef = p.ideoRoleDef || '';
+      pawn.saveRoleName = p.ideoRoleName || '';
 
       // Apply backstories from save file
       if (p.childhood) {
@@ -2352,13 +2489,11 @@ Object.assign(App, {
     // Invalidate backstory cache since custom backstories may have been added
     this._invalidateBsCache();
 
-    // Reflect the in-game colonist bar order: every pawn from this save - newly added
-    // OR merged into an existing card - sorts by displayOrder then thingIDNumber,
-    // exactly as RimWorld orders the bar (Pawn_PlayerSettings.displayOrder). Hand-made
-    // pawns keep their relative order after the save's colonists (stable sort).
+    // Reflect the resolved in-game colonist bar order. Hand-made pawns keep their
+    // relative order after the save's colonists because Array.sort is stable.
     const saveOrder = new Map();
-    (this._saveImportData.pawns || []).forEach(sp => {
-      if (sp.loadID) saveOrder.set(sp.loadID, (sp.displayOrder != null ? sp.displayOrder : 999999) * 1e7 + (sp.thingIDNumber != null ? sp.thingIDNumber : 9999999));
+    (this._saveImportData.pawns || []).forEach((sp, index) => {
+      if (sp.loadID) saveOrder.set(sp.loadID, sp.gameOrder ?? index);
     });
     if (saveOrder.size) {
       this.state.pawns.sort((a, b) => {
@@ -2411,13 +2546,25 @@ Object.assign(App, {
     // "content from a mod not in this save" warning across the editors.
     this.state.saveModIdSet = new Set(this.state.importMeta.modIds);
     this._refreshC4ActivePackageResolution();
+    this._c4InvalidateSnapshot();
 
+    if (this._crashProbe) await this._crashProbe('save.import-state-applied', {
+      totalPawns: this.state.pawns.length
+    });
+
+    this._saveBeforeImportWasPending = false;
     this.closeSaveImport();
     // Future-proof: surface any modded passion the imported pawns actually carry,
     // even if no matching def was scanned, so they show + are pickable + persist.
     if (typeof this._mergeSeenPassionsIntoCatalog === 'function') this._mergeSeenPassionsIntoCatalog();
     this._showRefreshBtn();
+    if (this._crashProbe) await this._crashProbe('save.import-render-start', {
+      totalPawns: this.state.pawns.length
+    });
     this.renderAll();
+    if (this._crashProbe) await this._crashProbe('save.import-render-complete', {
+      totalPawns: this.state.pawns.length
+    });
     this._updateLogoDate(); // switch the logo date line to the save's in-game time
     this.triggerAutoSave();
 
@@ -2443,7 +2590,7 @@ Object.assign(App, {
     }
 
     // Apply ideology from save (memes + precepts)
-    if (meta.ideology && meta.ideology.memes.length > 0) {
+    if (meta.ideology && Array.isArray(meta.ideology.memes)) {
       this._applyIdeoFromSave(meta.ideology);
     }
 
@@ -2465,105 +2612,52 @@ Object.assign(App, {
   },
 
   _applyIdeoFromSave(ideoData) {
-    if (!ideoData) return;
-    const ideo = this.state.ideology || { memes: [], precepts: {}, name: '' };
-
-    // Set ideology name
-    if (ideoData.name) ideo.name = ideoData.name;
-
-    // Map memes from save defNames to app meme IDs
-    const resolvedMemes = [];
-    for (const memeDef of ideoData.memes) {
-      // Try exact match in vanilla IDEO_MEMES
-      const vanilla = (typeof IDEO_MEMES !== 'undefined' ? IDEO_MEMES : []).find(m =>
-        m.id === memeDef.toLowerCase() ||
-        m.id === memeDef.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase() ||
-        m.label.replace(/\s+/g, '').toLowerCase() === memeDef.toLowerCase()
-      );
-      if (vanilla) {
-        resolvedMemes.push(vanilla.id);
-      } else {
-        // Auto-create custom meme from scanned def data or raw defName
-        const memeId = memeDef.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase().replace(/\s+/g, '_');
-        if (!this.state.customMemes) this.state.customMemes = {};
-        if (!this.state.customMemes[memeId]) {
-          const defEntry = this._defLabels ? this._defLabels[memeDef] : null;
-          this.state.customMemes[memeId] = {
-            label: defEntry ? defEntry.label.charAt(0).toUpperCase() + defEntry.label.slice(1) : this._cleanModName(memeDef),
-            category: defEntry && defEntry.memeCategory ? defEntry.memeCategory : 'Theme',
-            impact: defEntry && defEntry.memeImpact ? defEntry.memeImpact : 'medium',
-            color: '#888888',
-            description: defEntry && defEntry.desc ? defEntry.desc : 'Imported from save',
-            effects: {},
-            conflicts: defEntry && defEntry.memeConflicts ? defEntry.memeConflicts.map(c => c.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase()) : [],
-            modSource: 'Imported from save'
-          };
-        }
-        resolvedMemes.push(memeId);
-      }
+    if (!ideoData || !Array.isArray(ideoData.memes)) return;
+    // Replacement is a fresh plan. Empty imports must clear previous choices,
+    // rituals and narrative; never merge two colonies' ideology settings.
+    const ideo = { name: typeof ideoData.name === 'string' ? ideoData.name : '',
+      type: ideoData.type === 'fluid' ? 'fluid' : 'fixed', narrative: typeof ideoData.description === 'string' ? ideoData.description : '',
+      memes: [], precepts: {}, rituals: [], notes: '', unmappedPrecepts: [] };
+    this.state.customMemes = this.state.customMemes || {};
+    this.state.customRituals = this.state.customRituals || {};
+    const addDefinition = (kind, defName, label) => {
+      const store = kind === 'meme' ? this.state.customMemes : this.state.customRituals;
+      const legacyId = 'mod_' + kind + '_' + _sanId(defName);
+      const known = Object.values(store).find(value => value && value.defName === defName)
+        || (store[legacyId] && !store[legacyId].defName ? store[legacyId] : null);
+      const defEntry = this._defLabels && this._defLabels[defName];
+      const definition = known || { defName,
+        label: label || (defEntry && defEntry.label) || this._cleanModName(defName),
+        description: (defEntry && defEntry.desc) || 'Imported from save; effects not modelled.',
+        category: kind === 'meme' && ((defEntry && defEntry.memeCategory === 'Structure') || /^Structure_/.test(defName))
+          ? 'Structure' : 'Modded',
+        modSource: 'Imported from save', effects: {} };
+      return IdeologyData.mergeDefinition(store, kind, { ...definition, defName }, ideo);
+    };
+    for (const defName of ideoData.memes) {
+      if (typeof defName !== 'string' || !defName) continue;
+      const id = addDefinition('meme', defName);
+      if (!ideo.memes.includes(id)) ideo.memes.push(id);
     }
-    ideo.memes = resolvedMemes;
-
-    // Map precepts from save
-    for (const p of ideoData.precepts) {
-      // Try to match to vanilla IDEO_PRECEPT_DEFS by defName
-      const pId = p.def.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase().replace(/\s+/g, '_');
-      const vanillaDef = (typeof IDEO_PRECEPT_DEFS !== 'undefined' ? IDEO_PRECEPT_DEFS : []).find(pd =>
-        pd.id === pId || pd.id === p.def.toLowerCase()
-      );
-      if (vanillaDef) {
-        // Try to match the level/option by tipLabel or class name
-        if (p.tipLabel) {
-          const opt = vanillaDef.options.find(o => o.label.toLowerCase() === p.tipLabel.toLowerCase());
-          if (opt) ideo.precepts[vanillaDef.id] = opt.id;
-        }
-      } else {
-        // Auto-create custom precept entry
-        if (!this.state.customPrecepts) this.state.customPrecepts = {};
-        if (!this.state.customPrecepts[pId]) {
-          const defEntry = this._defLabels ? this._defLabels[p.def] : null;
-          this.state.customPrecepts[pId] = {
-            label: defEntry ? defEntry.label.charAt(0).toUpperCase() + defEntry.label.slice(1) : this._cleanModName(p.def),
-            description: defEntry && defEntry.desc ? defEntry.desc : 'Imported from save',
-            class: p.class || '',
-            modSource: 'Imported from save'
-          };
-        }
-      }
+    // The PreceptDef is the identity. Tip labels may be customised or translated.
+    for (const precept of Array.isArray(ideoData.precepts) ? ideoData.precepts : []) {
+      if (!precept || typeof precept.def !== 'string') continue;
+      if (/Role|Ritual/.test(precept.class || '') || /^IdeoRole_/.test(precept.def)
+          || (Array.isArray(ideoData.rituals) ? ideoData.rituals : []).some(r => r && r.def === precept.def)) continue;
+      const choice = IdeologyData.preceptChoice(precept.def);
+      if (choice) ideo.precepts[choice.id] = choice.option;
+      else ideo.unmappedPrecepts.push({ def: precept.def,
+        name: typeof precept.name === 'string' ? precept.name : '',
+        tipLabel: typeof precept.tipLabel === 'string' ? precept.tipLabel : '' });
     }
-
-    // Map rituals from save
-    if (ideoData.rituals && ideoData.rituals.length) {
-      const resolvedRituals = [];
-      const vanillaRituals = typeof IDEO_RITUALS !== 'undefined' ? IDEO_RITUALS : [];
-      for (const r of ideoData.rituals) {
-        const rId = r.def.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase().replace(/\s+/g, '_');
-        // Try match to vanilla
-        const vanilla = vanillaRituals.find(vr =>
-          vr.id === rId || vr.id === r.def.toLowerCase() ||
-          vr.label.toLowerCase() === (r.label || '').toLowerCase()
-        );
-        if (vanilla) {
-          if (!resolvedRituals.includes(vanilla.id)) resolvedRituals.push(vanilla.id);
-        } else {
-          // Auto-create custom ritual
-          if (!this.state.customRituals) this.state.customRituals = {};
-          if (!this.state.customRituals[rId]) {
-            const defEntry = this._defLabels ? this._defLabels[r.def] : null;
-            this.state.customRituals[rId] = {
-              label: r.label || (defEntry ? defEntry.label.charAt(0).toUpperCase() + defEntry.label.slice(1) : this._cleanModName(r.def)),
-              description: defEntry && defEntry.desc ? defEntry.desc : 'Imported from save',
-              category: 'Modded',
-              modSource: 'Imported from save'
-            };
-          }
-          if (!resolvedRituals.includes(rId)) resolvedRituals.push(rId);
-        }
-      }
-      ideo.rituals = resolvedRituals;
+    for (const ritual of Array.isArray(ideoData.rituals) ? ideoData.rituals : []) {
+      if (!ritual || typeof ritual.def !== 'string' || !ritual.def) continue;
+      const id = addDefinition('ritual', ritual.def, typeof ritual.label === 'string' ? ritual.label : '');
+      if (!ideo.rituals.includes(id)) ideo.rituals.push(id);
     }
-
     this.state.ideology = ideo;
+    this._ideoFxCache = null;
+    this._ideoFxKey = '';
   },
 
   _applyRaidFromSave(meta, pawnCount) {
@@ -2681,6 +2775,10 @@ Object.assign(App, {
     this._saveImportData = null;
     this._ghostStepShown = false;
     this._pendingImportMode = null;
+    if (this._saveBeforeImportWasPending) {
+      this._saveBeforeImportWasPending = false;
+      this.triggerAutoSave();
+    }
   },
 
   // Re-read the last imported save file and refresh all pawn data in-place
@@ -2705,7 +2803,7 @@ Object.assign(App, {
         this.toast('Could not read save file. Has it been moved or deleted?');
         return;
       }
-      xml = result.xml;
+      xml = await this._readSaveText(result);
       refreshWealth = result.wealth || null;
     } catch (e) {
       this.toast('Failed to read save file, ' + (e.message || 'unknown error'));
@@ -2715,7 +2813,7 @@ Object.assign(App, {
     let parsed;
     await new Promise(r => setTimeout(r, 0)); // let the toast paint before the sync parse
     try {
-      parsed = this.parseSaveFile(xml);
+      parsed = await this.parseSaveFile(xml);
       if (refreshWealth && parsed.meta) parsed.meta.wealth = refreshWealth;
     } catch (e) {
       this.toast('Failed to parse save file, ' + (e.message || 'unknown error'));
@@ -2731,22 +2829,25 @@ Object.assign(App, {
     const existingById = {};
     const existingByName = {};
     for (const p of this.state.pawns) {
-      if (p.thingID) existingById[p.thingID] = p;
-      existingByName[(p.nickname || p.name || '').toLowerCase()] = p;
+      if (p.loadID) existingById[p.loadID] = p;
+      existingByName[(p.name || '').toLowerCase()] = p;
     }
 
     let updated = 0, added = 0;
     for (const incoming of parsed.pawns) {
       // Try to match by thingID first, then by name
-      const match = (incoming.thingID && existingById[incoming.thingID])
-        || existingByName[(incoming.nickname || incoming.name || '').toLowerCase()];
+      const match = (incoming.loadID && existingById[incoming.loadID])
+        || existingByName[(incoming.name || '').toLowerCase()];
 
       if (match) {
-        // Update fields from save - preserve user-set fields like custom traits, role, mood preset
+        // Update fields from save while preserving explicit user role choices.
         match.name = incoming.name;
-        match.nickname = incoming.nickname || match.nickname;
-        match.firstName = incoming.firstName || match.firstName;
-        match.lastName = incoming.lastName || match.lastName;
+        match.nickname = incoming.nickname || '';
+        match.firstName = incoming.firstName || '';
+        match.lastName = incoming.lastName || '';
+        match.displayOrder = incoming.displayOrder ?? 999999;
+        match.thingIDNumber = incoming.thingIDNumber ?? 999999;
+        match.gameOrder = incoming.gameOrder ?? 999999;
         match.bioAge = incoming.bioAge;
         match.chronoAge = incoming.chronoAge;
         for (const factField of ['biologicalAgeFact', 'lifeStageDefFact',
@@ -2761,6 +2862,14 @@ Object.assign(App, {
         match.adulthood = incoming.adulthood || match.adulthood;
         match.factionName = incoming.factionName || match.factionName;
         match.ideoName = incoming.ideoName || match.ideoName;
+        match.saveRoleDef = incoming.ideoRoleDef || '';
+        match.saveRoleName = incoming.ideoRoleName || '';
+        if (match.roleSource !== 'user') {
+          const scannedRole = typeof this.getRoleByDefName === 'function'
+            ? this.getRoleByDefName(incoming.ideoRoleDef) : null;
+          match.role = scannedRole ? scannedRole.id : (incoming.ideoRole || 'none');
+          match.roleSource = 'save';
+        }
         match.royalTitle = incoming.royalTitle || match.royalTitle;
         if (incoming.records) match.records = incoming.records;
         if (incoming.equippedWeapon) match.equippedWeapon = incoming.equippedWeapon;
@@ -2820,7 +2929,12 @@ Object.assign(App, {
           id: this._uniqueId(),
           avatarIdx: Math.floor(Math.random() * AVATARS.length),
           traits: incoming.traits || [],
-          role: 'none',
+          role: ((typeof this.getRoleByDefName === 'function'
+            ? this.getRoleByDefName(incoming.ideoRoleDef) : null) || {}).id
+            || incoming.ideoRole || 'none',
+          roleSource: 'save',
+          saveRoleDef: incoming.ideoRoleDef || '',
+          saveRoleName: incoming.ideoRoleName || '',
           collapsed: true, // cards start collapsed by default; expanding is remembered per-pawn
           traitsCollapsed: true
         });
@@ -2846,7 +2960,7 @@ Object.assign(App, {
     // Mark missing pawns as gone and prompt the user
     if (missingPawns.length > 0) {
       missingPawns.forEach(p => { p._missingFromSave = true; });
-      const names = missingPawns.map(p => p.nickname || p.name).join(', ');
+      const names = missingPawns.map(p => _pawnDisplayName(p)).join(', ');
       const count = missingPawns.length;
       this.showConfirm(
         count + ' pawn' + (count > 1 ? 's' : '') + ' no longer in save',
@@ -2873,12 +2987,11 @@ Object.assign(App, {
       });
     }
 
-    // Reflect the in-game colonist bar order on refresh too (displayOrder then
-    // thingIDNumber, stable so hand-made pawns keep their place after the colonists).
+    // Reflect the resolved in-game colonist bar order on refresh too.
     const refreshOrder = new Map();
-    for (const ip of parsed.pawns) {
-      if (ip.loadID) refreshOrder.set(ip.loadID, (ip.displayOrder != null ? ip.displayOrder : 999999) * 1e7 + (ip.thingIDNumber != null ? ip.thingIDNumber : 9999999));
-    }
+    parsed.pawns.forEach((ip, index) => {
+      if (ip.loadID) refreshOrder.set(ip.loadID, ip.gameOrder ?? index);
+    });
     if (refreshOrder.size) {
       this.state.pawns.sort((a, b) => {
         const ka = a.loadID != null && refreshOrder.has(a.loadID) ? refreshOrder.get(a.loadID) : Infinity;
@@ -2909,9 +3022,8 @@ Object.assign(App, {
     if (Array.isArray(parsed.meta.allIdeologies)) {
       this.state.savedIdeologies = parsed.meta.allIdeologies;
     }
-    if (parsed.meta.ideology && (parsed.meta.ideology.memes || []).length) {
-      this.state.savedPlayerIdeo = parsed.meta.ideology;
-    }
+    this.state.savedPlayerIdeo = parsed.meta.ideology && (parsed.meta.ideology.memes || []).length
+      ? parsed.meta.ideology : null;
 
     // Invalidate caches
     this._invalidateBsCache();
@@ -2933,42 +3045,176 @@ Object.assign(App, {
 
   _normalizeLoadedState() {
     const asText = (v, fallback = '') => typeof v === 'string' ? v : fallback;
-    this.state.pawns = Array.isArray(this.state.pawns) ? this.state.pawns : [];
-    this.state.customJobs = Array.isArray(this.state.customJobs) ? this.state.customJobs : [];
-    this.state.customMaterials = Array.isArray(this.state.customMaterials) ? this.state.customMaterials : [];
-    this.state.customBiomes = Array.isArray(this.state.customBiomes) ? this.state.customBiomes : [];
-    this.state.customXenotypes = this.state.customXenotypes && typeof this.state.customXenotypes === 'object' && !Array.isArray(this.state.customXenotypes) ? this.state.customXenotypes : {};
-    this.state.customTraits = this.state.customTraits && typeof this.state.customTraits === 'object' && !Array.isArray(this.state.customTraits) ? this.state.customTraits : {};
-    this.state.customGenes = this.state.customGenes && typeof this.state.customGenes === 'object' && !Array.isArray(this.state.customGenes) ? this.state.customGenes : {};
-    if (!this.state.ideology || typeof this.state.ideology !== 'object') this.state.ideology = { memes: [], precepts: {}, name: '', type: 'fixed', rituals: [], notes: '' };
+    const isRecord = v => !!v && typeof v === 'object' && !Array.isArray(v);
+    const recordList = v => Array.isArray(v) ? v.filter(isRecord) : [];
+    const recordMap = v => {
+      if (!isRecord(v)) return {};
+      Object.keys(v).forEach(k => { if (!isRecord(v[k])) delete v[k]; });
+      return v;
+    };
+    const finite = (v, fallback = 0) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
+    const normaliseGear = (list, prefix, apparel = false) => {
+      const seen = new Set();
+      return recordList(list).map((item, index) => {
+        let id = asText(item.id, prefix + '_' + index);
+        if (!id || seen.has(id)) id = prefix + '_' + index;
+        while (seen.has(id)) id += '_';
+        seen.add(id);
+        item.id = id;
+        item.name = asText(item.name, apparel ? 'Unnamed Item' : 'Unnamed Weapon');
+        item.modSource = asText(item.modSource, '');
+        item.type = apparel
+          ? (['armour', 'clothing', 'utility'].includes(item.type) ? item.type : 'armour')
+          : (item.type === 'melee' ? 'melee' : 'ranged');
+        const numericFields = apparel
+          ? ['armorSharp', 'armorBlunt', 'armorHeat', 'insulationCold', 'insulationHeat', 'mass',
+             'workToMake', 'movePenalty', 'moveSpeed', 'shieldMax', 'shieldRecharge',
+             'shieldLossPerDmg', 'charges', 'range', 'warmup', 'radius']
+          : ['damage', 'warmup', 'cooldown', 'burstCount', 'burstTicks', 'accuracyTouch',
+             'accuracyShort', 'accuracyMedium', 'accuracyLong', 'range', 'ap', 'stoppingPower', 'mass'];
+        numericFields.forEach(key => { item[key] = finite(item[key]); });
+        item.stuffCategories = Array.isArray(item.stuffCategories)
+          ? item.stuffCategories.filter(v => typeof v === 'string') : [];
+        if (apparel) {
+          if (item.layer === 'shell') item.layer = 'outer';
+          item.layer = asText(item.layer, item.type === 'utility' ? 'belt' : 'outer');
+          if (item.type === 'utility') item.layer = 'belt';
+          item.coverage = Array.isArray(item.coverage)
+            ? item.coverage.filter(v => typeof v === 'string') : [];
+          if (isRecord(item.statOffsets)) {
+            Object.keys(item.statOffsets).forEach(key => {
+              const value = Number(item.statOffsets[key]);
+              if (Number.isFinite(value)) item.statOffsets[key] = value;
+              else delete item.statOffsets[key];
+            });
+          } else delete item.statOffsets;
+        }
+        return item;
+      });
+    };
+    const normaliseLoadout = value => {
+      const loadout = isRecord(value) ? value : {};
+      if (!loadout.belt && typeof loadout.belt2 === 'string') loadout.belt = loadout.belt2;
+      delete loadout.belt2;
+      Object.keys(loadout).forEach(key => {
+        if (loadout[key] !== null && typeof loadout[key] !== 'string') loadout[key] = null;
+      });
+      return loadout;
+    };
+    this.state.pawns = recordList(this.state.pawns);
+    this.state.customJobs = recordList(this.state.customJobs);
+    this.state.customMaterials = recordList(this.state.customMaterials);
+    this.state.customBiomes = recordList(this.state.customBiomes);
+    this.state.customXenotypes = recordMap(this.state.customXenotypes);
+    this.state.customTraits = recordMap(this.state.customTraits);
+    this.state.customGenes = recordMap(this.state.customGenes);
+    this.state.traitCatalog = recordList(this.state.traitCatalog);
+    this.state.hediffCatalog = recordList(this.state.hediffCatalog);
+    this.state.relationCatalog = recordList(this.state.relationCatalog);
+    this.state.passionCatalog = recordList(this.state.passionCatalog);
+    this.state.scannedRoles = recordMap(this.state.scannedRoles);
+    this.state.defSources = isRecord(this.state.defSources) ? this.state.defSources : {};
+    this.state.geneColors = isRecord(this.state.geneColors) ? this.state.geneColors : {};
+    if (!isRecord(this.state.ideology)) this.state.ideology = { memes: [], precepts: {}, name: '', type: 'fixed', rituals: [], notes: '' };
     if (!Array.isArray(this.state.ideology.memes)) this.state.ideology.memes = [];
-    if (!this.state.ideology.precepts || typeof this.state.ideology.precepts !== 'object') this.state.ideology.precepts = {};
+    this.state.ideology.memes = [...new Set(this.state.ideology.memes.filter(v => typeof v === 'string'))];
+    if (!isRecord(this.state.ideology.precepts)) this.state.ideology.precepts = {};
     if (!this.state.ideology.type) this.state.ideology.type = 'fixed';
     if (!Array.isArray(this.state.ideology.rituals)) this.state.ideology.rituals = [];
+    this.state.ideology.rituals = [...new Set(this.state.ideology.rituals.filter(v => typeof v === 'string'))];
+    this.state.ideology.unmappedPrecepts = recordList(this.state.ideology.unmappedPrecepts)
+      .filter(p => typeof p.def === 'string');
+    for (const key of ['name', 'narrative']) {
+      if (typeof this.state.ideology[key] !== 'string') this.state.ideology[key] = '';
+    }
     if (typeof this.state.ideology.notes !== 'string') this.state.ideology.notes = '';
-    this.state.customBuildings = this.state.customBuildings && typeof this.state.customBuildings === 'object' && !Array.isArray(this.state.customBuildings) ? this.state.customBuildings : {};
-    this.state.customBackstories = this.state.customBackstories && typeof this.state.customBackstories === 'object' && !Array.isArray(this.state.customBackstories) ? this.state.customBackstories : {};
-    this.state.backstoryStories = this.state.backstoryStories && typeof this.state.backstoryStories === 'object' && !Array.isArray(this.state.backstoryStories) ? this.state.backstoryStories : {};
-    this.state.backstoryStoriesByTitle = this.state.backstoryStoriesByTitle && typeof this.state.backstoryStoriesByTitle === 'object' && !Array.isArray(this.state.backstoryStoriesByTitle) ? this.state.backstoryStoriesByTitle : {};
-    this.state.prostheticEfficiency = this.state.prostheticEfficiency && typeof this.state.prostheticEfficiency === 'object' && !Array.isArray(this.state.prostheticEfficiency) ? this.state.prostheticEfficiency : {};
-    this.state.weapons = (Array.isArray(this.state.weapons) ? this.state.weapons : []).filter(x => x && typeof x === 'object');
-    this.state.apparel = (Array.isArray(this.state.apparel) ? this.state.apparel : []).filter(x => x && typeof x === 'object');
-    this.state.apparel.forEach(a => { if (a.layer === 'shell') a.layer = 'outer'; });
-    this.state.notes = Array.isArray(this.state.notes) ? this.state.notes : [];
-    this.state.timeline = Array.isArray(this.state.timeline) ? this.state.timeline : [];
-    this.state.savedIdeologies = Array.isArray(this.state.savedIdeologies) ? this.state.savedIdeologies : [];
-    this.state.manualRelations = Array.isArray(this.state.manualRelations) ? this.state.manualRelations : [];
-    this.state.ghostPawns = Array.isArray(this.state.ghostPawns) ? this.state.ghostPawns : [];
+    this.state.customBuildings = recordMap(this.state.customBuildings);
+    this.state.customBackstories = recordMap(this.state.customBackstories);
+    this.state.backstoryStories = isRecord(this.state.backstoryStories) ? this.state.backstoryStories : {};
+    this.state.backstoryStoriesByTitle = isRecord(this.state.backstoryStoriesByTitle) ? this.state.backstoryStoriesByTitle : {};
+    this.state.prostheticEfficiency = isRecord(this.state.prostheticEfficiency) ? this.state.prostheticEfficiency : {};
+    this.state.weapons = normaliseGear(this.state.weapons, 'weapon');
+    this.state.apparel = normaliseGear(this.state.apparel, 'apparel', true);
+    this.state.notes = recordList(this.state.notes);
+    this.state.timeline = recordList(this.state.timeline);
+    this.state.savedIdeologies = recordList(this.state.savedIdeologies);
+    this.state.manualRelations = recordList(this.state.manualRelations);
+    this.state.ghostPawns = recordList(this.state.ghostPawns);
+    this.state.priorities = recordMap(this.state.priorities);
+    this.state.catLabels = isRecord(this.state.catLabels) ? this.state.catLabels : {};
+    this.state.shiftTypes = Array.isArray(this.state.shiftTypes)
+      ? this.state.shiftTypes.filter(v => typeof v === 'string') : [];
+    this.state.shiftColors = Array.isArray(this.state.shiftColors)
+      ? this.state.shiftColors.map(v => _safeColor(v, '#555555')) : [];
+    if (!this.state.shiftTypes.length) this.state.shiftTypes = ['Anything', 'Work', 'Recreation', 'Sleep', 'Meditate', 'Clean'];
+    while (this.state.shiftColors.length < this.state.shiftTypes.length) this.state.shiftColors.push('#555555');
+    this.state.blueprints = recordMap(this.state.blueprints);
+    this.state.roomLabels = recordMap(this.state.roomLabels);
+    this.state.prefabs = recordMap(this.state.prefabs);
+    this.state.stamps = recordMap(this.state.stamps);
+    this.state.materials = recordList(this.state.materials);
+    this.state.savedLoadouts = recordList(this.state.savedLoadouts).map((preset, index) => ({
+      ...preset,
+      name: asText(preset.name, 'Loadout ' + (index + 1)),
+      slots: normaliseLoadout(preset.slots),
+    }));
+    this.state.deletedMaterials = Array.isArray(this.state.deletedMaterials)
+      ? this.state.deletedMaterials.filter(v => typeof v === 'string') : [];
+    this.state.deletedPresetBuildings = Array.isArray(this.state.deletedPresetBuildings)
+      ? this.state.deletedPresetBuildings.filter(v => typeof v === 'string') : [];
+    this.state.deletedPresetBiomes = Array.isArray(this.state.deletedPresetBiomes)
+      ? this.state.deletedPresetBiomes.filter(v => typeof v === 'string') : [];
+    this.state.loadout = normaliseLoadout(this.state.loadout);
+    this.state.loadoutB = normaliseLoadout(this.state.loadoutB);
+    this.state.loadoutCoverageRegion = ['torso', 'head', 'arms', 'hands', 'legs', 'feet']
+      .includes(this.state.loadoutCoverageRegion) ? this.state.loadoutCoverageRegion : 'torso';
+    this.state.comparisonData = isRecord(this.state.comparisonData) ? this.state.comparisonData : {};
+    this.state.comparisonData.a = isRecord(this.state.comparisonData.a) ? this.state.comparisonData.a : {};
+    this.state.comparisonData.b = isRecord(this.state.comparisonData.b) ? this.state.comparisonData.b : {};
+    for (const key of ['targetSharp', 'targetBlunt']) {
+      this.state.comparisonData[key] = Math.max(0, Math.min(200, finite(this.state.comparisonData[key])));
+    }
+    this.state.customMemes = recordMap(this.state.customMemes);
+    this.state.customRituals = recordMap(this.state.customRituals);
+    for (const store of [this.state.customMemes, this.state.customRituals]) {
+      Object.keys(store).forEach(id => Object.assign(store[id], IdeologyData.sanitiseDefinition(store[id], id)));
+    }
+    this._ideoFxCache = null;
+    this.state.settings = isRecord(this.state.settings) ? this.state.settings : {};
+    this.state.settings.colourBlindMode = this.state.settings.colourBlindMode === true;
+    this.state.settings.dyslexiaFontMode = this.state.settings.dyslexiaFontMode === true;
+    const windowOpacity = Number(this.state.settings.windowOpacity);
+    this.state.settings.windowOpacity = Number.isFinite(windowOpacity)
+      ? Math.max(0.3, Math.min(1, windowOpacity)) : 1;
+    this.state.settings.transparencyLocked = this.state.settings.transparencyLocked === true;
+    this.state.settings.strategicFocusId = typeof this.state.settings.strategicFocusId === 'string'
+      ? this.state.settings.strategicFocusId : '';
+    this.state.settings.strategicFocusStrength = this.state.settings.strategicFocusStrength === 'strong'
+      ? 'strong' : 'normal';
+    const priorityMax = Math.max(4, Math.min(9, Math.trunc(Number(this.state.settings.manualPriorityMax)) || 4));
+    this.state.settings.manualPriorityMax = priorityMax;
+    if (typeof PriorityScale !== 'undefined') {
+      if (typeof PriorityScale.setManualMax === 'function') PriorityScale.setManualMax(priorityMax);
+      else PriorityScale.manualMax = priorityMax;
+    }
+    this.state.uiScroll = isRecord(this.state.uiScroll) ? this.state.uiScroll : {};
+    this.state.colonyName = asText(this.state.colonyName, '');
+    this.state.biome = asText(this.state.biome, 'none');
+    this.state.activeTab = asText(this.state.activeTab, 'work');
     if (!this.state.precepts || typeof this.state.precepts !== 'object' || Array.isArray(this.state.precepts)) this.state.precepts = {};
     if (!this.state.raid || typeof this.state.raid !== 'object' || Array.isArray(this.state.raid)) this.state.raid = {};
+    this.state.raid.customStorytellers = recordList(this.state.raid.customStorytellers);
     if (this.state.importMeta && (typeof this.state.importMeta !== 'object' || Array.isArray(this.state.importMeta))) this.state.importMeta = null;
     // Rebuild the save-modlist lookup (it isn't serialised) so the mod-not-in-save
     // warnings survive a reload, not only a fresh import.
     this.state.saveModIdSet = new Set((this.state.importMeta && Array.isArray(this.state.importMeta.modIds)) ? this.state.importMeta.modIds : []);
     this._refreshC4ActivePackageResolution();
-    if (!this.state.defSources || typeof this.state.defSources !== 'object' || Array.isArray(this.state.defSources)) this.state.defSources = {};
+    if (typeof this._c4InvalidateSnapshot === 'function') this._c4InvalidateSnapshot();
     this.state.blueprintName = typeof this.state.blueprintName === 'string' ? this.state.blueprintName : '';
-    if (!this.state.buildingOverrides || typeof this.state.buildingOverrides !== 'object' || Array.isArray(this.state.buildingOverrides)) this.state.buildingOverrides = {};
+    this.state.buildingOverrides = recordMap(this.state.buildingOverrides);
     if (!this.state.blueprintCatCollapsed || typeof this.state.blueprintCatCollapsed !== 'object' || Array.isArray(this.state.blueprintCatCollapsed)) this.state.blueprintCatCollapsed = {};
 
     this.state.pawns.forEach((p, idx) => this._coercePawn(p, idx));
@@ -3038,28 +3284,29 @@ Object.assign(App, {
   // 24-slot schedule. Single source of truth - keep field list in sync here.
   _coercePawn(p, idx) {
     const asText = (v, fallback = '') => typeof v === 'string' ? v : fallback;
+    const isRecord = v => !!v && typeof v === 'object' && !Array.isArray(v);
+    const recordList = v => Array.isArray(v) ? v.filter(isRecord) : [];
     p.id = asText(p.id, Math.random().toString(36).slice(2, 9));
     p.name = asText(p.name, `Pawn ${(idx || 0) + 1}`);
     p.avatarBg = _safeColor(p.avatarBg || AVATARS[idx % AVATARS.length].bg);
     p.avatarColor = _safeColor(p.avatarColor || AVATARS[idx % AVATARS.length].color, '#ffffff');
-    p.skills = p.skills && typeof p.skills === 'object' ? p.skills : {};
-    p.passions = p.passions && typeof p.passions === 'object' ? p.passions : {};
+    p.skills = isRecord(p.skills) ? p.skills : {};
+    p.passions = isRecord(p.passions) ? p.passions : {};
     // Body def for the health editor; default Human (unknown races read as Human, the
     // safe default - only a non-Human value flips the editor into race-agnostic mode).
     p.bodyDef = (typeof p.bodyDef === 'string' && p.bodyDef) ? p.bodyDef : 'Human';
     p.raceDefName = (typeof p.raceDefName === 'string' && p.raceDefName) ? p.raceDefName : null;
     // Raw passion string per skill (lossless modded-passion round-trip). Backfill
     // from the buckets for any skill missing one, so the field is always complete.
-    p.passionDefs = (p.passionDefs && typeof p.passionDefs === 'object') ? p.passionDefs : {};
+    p.passionDefs = isRecord(p.passionDefs) ? p.passionDefs : {};
     if (typeof SKILLS !== 'undefined') SKILLS.forEach(s => {
       if (typeof p.passionDefs[s.id] !== 'string') {
         const b = (p.passions[s.id]) | 0; p.passionDefs[s.id] = b === 2 ? 'Major' : b === 1 ? 'Minor' : 'None';
       }
     });
-    p.rawSkillRecords = p.rawSkillRecords && typeof p.rawSkillRecords === 'object'
-      ? p.rawSkillRecords : {};
+    p.rawSkillRecords = isRecord(p.rawSkillRecords) ? p.rawSkillRecords : {};
     for (const [defName, raw] of Object.entries(p.rawSkillRecords)) {
-      if (!raw || typeof raw !== 'object') {
+      if (!isRecord(raw)) {
         delete p.rawSkillRecords[defName];
         continue;
       }
@@ -3078,11 +3325,9 @@ Object.assign(App, {
         ? raw.rawPassionIdentity : null;
       raw.parserCompleteness = ['complete', 'partial', 'unknown'].includes(raw.parserCompleteness)
         ? raw.parserCompleteness : 'unknown';
-      raw.provenance = raw.provenance && typeof raw.provenance === 'object'
-        ? raw.provenance : {};
+      raw.provenance = isRecord(raw.provenance) ? raw.provenance : {};
     }
-    p.skillRecordCatalogue = p.skillRecordCatalogue
-      && typeof p.skillRecordCatalogue === 'object'
+    p.skillRecordCatalogue = isRecord(p.skillRecordCatalogue)
       ? p.skillRecordCatalogue
       : { presence: 'unknown', completeness: 'unknown', provenance: {} };
     p.skillRecordCatalogue.presence = ['present', 'absent', 'unknown']
@@ -3092,9 +3337,8 @@ Object.assign(App, {
       .includes(p.skillRecordCatalogue.completeness)
       ? p.skillRecordCatalogue.completeness : 'unknown';
     p.incapable = Array.isArray(p.incapable) ? p.incapable : [];
-    p.permissionSources = Array.isArray(p.permissionSources) ? p.permissionSources : [];
-    p.currentStatusSources = p.currentStatusSources && typeof p.currentStatusSources === 'object'
-      ? p.currentStatusSources : null;
+    p.permissionSources = recordList(p.permissionSources);
+    p.currentStatusSources = isRecord(p.currentStatusSources) ? p.currentStatusSources : null;
     p.downed = p.downed === true;
     p.traits = Array.isArray(p.traits) ? p.traits : [];
     p.childhood = typeof p.childhood === 'string' ? p.childhood : '';
@@ -3102,18 +3346,22 @@ Object.assign(App, {
     p.factionName = typeof p.factionName === 'string' ? p.factionName : '';
     p.ideoName = typeof p.ideoName === 'string' ? p.ideoName : '';
     p.royalTitle = typeof p.royalTitle === 'string' ? p.royalTitle : '';
-    p.equippedWeapon = (p.equippedWeapon && typeof p.equippedWeapon === 'object') ? p.equippedWeapon : null;
-    p.wornApparel = Array.isArray(p.wornApparel) ? p.wornApparel : [];
-    p.records = (p.records && typeof p.records === 'object') ? p.records : null;
+    p.equippedWeapon = isRecord(p.equippedWeapon) ? p.equippedWeapon : null;
+    p.wornApparel = recordList(p.wornApparel);
+    p.records = isRecord(p.records) ? p.records : null;
     p.bio = typeof p.bio === 'string' ? p.bio : '';
-    p.health = Array.isArray(p.health) ? p.health : [];
-    p.relations = Array.isArray(p.relations) ? p.relations : [];
+    p.health = recordList(p.health);
+    p.relations = recordList(p.relations);
     p.loadID = typeof p.loadID === 'string' ? p.loadID : '';
+    p.role = typeof p.role === 'string' ? p.role : 'none';
+    p.roleSource = ['save', 'user'].includes(p.roleSource)
+      ? p.roleSource : (p.loadID ? 'save' : 'user');
+    p.saveRoleDef = typeof p.saveRoleDef === 'string' ? p.saveRoleDef : '';
+    p.saveRoleName = typeof p.saveRoleName === 'string' ? p.saveRoleName : '';
     p.geneDefIds = Array.isArray(p.geneDefIds) ? p.geneDefIds : [];
-    p.geneRuntimeFacts = Array.isArray(p.geneRuntimeFacts) ? p.geneRuntimeFacts : [];
-    p.traitRuntimeFacts = Array.isArray(p.traitRuntimeFacts) ? p.traitRuntimeFacts : [];
-    p.dlcActiveFacts = p.dlcActiveFacts && typeof p.dlcActiveFacts === 'object'
-      ? p.dlcActiveFacts : {};
+    p.geneRuntimeFacts = recordList(p.geneRuntimeFacts);
+    p.traitRuntimeFacts = recordList(p.traitRuntimeFacts);
+    p.dlcActiveFacts = isRecord(p.dlcActiveFacts) ? p.dlcActiveFacts : {};
     p.schedule = Array.isArray(p.schedule) && p.schedule.length === 24 ? p.schedule : Array(24).fill(0);
     // Clamp schedule values to valid range (0=sleep, 1=work, 2=joy, 3=anything)
     p.schedule = p.schedule.map(v => { const n = parseInt(v); return (Number.isFinite(n) && n >= 0 && n <= 3) ? n : 0; });
@@ -3168,6 +3416,7 @@ Object.assign(App, {
       relationCatalog: this.state.relationCatalog,
       passionCatalog: this.state.passionCatalog,
       defSources: this.state.defSources,
+      scannedRoles: this.state.scannedRoles || {},
       geneColors: this.state.geneColors,
       customGenes: this.state.customGenes,
       customJobs: this.state.customJobs,
@@ -3205,7 +3454,9 @@ Object.assign(App, {
       materials: this.state.materials || [],
       loadout: this.state.loadout,
       loadoutB: this.state.loadoutB,
+      loadoutCoverageRegion: this.state.loadoutCoverageRegion || 'torso',
       savedLoadouts: this.state.savedLoadouts || [],
+      comparisonData: this.state.comparisonData,
       manualRelations: this.state.manualRelations || [],
       ghostPawns: this.state.ghostPawns || [],
       customMemes: this.state.customMemes || {},
@@ -3218,47 +3469,96 @@ Object.assign(App, {
     };
   },
 
-  saveData() {
-    const json = JSON.stringify(this._buildSavePayload());
+  saveData(preparedJson) {
+    this._crashProbe('storage.serialise-start');
+    let json;
+    try {
+      json = typeof preparedJson === 'string'
+        ? preparedJson
+        : JSON.stringify(this._buildSavePayload());
+    } catch (error) {
+      this._crashProbe('storage.serialise-failed', { message: error.message });
+      console.warn('Save serialisation failed:', error);
+      this._saveFailed = true;
+      this._showSaveWarning();
+      return;
+    }
+    this._crashProbe('storage.serialise-complete', { chars: json.length });
     const savePath = this.state.settings.savePath;
+
+    const markSuccess = () => {
+      this._lastSaveTs = Date.now();
+      this._saveFailed = false;
+      this._hideSaveWarning();
+      this._updateSavePill();
+    };
+
+    const markFailure = (error) => {
+      console.warn('Save failed:', error);
+      this._saveFailed = true;
+      this._showSaveWarning();
+    };
 
     // File-based save (if path is configured)
     if (savePath && window.overlay?.saveToFile) {
-      window.overlay.saveToFile(savePath, json).then(result => {
+      this._crashProbe('storage.custom-file-save-start', { chars: json.length });
+      return window.overlay.saveToFile(savePath, json).then(result => {
         if (result.ok) {
-          this._lastSaveTs = Date.now();
-          this._saveFailed = false;
-          this._hideSaveWarning();
-          this._updateSavePill();
+          markSuccess();
+          this._crashProbe('storage.custom-file-save-complete', { chars: json.length });
         } else {
-          console.warn('File save failed:', result.error);
-          this._saveFailed = true;
-          this._showSaveWarning();
+          markFailure(result.error);
+          this._crashProbe('storage.custom-file-save-failed', { message: result.error });
         }
       }).catch(e => {
-        console.warn('File save error:', e);
-        this._saveFailed = true;
-        this._showSaveWarning();
+        markFailure(e);
+        this._crashProbe('storage.custom-file-save-failed', { message: e.message });
       });
-      // Also keep a lightweight localStorage copy for fast startup (settings + metadata only)
-      try { localStorage.setItem('rimjobs_meta', JSON.stringify({ savePath, colonyName: this.state.colonyName })); } catch(_) {}
-      return;
+    }
+
+    // Chromium localStorage compaction can become unstable when the same multi-megabyte
+    // state is written as both primary and backup. Large states use an app-managed file
+    // with backup rotation in the main process instead. Existing large localStorage data
+    // is migrated on its next save and remains available as a migration fallback.
+    const useInternalState = !!(window.overlay?.saveAppState
+      && (this._usesInternalState || json.length >= 1024 * 1024));
+    if (useInternalState) {
+      this._usesInternalState = true;
+      this._crashProbe('storage.internal-save-start', { chars: json.length });
+      return window.overlay.saveAppState(json).then(result => {
+        if (result && result.ok) {
+          markSuccess();
+          this._crashProbe('storage.internal-save-acknowledged', { chars: json.length });
+        } else {
+          const message = result && result.error ? result.error : 'Unknown internal save error';
+          markFailure(message);
+          this._crashProbe('storage.internal-save-failed', { message });
+        }
+        return result;
+      }).catch(error => {
+        markFailure(error);
+        this._crashProbe('storage.internal-save-failed', { message: error.message });
+        return { ok: false, error: error.message };
+      });
     }
 
     // localStorage save (default)
     try {
-      localStorage.setItem('rimjobs', json);
-      localStorage.setItem('rimjobs_backup', json);
-      this._lastSaveTs = Date.now();
-      if (this._saveFailed) {
-        this._saveFailed = false;
-        this._hideSaveWarning();
+      this._crashProbe('storage.local-save-start', { chars: json.length });
+      const current = localStorage.getItem('rimjobs');
+      if (current === json) {
+        markSuccess();
+        this._crashProbe('storage.local-save-skipped-unchanged', { chars: json.length });
+        return;
       }
-      this._updateSavePill();
+      const backup = localStorage.getItem('rimjobs_backup');
+      if (current && backup !== current) localStorage.setItem('rimjobs_backup', current);
+      localStorage.setItem('rimjobs', json);
+      markSuccess();
+      this._crashProbe('storage.local-save-complete', { chars: json.length });
     } catch(e) {
-      console.warn('Save failed:', e);
-      this._saveFailed = true;
-      this._showSaveWarning();
+      markFailure(e);
+      this._crashProbe('storage.local-save-failed', { message: e.message });
       // Offer to switch to file-based save
       if (!this._quotaPromptShown) {
         this._quotaPromptShown = true;
@@ -3296,8 +3596,8 @@ Object.assign(App, {
     if (document.getElementById('saveFailBanner')) return;
     const banner = document.createElement('div');
     banner.id = 'saveFailBanner';
-    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#d32f2f;color:#fff;padding:8px 16px;font-size:13px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:12px';
-    banner.innerHTML = `<span>! Save failed -export your data to avoid losing work.</span><button onclick="App.exportJSON()" style="background:#fff;color:#d32f2f;border:none;padding:4px 12px;border-radius:4px;font-weight:700;cursor:pointer">Export</button><button onclick="App.pickSavePath()" style="background:#fff3;color:#fff;border:1px solid #fff6;padding:4px 12px;border-radius:4px;font-weight:700;cursor:pointer">Save to File</button>`;
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:var(--p4-txt);color:var(--bg);padding:8px 16px;font-size:13px;font-weight:700;text-align:center;display:flex;align-items:center;justify-content:center;gap:12px';
+    banner.innerHTML = `<span>! Save failed -export your data to avoid losing work.</span><button onclick="App.exportJSON()" style="background:var(--surface);color:var(--p4-txt);border:none;padding:4px 12px;border-radius:4px;font-weight:700;cursor:pointer">Export</button><button onclick="App.pickSavePath()" style="background:transparent;color:var(--bg);border:1px solid var(--bg);padding:4px 12px;border-radius:4px;font-weight:700;cursor:pointer">Save to File</button>`;
     document.body.prepend(banner);
   },
 
@@ -3313,7 +3613,7 @@ Object.assign(App, {
     const savePath = this.state.settings.savePath;
     if (this._saveFailed) {
       txt.textContent = '! Unsaved';
-      pill.style.color = '#ef5350';
+      pill.style.color = 'var(--p4-txt)';
       pill.title = 'Save failed -click for options';
     } else if (savePath) {
       const fileName = savePath.split(/[/\\]/).pop();
@@ -3388,9 +3688,8 @@ Object.assign(App, {
   },
 
   exportJSON() {
-    this.saveData();
-    const data = localStorage.getItem('rimjobs');
-    if (!data) { this.toast(' No data to export!'); return; }
+    const data = JSON.stringify(this._buildSavePayload());
+    this.saveData(data);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -3458,6 +3757,28 @@ Object.assign(App, {
   },
 
   loadData() {
+    if (window.overlay?.loadAppState) {
+      for (const source of ['primary', 'backup']) {
+        const result = window.overlay.loadAppState(source);
+        if (!result || !result.ok || !result.data) continue;
+        try {
+          const data = JSON.parse(result.data);
+          this._applyLoadedData(data);
+          this._usesInternalState = true;
+          this._crashProbe('storage.internal-load-complete', {
+            chars: result.data.length,
+            source
+          });
+          if (source === 'backup' && window.overlay.saveAppState) {
+            window.overlay.saveAppState(result.data).catch(() => {});
+            this.toast('Recovered data from the internal backup');
+          }
+          return;
+        } catch (error) {
+          this._crashProbe('storage.internal-load-failed', { source, message: error.message });
+        }
+      }
+    }
     try {
       let raw = localStorage.getItem('rimjobs');
       if (!raw) return;
@@ -3482,6 +3803,9 @@ Object.assign(App, {
         }
       }
       this._applyLoadedData(data);
+      if (raw.length >= 1024 * 1024 && window.overlay?.saveAppState) {
+        this._usesInternalState = true;
+      }
     } catch(e) { console.warn('Load failed:', e); }
   },
 
@@ -3495,6 +3819,7 @@ Object.assign(App, {
     if (Array.isArray(data.relationCatalog)) this.state.relationCatalog = data.relationCatalog;
     if (Array.isArray(data.passionCatalog)) this.state.passionCatalog = data.passionCatalog;
     if (data.defSources && typeof data.defSources === 'object') this.state.defSources = data.defSources;
+    if (data.scannedRoles && typeof data.scannedRoles === 'object') this.state.scannedRoles = data.scannedRoles;
     if (data.geneColors && typeof data.geneColors === 'object') this.state.geneColors = data.geneColors;
     if (data.customGenes)     this.state.customGenes     = data.customGenes;
     if (data.customJobs)      this.state.customJobs      = data.customJobs;
@@ -3529,7 +3854,9 @@ Object.assign(App, {
     if (data.materials)       this.state.materials       = data.materials;
     if (data.loadout)         this.state.loadout         = data.loadout;
     if (data.loadoutB)        this.state.loadoutB        = data.loadoutB;
+    if (data.loadoutCoverageRegion) this.state.loadoutCoverageRegion = data.loadoutCoverageRegion;
     if (data.savedLoadouts)   this.state.savedLoadouts   = data.savedLoadouts;
+    if (data.comparisonData)  this.state.comparisonData  = data.comparisonData;
     if (data.manualRelations) this.state.manualRelations = data.manualRelations;
     if (data.ghostPawns)      this.state.ghostPawns      = data.ghostPawns;
     if (data.customMemes)     this.state.customMemes     = data.customMemes;
@@ -3694,7 +4021,7 @@ Object.assign(App, {
     pills.forEach(p => {
       const isActive = p.getAttribute('data-filter') === f;
       p.style.background = isActive ? 'var(--accent,#e8a838)' : 'transparent';
-      p.style.color = isActive ? '#000' : (p.getAttribute('data-filter') === 'error' ? '#f0857a' : p.getAttribute('data-filter') === 'warn' ? '#e8a838' : 'var(--text3,#888)');
+      p.style.color = isActive ? 'var(--bg)' : (p.getAttribute('data-filter') === 'error' ? 'var(--p4-txt)' : p.getAttribute('data-filter') === 'warn' ? 'var(--accent)' : 'var(--text3,#888)');
     });
     this._renderConsoleDrawer();
   },
@@ -3718,7 +4045,7 @@ Object.assign(App, {
     if (!this.state.settings.showConsole) return;
     const el = document.getElementById('consoleDrawerBody');
     if (!el) return;
-    const colors = { error: '#f0857a', warn: '#e8a838', info: '#6cb4ee', log: 'var(--text3,#999)' };
+    const colors = { error: 'var(--p4-txt)', warn: 'var(--accent)', info: 'var(--p2-txt)', log: 'var(--text3,#999)' };
     const icons = { error: '✖', warn: '!', info: 'ⓘ', log: '›' };
     const bgColors = { error: 'rgba(240,133,122,0.06)', warn: 'rgba(232,168,56,0.04)', info: 'transparent', log: 'transparent' };
     const logs = this._getFilteredLogs();

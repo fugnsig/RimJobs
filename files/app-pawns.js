@@ -396,7 +396,7 @@ Object.assign(App, {
 
     const header = document.createElement('div');
     header.style.cssText = 'padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px';
-    const hTitle = (slot === 'childhood' ? 'Childhood' : 'Adulthood') + ' - ' + (p.nickname || p.name || '');
+    const hTitle = (slot === 'childhood' ? 'Childhood' : 'Adulthood') + ' - ' + _pawnDisplayName(p, '');
     header.innerHTML = '<span style="flex:1;min-width:0;font-size:var(--f-sm);font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + _escapeHtml(hTitle) + '</span>'
       + '<button class="btn btn-sm" style="flex-shrink:0" onclick="App.scanBackstoryStories(\'' + pawnId + '\',\'' + slot + '\')" title="Scan your RimWorld install (vanilla, DLC &amp; mods) for backstory stories">⟳ Scan install</button>';
 
@@ -520,7 +520,7 @@ Object.assign(App, {
   _personalizeBackstory(raw, pawn) {
     let s = String(raw || '').replace(/\\n/g, '\n');
     if (!s) return '';
-    const name = (pawn && (pawn.nickname || pawn.firstName || pawn.name)) || 'They';
+    const name = _pawnDisplayName(pawn, 'They');
     const g = pawn && pawn.gender ? String(pawn.gender).toLowerCase() : '';
     const subj = g === 'female' ? 'she' : g === 'male' ? 'he' : 'they';
     const obj  = g === 'female' ? 'her' : g === 'male' ? 'him' : 'them';
@@ -730,7 +730,7 @@ Object.assign(App, {
       if (pawn) {
         if (!this._commitImportedPawn(pawn)) return; // cap reached
         this.renderAll();
-        this.toast(` Imported ${pawn.nickname || pawn.name}!`);
+        this.toast(` Imported ${_pawnDisplayName(pawn)}!`);
         this.triggerAutoSave();
       } else {
         this.toast('Could not parse pawn data.');
@@ -1089,6 +1089,7 @@ Object.assign(App, {
       childhood: '', adulthood: '',
       xenotype: 'baseliner',
       role: 'none',
+      roleSource: 'user',
       moodPreset: 'normal',
       bioAge: null,
       chronoAge: null,
@@ -1276,7 +1277,8 @@ Object.assign(App, {
       adulthood: isFirst ? 'BountyHunter41' : '',
       skills, passions, incapable: [], traits: [],
       xenotype: 'baseliner',
-      role: 'none', 
+      role: 'none',
+      roleSource: 'user',
       moodPreset: 'normal',
       avatarIdx: idx % AVATARS.length,
       avatarBg: av.bg,
@@ -1371,7 +1373,7 @@ Object.assign(App, {
       const allIncap = [...new Set([...p.incapable, ...xenoIncap, ...roleIncap, ...bsIncapPm, ...geneIncapPm, ...traitIncapPm, ...hediffIncapPm])];
       const avatarBg = _safeColor(p.avatarBg || AVATARS[p.avatarIdx].bg);
       const avatarColor = _safeColor(p.avatarColor || AVATARS[p.avatarIdx].color, '#ffffff');
-      const avatarIcon = _escapeHtml(((p.nickname || p.name) || '?')[0].toUpperCase());
+      const avatarIcon = _escapeHtml(_pawnDisplayName(p, '?')[0].toUpperCase());
       const xenoColor = _safeColor(xeno.color);
 
       const wsProjection = this._c5WorkSpeedDisplay(p, pawnCtx);
@@ -1394,7 +1396,7 @@ Object.assign(App, {
           <div class="pm-header">
             <div class="avatar" style="width:44px;height:44px;font-size:calc(18px * var(--font-scale));background:${avatarBg};color:${avatarColor};border:2px solid rgba(255,255,255,0.1);border-radius:var(--radius-sm);flex-shrink:0">${avatarIcon}</div>
             <div style="flex:1;min-width:0">
-              <input class="pawn-name" value="${_escapeHtml(p.nickname || p.name)}" oninput="App.renameNickname('${p.id}', this.value)" style="font-size:var(--f-base);font-weight:800;width:100%" placeholder="Nickname">
+              <input class="pawn-name" value="${_escapeHtml(_pawnDisplayName(p, ''))}" oninput="App.renameNickname('${p.id}', this.value)" style="font-size:var(--f-base);font-weight:800;width:100%" placeholder="Nickname">
               <div style="display:flex;align-items:center;gap:4px;margin-top:4px;flex-wrap:wrap">
                 <input class="skill-input" value="${_escapeHtml(p.firstName || '')}" oninput="App.setPawnField('${p.id}','firstName',this.value)" placeholder="First" style="font-size:var(--f-xs);width:60px;padding:2px 4px">
                 <input class="skill-input" value="${_escapeHtml(p.lastName || '')}" oninput="App.setPawnField('${p.id}','lastName',this.value)" placeholder="Last" style="font-size:var(--f-xs);width:60px;padding:2px 4px">
@@ -1404,8 +1406,8 @@ Object.assign(App, {
               <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
                 <span style="font-size:var(--f-xs);color:${xenoColor};font-weight:600">${_escapeHtml(xeno.label)}</span>
                 <span style="font-size:var(--f-xs);color:var(--text3)">•</span>
-                <span style="font-size:var(--f-xs);color:var(--text3)">${_escapeHtml(role.label)}</span>
-                ${p.bioAge != null ? `<span style="font-size:var(--f-xs);color:var(--text3)">• ${p.bioAge}y</span>` : ''}${(xeno.uvSensitivity||0) >= 1 ? `<span style="font-size:var(--f-xs);color:#e8a838" title="${(xeno.uvSensitivity||0)===2?'Intense':'Mild'} UV Sensitivity">• UV</span>` : ''}
+                <span style="font-size:var(--f-xs);color:var(--text3)" title="${_escapeHtml(role.defName || '')}">${_escapeHtml(role.label)}${_modBadge(role)}</span>
+                ${p.bioAge != null ? `<span style="font-size:var(--f-xs);color:var(--text3)">• ${p.bioAge}y</span>` : ''}${(xeno.uvSensitivity||0) >= 1 ? `<span style="font-size:var(--f-xs);color:var(--accent)" title="${(xeno.uvSensitivity||0)===2?'Intense':'Mild'} UV Sensitivity">• UV</span>` : ''}
                 <span style="font-size:var(--f-xs);font-weight:700;color:${wsColor};margin-left:auto" title="${_escapeHtml(wsTitle)}">Work Speed ${wsDisplay}</span>
               </div>
             </div>
@@ -1704,7 +1706,7 @@ Object.assign(App, {
     const av = AVATARS[(p.avatarIdx || 0) % AVATARS.length] || AVATARS[0];
     const avatarBg = _safeColor(p.avatarBg || av.bg);
     const avatarColor = _safeColor(p.avatarColor || av.color, '#ffffff');
-    const displayName = _escapeHtml(p.nickname || p.name || '?');
+    const displayName = _escapeHtml(_pawnDisplayName(p, '?'));
     const fullName = [p.firstName, p.lastName].filter(Boolean).join(' ');
     const wsProjection = this._c5WorkSpeedDisplay(p, pawnCtx);
     const wsMod = wsProjection.value;
@@ -1777,7 +1779,7 @@ Object.assign(App, {
     return `
       <div class="spotlight-strip" style="background:linear-gradient(90deg, ${xenoColor}, transparent)"></div>
       <div class="spotlight-head">
-        <div class="spotlight-avatar" style="background:${avatarBg}; color:${avatarColor}">${_escapeHtml((p.nickname || p.name || '?')[0].toUpperCase())}</div>
+        <div class="spotlight-avatar" style="background:${avatarBg}; color:${avatarColor}">${_escapeHtml(_pawnDisplayName(p, '?')[0].toUpperCase())}</div>
         <div class="spotlight-title">
           <div class="spotlight-name">${displayName}</div>
           ${fullName ? `<div class="spotlight-fullname">${_escapeHtml(fullName)}</div>` : ''}
@@ -1785,9 +1787,9 @@ Object.assign(App, {
         </div>
         <div class="spotlight-pills">
           <span class="spotlight-pill" style="border-color:${xenoColor}; color:${xenoColor}">${_escapeHtml(xeno.label)}</span>
-          ${p.role && p.role !== 'none' ? `<span class="spotlight-pill">${_escapeHtml(role.label)}</span>` : ''}
+          ${p.role && p.role !== 'none' ? `<span class="spotlight-pill" title="${_escapeHtml(role.defName || '')}">${_escapeHtml(role.label)}${_modBadge(role)}</span>` : ''}
           <span class="spotlight-pill" style="color:${wsColor}" title="${_escapeHtml(wsTitle)}">${(wsMod * 100).toFixed(0)}%</span>
-          ${uvLevel ? `<span class="spotlight-pill" style="color:#e8a838" title="${uvLevel === 2 ? 'Intense' : 'Mild'} UV sensitivity">UV${uvLevel === 2 ? '+' : ''}</span>` : ''}
+          ${uvLevel ? `<span class="spotlight-pill" style="color:var(--accent)" title="${uvLevel === 2 ? 'Intense' : 'Mild'} UV sensitivity">UV${uvLevel === 2 ? '+' : ''}</span>` : ''}
         </div>
       </div>
       ${storyBits.length ? `<div class="spotlight-row spotlight-story">${_escapeHtml(storyBits.join('  ·  '))}</div>` : ''}
@@ -1877,7 +1879,7 @@ Object.assign(App, {
     this.state.priorities[newId] = JSON.parse(JSON.stringify(this.state.priorities[id]));
     this.renderAll();
     this.triggerAutoSave();
-    this.toast(` Duplicated ${p.name}`);
+    this.toast(` Duplicated ${_pawnDisplayName(p)}`);
   },
 
   sharePawn(id) {
@@ -2000,9 +2002,9 @@ Object.assign(App, {
     const sort = this.state.pawnSort || 'manual';
     if (sort === 'manual') return pawns;
     const sorted = [...pawns];
-    if (sort === 'az') return sorted.sort((a, b) => (a.nickname||a.name).localeCompare(b.nickname||b.name));
-    if (sort === 'za') return sorted.sort((a, b) => (b.nickname||b.name).localeCompare(a.nickname||a.name));
-    if (sort === 'game_order') return sorted.sort((a, b) => ((a.displayOrder ?? 999999) - (b.displayOrder ?? 999999)) || ((a.thingIDNumber ?? 999999) - (b.thingIDNumber ?? 999999)));
+    if (sort === 'az') return sorted.sort((a, b) => _pawnDisplayName(a, '').localeCompare(_pawnDisplayName(b, '')));
+    if (sort === 'za') return sorted.sort((a, b) => _pawnDisplayName(b, '').localeCompare(_pawnDisplayName(a, '')));
+    if (sort === 'game_order') return sorted.sort(_comparePawnGameOrder);
     if (sort === 'age_young') return sorted.sort((a, b) => (a.bioAge ?? 9999) - (b.bioAge ?? 9999));
     if (sort === 'age_old') return sorted.sort((a, b) => (b.bioAge ?? -1) - (a.bioAge ?? -1));
     // Skill sorts: "skill_shoot", "skill_melee", etc.
@@ -2283,7 +2285,7 @@ Object.assign(App, {
     ).join('') : '<span style="color:var(--text3); font-size:var(--f-xs)">No traits.</span>';
     el.innerHTML = `<div class="modal" style="max-width:540px; width:94%; max-height:84vh; display:flex; flex-direction:column">
       <div class="modal-header" style="display:flex; align-items:center; justify-content:space-between; gap:8px">
-        <h3 class="modal-title">Edit Traits for ${_escapeHtml(p.name || 'Pawn')}</h3>
+        <h3 class="modal-title">Edit Traits for ${_escapeHtml(_pawnDisplayName(p))}</h3>
         <button onclick="App.closePawnTraitEditor()" class="pawn-del" style="width:26px; height:26px; flex-shrink:0">&times;</button>
       </div>
       <div style="padding:8px 14px; border-bottom:1px solid var(--border)">
@@ -2564,7 +2566,7 @@ Object.assign(App, {
 
     el.innerHTML = `<div class="modal" style="max-width:560px; width:95%; max-height:86vh; display:flex; flex-direction:column">
       <div class="modal-header" style="display:flex; align-items:center; justify-content:space-between; gap:8px">
-        <h3 class="modal-title">Edit Health for ${_escapeHtml(p.name || 'Pawn')}</h3>
+        <h3 class="modal-title">Edit Health for ${_escapeHtml(_pawnDisplayName(p))}</h3>
         <button onclick="App.closePawnHealthEditor()" class="pawn-del" style="width:26px; height:26px; flex-shrink:0">&times;</button>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; padding:8px 14px; border-bottom:1px solid var(--border)">
@@ -2625,7 +2627,7 @@ Object.assign(App, {
   _relationDefSet() { return new Set(this._relationCatalog().map(d => d.def)); },
   _pawnNameByLoadID(loadID) {
     const p = (this.state.pawns || []).find(x => x.loadID === loadID);
-    return p ? (p.name || p.loadID) : loadID;
+    return p ? _pawnDisplayName(p, p.loadID || loadID) : loadID;
   },
   _relTargetPawns(pawnId) {
     return (this.state.pawns || []).filter(p => p.loadID && p.id !== pawnId);
@@ -2714,7 +2716,7 @@ Object.assign(App, {
       </div>` : `<div style="color:var(--text3); font-size:var(--f-xs); padding:10px 14px">Import more colonists from this save to link them together.</div>`;
     el.innerHTML = `<div class="modal" style="max-width:520px; width:94%; max-height:84vh; display:flex; flex-direction:column">
       <div class="modal-header" style="display:flex; align-items:center; justify-content:space-between; gap:8px">
-        <h3 class="modal-title">Edit Relationships for ${_escapeHtml(p.name || 'Pawn')}</h3>
+        <h3 class="modal-title">Edit Relationships for ${_escapeHtml(_pawnDisplayName(p))}</h3>
         <button onclick="App.closePawnRelationEditor()" class="pawn-del" style="width:26px; height:26px; flex-shrink:0">&times;</button>
       </div>
       <div style="padding:8px 14px 0">
@@ -2759,6 +2761,7 @@ Object.assign(App, {
     const p = this.state.pawns.find(p => p.id === pid);
     if (p) {
       p.role = roleId;
+      p.roleSource = 'user';
       // Auto-suggest icon based on role
       const roleIconMap = {
         'leader': 'leader', 'guide': 'social', 'production': 'craft',
@@ -2775,10 +2778,6 @@ Object.assign(App, {
     const p = this.state.pawns.find(p => p.id === pid);
     if (!p) return;
     p[field] = value;
-    // If nickname changes, update display name
-    if (field === 'nickname') {
-      p.name = value || p.firstName || 'Unknown';
-    }
     this.triggerAutoSave();
   },
 
@@ -2807,7 +2806,7 @@ Object.assign(App, {
       p.schedule = Array(24).fill(idxJoy);
       [22,23,0,1,2,3,4,5].forEach(h => p.schedule[h] = idxSleep);
       [6,7,8,21].forEach(h => p.schedule[h] = idxAny);
-      this.toast(` ${p.nickname||p.name} in Mental Recovery!`);
+      this.toast(` ${_pawnDisplayName(p)} in Mental Recovery!`);
     } else if (mode === 'night') {
       // Night shift: sleep 8am-4pm (peak UV), work 5pm-3am, joy 4-5am
       p.schedule = Array(24).fill(idxAny);
@@ -2815,23 +2814,22 @@ Object.assign(App, {
       [17,18,19,20,21,22,23,0,1,2].forEach(h => p.schedule[h] = idxWork);
       [3,4].forEach(h => p.schedule[h] = idxJoy);
       [5,6,7,16].forEach(h => p.schedule[h] = idxAny);
-      this.toast(`N ${p.nickname||p.name} on Night Shift!`);
+      this.toast(`N ${_pawnDisplayName(p)} on Night Shift!`);
     } else if (mode === 'chill') {
       p.schedule = Array(24).fill(idxAny);
       [22,23,0,1,2,3,4,5].forEach(h => p.schedule[h] = idxSleep);
       [18,19,20,21,6,7].forEach(h => p.schedule[h] = idxJoy);
-      this.toast(` ${p.nickname||p.name} on Light Duty.`);
+      this.toast(` ${_pawnDisplayName(p)} on Light Duty.`);
     } else {
       Engine.optimizeSchedules([p], { contextMap });
-      this.toast(` ${p.nickname||p.name} back to Auto-Optimisation.`);
+      this.toast(` ${_pawnDisplayName(p)} back to Auto-Optimisation.`);
     }
 
-    // Auto-update priorities based on new mood
     Engine.runMinMaxAssignment(
       this.state.pawns, this.state.roles, this.state.priorities,
-      undefined, contextMap);
-    
-    this.renderAll();
+      undefined, contextMap, this._strategicFocusConfig());
+
+    this.renderAll({ contextMap });
     this.triggerAutoSave();
   },
 
@@ -2849,6 +2847,7 @@ Object.assign(App, {
       this.state.customJobs.push({
         id, name: vals.name, cat: 'labor', filter: 'labor', skill: vals.skill || null, hint: 'User-defined job.', important: false, modSource: (vals.mod || '').trim()
       });
+      this._c4InvalidateSnapshot();
       this.state.pawns.forEach(p => {
          if (!this.state.priorities[p.id]) this.state.priorities[p.id] = {};
          this.state.priorities[p.id][id] = null;
@@ -2866,6 +2865,7 @@ Object.assign(App, {
   deleteCustomJob(id) {
     this.showConfirm('Delete this job?', 'Delete', 'All priority assignments for this job will be lost.').then(() => {
       this.state.customJobs = this.state.customJobs.filter(j => j.id !== id);
+      this._c4InvalidateSnapshot();
       this.state.pawns.forEach(p => delete this.state.priorities[p.id][id]);
       if (Array.isArray(this.state.settings.jobOrder)) this.state.settings.jobOrder = this.state.settings.jobOrder.filter(x => x !== id);
       this.renderSettings();

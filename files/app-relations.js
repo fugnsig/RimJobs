@@ -35,6 +35,20 @@ _assignModule(App, {
     other:   '#e8c85d',
     manual:  '#8ae85d',
   },
+  REL_ACCESSIBLE_COLOURS: {
+    romance: '#cc79a7',
+    ex:      '#999999',
+    blood:   '#0072b2',
+    other:   '#e69f00',
+    manual:  '#009e73',
+  },
+  REL_CATEGORY_PATTERNS: {
+    romance: [],
+    ex:      [8, 4],
+    blood:   [2, 3],
+    other:   [10, 3, 2, 3],
+    manual:  [1, 3],
+  },
 
   // -- BUILD GRAPH DATA --
   _buildRelationGraph() {
@@ -313,6 +327,8 @@ _assignModule(App, {
     const w = canvas.width, h = canvas.height;
     if (!w || !h) return;
     const light = document.body.classList.contains('light-theme');
+    const colourBlind = this.state.settings.colourBlindMode === true;
+    const accent = colourBlind ? (light ? '#005a9c' : '#56b4e9') : '#e8a838';
     const zoom = this._relZoom;
     const pan = this._relPan;
 
@@ -370,6 +386,9 @@ _assignModule(App, {
       const dimmed = sel && !connected;
       const hovered = hov && (e.from === hov || e.to === hov);
       const isGhostEdge = e.ghost;
+      const edgeColour = colourBlind
+        ? (this.REL_ACCESSIBLE_COLOURS[e.category] || this.REL_ACCESSIBLE_COLOURS.other)
+        : e.colour;
 
       // Arc offset precomputed at graph-build time (see _buildRelationGraph).
       const off = e._arcOff || 0;
@@ -388,12 +407,14 @@ _assignModule(App, {
       if (dimmed) {
         ctx.strokeStyle = light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)';
       } else if (isGhostEdge) {
-        ctx.strokeStyle = (connected || hovered) ? e.colour + 'aa' : e.colour + '44';
+        ctx.strokeStyle = (connected || hovered) ? edgeColour + 'aa' : edgeColour + '44';
       } else {
-        ctx.strokeStyle = (connected || hovered) ? e.colour : e.colour + '88';
+        ctx.strokeStyle = (connected || hovered) ? edgeColour : edgeColour + '88';
       }
       ctx.lineWidth = (connected || hovered) ? 3 : isGhostEdge ? 1 : 1.5;
-      if (e.category === 'ex' || isGhostEdge) ctx.setLineDash(isGhostEdge ? [4, 6] : [6, 4]);
+      if (isGhostEdge) ctx.setLineDash([4, 6]);
+      else if (colourBlind) ctx.setLineDash(this.REL_CATEGORY_PATTERNS[e.category] || this.REL_CATEGORY_PATTERNS.other);
+      else if (e.category === 'ex') ctx.setLineDash([6, 4]);
       else ctx.setLineDash([]);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -401,7 +422,7 @@ _assignModule(App, {
       // Defer the edge label to a pass after the nodes, so a node sitting over the arc
       // midpoint can't cover the relation title.
       if (!dimmed) {
-        labelDraws.push({ mx, my, label: e.label, colour: e.colour, connected, isGhostEdge });
+        labelDraws.push({ mx, my, label: e.label, colour: edgeColour, connected, isGhostEdge });
       }
     }
 
@@ -431,7 +452,7 @@ _assignModule(App, {
           ? (light ? 'rgba(180,80,80,0.16)' : 'rgba(150,55,55,0.32)')
           : (light ? 'rgba(245,246,248,0.4)' : 'rgba(14,15,17,0.4)');
       } else {
-        ctx.fillStyle = isSel ? '#e8a838' : (isHov ? (light ? '#e0e0e0' : '#2a2a2a') : (light ? '#fff' : '#1a1a1a'));
+        ctx.fillStyle = isSel ? accent : (isHov ? (light ? '#e0e0e0' : '#2a2a2a') : (light ? '#fff' : '#1a1a1a'));
       }
       ctx.fill();
       if (isGhost && !dimmed) {
@@ -439,7 +460,7 @@ _assignModule(App, {
         ctx.strokeStyle = light ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.25)';
         ctx.lineWidth = 1.5;
       } else {
-        ctx.strokeStyle = dimmed ? 'transparent' : (isSel ? '#e8a838' : (isHov ? '#e8a838' : (light ? '#ccc' : '#333')));
+        ctx.strokeStyle = dimmed ? 'transparent' : (isSel ? accent : (isHov ? accent : (light ? '#ccc' : '#333')));
         ctx.lineWidth = isSel ? 3 : (isHov ? 2 : 1.5);
       }
       ctx.stroke();
@@ -458,9 +479,9 @@ _assignModule(App, {
       if (n.pinned && !dimmed) {
         ctx.beginPath();
         ctx.arc(n.x + ghostR - 4, n.y - ghostR + 4, 5, 0, Math.PI * 2);
-        ctx.fillStyle = '#e8a838';
+        ctx.fillStyle = accent;
         ctx.fill();
-        ctx.font = 'bold 8px Arial';
+        ctx.font = this._canvasFont(8, 'bold');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#000';
@@ -469,8 +490,8 @@ _assignModule(App, {
 
       // Name label (hidden for unrevealed unknown off-map nodes)
       if (!dimmed && !showAsQ) {
-        const name = n.pawn.nickname || n.pawn.name || 'Unknown';
-        ctx.font = isGhost ? '11px Arial' : 'bold 12px Arial';
+        const name = _pawnDisplayName(n.pawn, 'Unknown');
+        ctx.font = isGhost ? this._canvasFont(11) : this._canvasFont(12, 'bold');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         const labelY = n.y + ghostR + 4;
@@ -480,13 +501,13 @@ _assignModule(App, {
         ctx.fillRect(n.x - tw / 2, labelY, tw, th);
         // Record the name-tag box so edge titles get nudged off it too (not just the node).
         nameTags.push({ cx: n.x, cy: labelY + th / 2, hw: tw / 2, hh: th / 2 });
-        ctx.fillStyle = isGhost ? (light ? '#888' : '#666') : (isSel ? '#e8a838' : (light ? '#222' : '#ddd'));
+        ctx.fillStyle = isGhost ? (light ? '#888' : '#666') : (isSel ? accent : (light ? '#222' : '#ddd'));
         ctx.fillText(name, n.x, labelY + 2);
         // Ghost subtitle: deceased relatives say so (dead != off-map); pets noted.
         if (isGhost) {
           const isDead = n.pawn && n.pawn.dead;
           const isAnimal = n.pawn && n.pawn.isAnimal;
-          ctx.font = '9px Arial';
+          ctx.font = this._canvasFont(9);
           ctx.fillStyle = isDead ? (light ? '#b34a4a' : '#d98a8a') : (light ? '#aaa' : '#555');
           const sub = isDead
             ? (isAnimal ? 'Deceased pet' : 'Deceased')
@@ -518,7 +539,7 @@ _assignModule(App, {
 
       // Initials inside node ("?" for unrevealed unknown off-map nodes)
       const initials = showAsQ ? '?' : this._relInitials(n.pawn);
-      ctx.font = isGhost ? 'bold 11px Arial' : 'bold 14px Arial';
+      ctx.font = isGhost ? this._canvasFont(11, 'bold') : this._canvasFont(14, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = dimmed ? (light ? '#ccc' : '#333') : isGhost ? (light ? '#999' : '#555') : (isSel ? '#000' : (light ? '#333' : '#ddd'));
@@ -532,7 +553,7 @@ _assignModule(App, {
     ctx.textBaseline = 'middle';
     const LABEL_H = 16, LABEL_PAD = 4; // a little breathing room around the node
     for (const L of labelDraws) {
-      ctx.font = `${L.connected ? 'bold ' : ''}11px Arial`;
+      ctx.font = this._canvasFont(11, L.connected ? 'bold' : 'normal');
       L.tw = textW(L.label) + 10;
     }
     // Label-vs-node/name collision relaxation is the single most expensive part of a
@@ -573,7 +594,7 @@ _assignModule(App, {
       }
     }
     for (const L of labelDraws) {
-      ctx.font = `${L.connected ? 'bold ' : ''}11px Arial`;
+      ctx.font = this._canvasFont(11, L.connected ? 'bold' : 'normal');
       const tw = L.tw;
       const rx = L.mx - tw / 2, ry = L.my - LABEL_H / 2, rh = LABEL_H, rr = 6;
       // Rounded pill so the title reads as an intentional chip rather than a hard box.
@@ -602,7 +623,7 @@ _assignModule(App, {
     const nCount = nodes.length;
     const eCount = edges.length;
     if (nCount > 0) {
-      ctx.font = '11px Arial';
+      ctx.font = this._canvasFont(11);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       ctx.fillStyle = light ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.25)';
@@ -611,18 +632,17 @@ _assignModule(App, {
   },
 
   _relInitials(pawn) {
-    const first = pawn.firstName || pawn.nickname || pawn.name || '?';
-    const last = pawn.lastName || '';
-    if (last) return (first[0] + last[0]).toUpperCase();
-    return first.slice(0, 2).toUpperCase();
+    return _pawnDisplayName(pawn, '?').slice(0, 2).toUpperCase();
   },
 
   _relDrawLegend(ctx, w, h, light) {
+    const colourBlind = this.state.settings.colourBlindMode === true;
+    const accessible = this.REL_ACCESSIBLE_COLOURS;
     const cats = [
-      { label: 'Romance', colour: '#e85d8a' },
-      { label: 'Ex', colour: '#8a5d6d' },
-      { label: 'Blood', colour: '#5d8ae8' },
-      { label: 'Other', colour: '#e8c85d' },
+      { label: 'Romance', category: 'romance', colour: colourBlind ? accessible.romance : '#e85d8a' },
+      { label: 'Ex', category: 'ex', colour: colourBlind ? accessible.ex : '#8a5d6d' },
+      { label: 'Blood', category: 'blood', colour: colourBlind ? accessible.blood : '#5d8ae8' },
+      { label: 'Other', category: 'other', colour: colourBlind ? accessible.other : '#e8c85d' },
     ];
     // Custom / manual relations: one legend entry per unique title + colour, so the
     // legend adapts to whatever titles and colours the user has created.
@@ -631,7 +651,7 @@ _assignModule(App, {
       const k = e.label + '|' + e.colour;
       if (seenCustom.has(k)) return;
       seenCustom.add(k);
-      cats.push({ label: e.label, colour: e.colour });
+      cats.push({ label: e.label, category: 'manual', colour: colourBlind ? accessible.manual : e.colour });
     });
     const hasGhost = this._relNodes.some(n => n.ghost);
     if (hasGhost) {
@@ -641,16 +661,17 @@ _assignModule(App, {
       cats.push({ label: 'Deceased', colour: '#c66', dashed: true });
     }
     const lx = 12, ly = h - 12 - cats.length * 18;
-    ctx.font = '11px Arial';
+    ctx.font = this._canvasFont(11);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     cats.forEach((c, i) => {
       const y = ly + i * 18;
-      if (c.dashed) {
-        // Dashed line swatch to match ghost edge styling
+      if (c.dashed || colourBlind) {
+        // Line swatches mirror ghost styling and accessible category patterns.
         ctx.strokeStyle = c.colour;
         ctx.lineWidth = 2;
-        ctx.setLineDash([3, 3]);
+        ctx.setLineDash(c.dashed ? [3, 3]
+          : (this.REL_CATEGORY_PATTERNS[c.category] || this.REL_CATEGORY_PATTERNS.other));
         ctx.beginPath();
         ctx.moveTo(lx, y);
         ctx.lineTo(lx + 12, y);
@@ -991,7 +1012,7 @@ _assignModule(App, {
     if (this._relSelected) {
       const pawn = pawns.find(p => p.id === this._relSelected);
       if (pawn) {
-        html += this._relSectionHeader('details', pawn.nickname || pawn.name || 'Pawn', '#e8a838', '');
+        html += this._relSectionHeader('details', _pawnDisplayName(pawn), '#e8a838', '');
         if (sec.details) {
           html += this._relBuildPawnDetails(pawn);
         }
@@ -999,7 +1020,7 @@ _assignModule(App, {
         const gNode = (this._relNodes || []).find(n => n.id === this._relSelected && n.ghost);
         if (gNode && gNode.pawn) {
           const g = gNode.pawn;
-          const title = g.resolved === false ? 'Unknown relative' : (g.nickname || g.name || 'Unknown');
+          const title = g.resolved === false ? 'Unknown relative' : _pawnDisplayName(g, 'Unknown');
           html += this._relSectionHeader('details', title, '#e8a838', '');
           if (sec.details) {
             html += this._relBuildGhostDetails(gNode);
@@ -1040,7 +1061,7 @@ _assignModule(App, {
   _relBuildColonyOpinions(pawns) {
     const list = (pawns || []).filter(p => p && p.id != null);
     if (list.length < 2) return '<div style="font-size:var(--f-xs); color:var(--text3); text-align:center; padding:8px">Need at least two colonists.</div>';
-    const nameOf = (p) => p.nickname || p.name || 'Unknown';
+    const nameOf = (p) => _pawnDisplayName(p, 'Unknown');
     const pairs = [];
     for (const a of list) for (const b of list) {
       if (a.id === b.id) continue;
@@ -1091,7 +1112,7 @@ _assignModule(App, {
         const otherId = e.from === node.id ? e.to : e.from;
         const other = this.state.pawns.find(p => p.id === otherId);
         if (!other) return;
-        const otherName = other.nickname || other.name || 'Unknown';
+        const otherName = _pawnDisplayName(other, 'Unknown');
         html += `<div style="display:flex; align-items:center; gap:6px; padding:5px 8px; background:var(--surface2); border-radius:5px; margin-bottom:3px; border-left:3px solid ${e.colour}; font-size:var(--f-xs)">
           <span style="color:${e.colour}; font-weight:600">${_escapeHtml(e.label)}</span>
           <span style="color:var(--text3)">of</span>
@@ -1108,7 +1129,7 @@ _assignModule(App, {
 
   _relBuildPawnDetails(pawn) {
     const connections = this._relEdges.filter(e => e.from === pawn.id || e.to === pawn.id);
-    const name = pawn.nickname || pawn.name || 'Unknown';
+    const name = _pawnDisplayName(pawn, 'Unknown');
 
     let html = '<div style="padding:8px 12px">';
 
@@ -1130,7 +1151,7 @@ _assignModule(App, {
         const other = this.state.pawns.find(p => p.id === otherId) || (otherNode && otherNode.pawn);
         if (!other) return;
         const isGhost = !!(otherNode && otherNode.ghost);
-        let otherName = other.nickname || other.name || 'Unknown';
+        let otherName = _pawnDisplayName(other, 'Unknown');
         let status = '';
         if (isGhost) {
           if (other.resolved === false) { otherName = 'Unknown'; status = 'not in save'; }
@@ -1153,7 +1174,7 @@ _assignModule(App, {
       html += '<div style="margin-top:8px; font-size:10px; font-weight:700; color:var(--text3); text-transform:uppercase; letter-spacing:0.04em; padding:0 2px; margin-bottom:4px">Estimated Opinions</div>';
       others.forEach(other => {
         const op = this._estimateOpinion(pawn, other);
-        const otherName = other.nickname || other.name || 'Unknown';
+        const otherName = _pawnDisplayName(other, 'Unknown');
         const colour = op > 20 ? 'var(--ok-txt)' : op < -20 ? 'var(--p4-txt)' : op > 0 ? '#8ae85d' : op < 0 ? '#e8a838' : 'var(--text3)';
         html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:2px 8px; font-size:var(--f-xs)">
           <span>${_escapeHtml(otherName)}</span>
@@ -1186,8 +1207,8 @@ _assignModule(App, {
       return html;
     }
     romancePairs.slice(0, 10).forEach(p => {
-      const nameA = p.a.nickname || p.a.name;
-      const nameB = p.b.nickname || p.b.name;
+      const nameA = _pawnDisplayName(p.a);
+      const nameB = _pawnDisplayName(p.b);
       const pct = Math.round(p.chance * 100);
       const barColour = pct > 70 ? '#e85d8a' : pct > 40 ? '#e8a0b8' : '#8a5d6d';
       html += `<div style="display:flex; align-items:center; gap:6px; padding:3px 0; font-size:var(--f-xs)">
@@ -1222,8 +1243,8 @@ _assignModule(App, {
       return html;
     }
     fightPairs.slice(0, 10).forEach(p => {
-      const nameA = p.a.nickname || p.a.name;
-      const nameB = p.b.nickname || p.b.name;
+      const nameA = _pawnDisplayName(p.a);
+      const nameB = _pawnDisplayName(p.b);
       const pct = Math.round(p.risk * 100);
       const barColour = pct > 30 ? '#f0857a' : pct > 15 ? '#e8a838' : '#888';
       html += `<div style="display:flex; align-items:center; gap:6px; padding:3px 0; font-size:var(--f-xs)">
@@ -1366,7 +1387,7 @@ _assignModule(App, {
     const body = document.getElementById('relationModalBody');
     if (!modal || !body) return;
 
-    const pawnOpts = pawns.map(p => `<option value="${p.id}">${_escapeHtml(p.nickname || p.name)}</option>`).join('');
+    const pawnOpts = pawns.map(p => `<option value="${p.id}">${_escapeHtml(_pawnDisplayName(p))}</option>`).join('');
     const relOpts = RELATION_DEFS.map(d => `<option value="${d.def}">${_escapeHtml(d.label)}</option>`).join('');
 
     body.innerHTML = `

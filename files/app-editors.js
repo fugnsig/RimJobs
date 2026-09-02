@@ -122,9 +122,9 @@ Object.assign(App, {
           const detailPanel = `
             <div style="display:${isExpanded?'block':'none'}; margin-top:8px; padding:8px 10px; background:var(--surface); border-radius:6px; font-size:var(--f-xs); color:var(--text2)">
               ${x.notes ? `<div style="margin-bottom:6px; font-style:italic; color:var(--text3)">${_escapeHtml(x.notes)}</div>` : ''}
-              ${skillEntries.length ? `<div style="margin-bottom:6px"><span style="font-weight:600; color:var(--text)">Skill Mods:</span> ${skillEntries.map(([k,v])=>`<span style="color:${v>0?'#4caf50':'#ef5350'}; font-weight:600">${k}:${v>0?'+':''}${v}</span>`).join(' &nbsp;')}</div>` : '<div style="margin-bottom:6px; color:var(--text3)">No skill modifiers</div>'}
+              ${skillEntries.length ? `<div style="margin-bottom:6px"><span style="font-weight:600; color:var(--text)">Skill Mods:</span> ${skillEntries.map(([k,v])=>`<span style="color:${v>0?'var(--ok-txt)':'var(--p4-txt)'}; font-weight:600">${k}:${v>0?'+':''}${v}</span>`).join(' &nbsp;')}</div>` : '<div style="margin-bottom:6px; color:var(--text3)">No skill modifiers</div>'}
               ${passionStr ? `<div style="margin-bottom:6px"><span style="font-weight:600; color:var(--text)">Passions:</span> <span style="color:var(--accent)">${_escapeHtml(passionStr)}</span></div>` : ''}
-              ${incapStr ? `<div style="margin-bottom:6px"><span style="font-weight:600; color:var(--text)">Incapable:</span> <span style="color:#ef5350">${_escapeHtml(incapStr)}</span></div>` : ''}
+              ${incapStr ? `<div style="margin-bottom:6px"><span style="font-weight:600; color:var(--text)">Incapable:</span> <span style="color:var(--p4-txt)">${_escapeHtml(incapStr)}</span></div>` : ''}
               ${uvLabel ? `<div style="margin-bottom:6px"><span style="font-weight:600; color:var(--text)">UV Sensitivity:</span> <span style="color:#f5a623">${uvLabel}</span></div>` : ''}
               ${genesHtml}
             </div>`;
@@ -324,11 +324,12 @@ Object.assign(App, {
     if (!force && s.autoScanMods === false) return;
     const dir = s.rimworldPath;
     if (!dir) return;                                  // no install path -> stay silent, never prompt
-    if (this._ioBusy) return;                          // a manual scan/import is running
+    if (this._ioBusy || this._saveImportData || this._saveImportRequested) return; // user I/O or save review wins
     if (this._modDataPrefetched && !force) return;     // already warmed this session
     this._modDataPrefetched = true;
     try {
-      await this._mergeScannedTraitsGenes(dir, { background: true });             // silent, no user IO lock
+      const merged = await this._mergeScannedTraitsGenes(dir, { background: true }); // silent, no user IO lock
+      if (merged && merged.skippedLowMemory) return;
       if (typeof this.scanModEquipment === 'function') await this.scanModEquipment('both', { silent: true }); // silent
     } catch (_) { /* background best-effort */ }
     finally {
@@ -389,9 +390,13 @@ Object.assign(App, {
       });
     }
     let result;
-    try { result = await window.overlay.scanTraitGeneDefs(dirPath); }
+    try { result = await window.overlay.scanTraitGeneDefs(dirPath, { background: bg }); }
     catch (e) { if (!bg) this._releaseIO(); closeT('Scan error: ' + (e.message || 'failed'), true); return { error: e.message || 'scan failed' }; }
-    if (!result || result.error) { if (!bg) this._releaseIO(); closeT('Scan error: ' + ((result && result.error) || 'failed'), true); return { error: (result && result.error) || 'scan failed' }; }
+    if (!result || result.error) {
+      if (!bg) this._releaseIO();
+      closeT('Scan error: ' + ((result && result.error) || 'failed'), true);
+      return { error: (result && result.error) || 'scan failed', skippedLowMemory: !!(result && result.skippedLowMemory) };
+    }
 
     const HARD_CAP = 600; // guard against save bloat on huge modlists
     let traitsAdded = 0, genesAdded = 0, backstoriesAdded = 0, prostheticsAdded = 0;
@@ -527,6 +532,7 @@ Object.assign(App, {
         this.state.scannedRaceWorkPolicies = racePolicies;
         this.state.requirementUncertainty = requirementUncertainty;
         if (typeof this._refreshC4ActivePackageResolution === 'function') this._refreshC4ActivePackageResolution();
+        if (typeof this._c4InvalidateSnapshot === 'function') this._c4InvalidateSnapshot();
         this.state.definitionSources = c3Sources;
         this.state.definitionUncertainty = c3Uncertainty;
         if (typeof parseEffectivenessProviderFromXML === 'function') {
@@ -589,6 +595,27 @@ Object.assign(App, {
         } catch (_) { /* leave existing catalog */ }
       }
 
+      // Ideology role definitions drive exact work restrictions and role effects.
+      // The parser filters inactive packages and stale version folders, while
+      // relevant unapplied patches keep capability fields permissive.
+      let rolesFound = 0, rolesReconciled = 0;
+      if (typeof parseRolesFromXML === 'function' && result.rolePreceptsXml) {
+        try {
+          const parsedRoles = parseRolesFromXML(result.rolePreceptsXml, {
+            sourceMap: c3Sources.PreceptRoleDef || {},
+            activePackageResolution: this.state.activePackageResolution,
+            uncertainty: c3Uncertainty,
+            runtimeFingerprint: result.runtimeFingerprint || null,
+          });
+          this.state.scannedRoles = parsedRoles;
+          rolesFound = Object.keys(parsedRoles).length;
+          if (typeof this._reconcileSaveRoleDefinitions === 'function') {
+            rolesReconciled = this._reconcileSaveRoleDefinitions();
+          }
+          if (typeof this._c4InvalidateSnapshot === 'function') this._c4InvalidateSnapshot();
+        } catch (_) { /* leave the existing role catalogue */ }
+      }
+
       // Ideology planner content: modded memes (structures keep their pick-one rule)
       // and modded rituals, merged into the same custom stores the save importer uses.
       let memesAdded = 0, ritualsAdded = 0;
@@ -597,8 +624,9 @@ Object.assign(App, {
           const parsedMemes = parseMemesFromXML(result.memesXml);
           if (!this.state.customMemes) this.state.customMemes = {};
           for (const [id, m] of Object.entries(parsedMemes)) {
-            if (this.state.customMemes[id]) { Object.assign(this.state.customMemes[id], m); continue; }
-            this.state.customMemes[id] = m; memesAdded++;
+            const existed = !!this.state.customMemes[id];
+            IdeologyData.mergeDefinition(this.state.customMemes, 'meme', m, this.state.ideology);
+            if (!existed) memesAdded++;
           }
         } catch (_) { /* leave existing memes */ }
       }
@@ -607,12 +635,13 @@ Object.assign(App, {
           const parsedRituals = parseRitualsFromXML(result.ritualPreceptsXml);
           if (!this.state.customRituals) this.state.customRituals = {};
           for (const [id, r] of Object.entries(parsedRituals)) {
-            if (this.state.customRituals[id]) { Object.assign(this.state.customRituals[id], r); continue; }
-            this.state.customRituals[id] = r; ritualsAdded++;
+            const existed = !!this.state.customRituals[id];
+            IdeologyData.mergeDefinition(this.state.customRituals, 'ritual', r, this.state.ideology);
+            if (!existed) ritualsAdded++;
           }
         } catch (_) { /* leave existing rituals */ }
       }
-      this._lastIdeoScanCounts = { memesAdded, ritualsAdded };
+      this._lastIdeoScanCounts = { memesAdded, ritualsAdded, rolesFound, rolesReconciled };
       this._ideoFxCache = null;
 
       // Build the relation CATALOG (every installed, directly-assignable PawnRelationDef).
@@ -731,11 +760,11 @@ Object.assign(App, {
       const dirPath = await this._resolveRimworldPath();
       if (!dirPath) return;
       await this._mergeScannedTraitsGenes(dirPath);
-      const c = this._lastIdeoScanCounts || { memesAdded: 0, ritualsAdded: 0 };
-      if (c.memesAdded || c.ritualsAdded) {
-        this.toast(`Ideology scan: ${c.memesAdded} modded meme${c.memesAdded !== 1 ? 's' : ''}, ${c.ritualsAdded} ritual${c.ritualsAdded !== 1 ? 's' : ''} added.`);
+      const c = this._lastIdeoScanCounts || { memesAdded: 0, ritualsAdded: 0, rolesFound: 0 };
+      if (c.memesAdded || c.ritualsAdded || c.rolesFound) {
+        this.toast(`Ideology scan: ${c.rolesFound || 0} role definition${c.rolesFound === 1 ? '' : 's'}, ${c.memesAdded} modded meme${c.memesAdded !== 1 ? 's' : ''}, ${c.ritualsAdded} ritual${c.ritualsAdded !== 1 ? 's' : ''}.`);
       } else {
-        this.toast('Ideology scan: no new modded memes or rituals found.');
+        this.toast('Ideology scan: no role, meme or ritual definitions found.');
       }
       this.renderIdeology();
     } catch (_) { /* the scan toast surfaces any error */ }

@@ -10,6 +10,56 @@
   { id: 'sea_ice',             label: 'Sea Ice',                icon: '' },
 ];
 
+// The internal RimWorld name stays on pawn.name for matching and save round-trips.
+// Mirror Verse.NameTriple.Nick from RimWorld. An explicit nickname wins. When
+// it is absent, the game deterministically chooses first or last from the two
+// Mono string hashes. NameSingle and hand-made pawns fall back to pawn.name.
+function _rimworldStringHash(value) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (Math.imul(hash, 31) + value.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
+
+function _pawnDisplayName(pawn, fallback = 'Pawn') {
+  if (!pawn || typeof pawn !== 'object') return fallback;
+  const clean = value => typeof value === 'string' ? value.trim() : '';
+  const nickname = clean(pawn.nickname);
+  const first = clean(pawn.firstName);
+  const last = clean(pawn.lastName);
+  if (nickname) return nickname;
+  if (!last) return first || clean(pawn.name) || fallback;
+  if (!first) return last;
+
+  const firstHash = _rimworldStringHash(first);
+  const lastHash = _rimworldStringHash(last);
+  const combined = (firstHash ^ ((lastHash - 1640531527
+    + (firstHash << 6) + (firstHash >> 2)) | 0)) | 0;
+  return (combined & 1) === 1 ? first : last;
+}
+
+function _pawnGameOrderNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n !== -9999999 && n !== 999999
+    ? n : Number.POSITIVE_INFINITY;
+}
+
+function _comparePawnGameOrder(a, b) {
+  const gameA = _pawnGameOrderNumber(a && a.gameOrder);
+  const gameB = _pawnGameOrderNumber(b && b.gameOrder);
+  if (gameA !== gameB) return gameA - gameB;
+
+  const displayA = _pawnGameOrderNumber(a && a.displayOrder);
+  const displayB = _pawnGameOrderNumber(b && b.displayOrder);
+  if (displayA !== displayB) return displayA - displayB;
+
+  // Verse.PlayerPawnsDisplayOrderUtility compares displayOrder only. Returning
+  // zero here keeps the source sequence for equal values instead of inventing a
+  // thing-ID tiebreaker that RimWorld does not use.
+  return 0;
+}
+
 const TIMELINE_CATEGORIES = [
   { id: 'raid',      label: 'Raid',      icon: 'R', color: '#f0857a' },
   { id: 'recruit',   label: 'Recruit',   icon: '+',       color: '#7de85a' },
@@ -21,6 +71,47 @@ const TIMELINE_CATEGORIES = [
 ];
 
 const QUADRUMS = ['Aprimay', 'Jugust', 'Septober', 'Decembary'];
+
+const PriorityScale = {
+  highest: 1,
+  // Four semantic assignment tiers are stretched across the selected 1-X range.
+  autoMax: 4,
+  manualMax: 4,
+
+  setManualMax(value) {
+    const parsed = Math.trunc(Number(value));
+    this.manualMax = Number.isFinite(parsed)
+      ? Math.max(this.autoMax, Math.min(9, parsed))
+      : this.autoMax;
+    return this.manualMax;
+  },
+
+  lowestManual()  { return this.manualMax; },
+  defaultEnabled() { return 3; },
+
+  autoPriority(tier) {
+    const semanticTier = Math.max(this.highest, Math.min(this.autoMax, Math.trunc(Number(tier)) || this.autoMax));
+    if (this.manualMax === this.autoMax) return semanticTier;
+    return Math.round(this.highest
+      + ((semanticTier - this.highest) * (this.manualMax - this.highest))
+        / (this.autoMax - this.highest));
+  },
+
+  lowestAuto()    { return this.autoPriority(this.autoMax); },
+  isAuto(v)  { return Number.isInteger(v) && v >= this.highest && v <= this.manualMax; },
+  isValid(v) { return v === null || (Number.isInteger(v) && v >= this.highest && v <= this.manualMax); },
+
+  next(v) {
+    if (!this.isValid(v) || v === null) return this.manualMax;
+    if (v <= this.highest) return null;
+    return v - 1;
+  },
+  previous(v) {
+    if (!this.isValid(v) || v === null) return this.highest;
+    if (v >= this.manualMax) return null;
+    return v + 1;
+  },
+};
 
 /**
  * STATIC DATA FOR RIMWORLD PRIORITY CALCULATOR
@@ -410,6 +501,21 @@ const JOBS = [
   {id:'therapist',    name:'Therapist',           cat:'specialist',filter:'social',   skill:'social',    hint:'Reduce break risk.', important:false, naturalPriority:800, relevantSkills:['social']},
   {id:'gen_power',    name:'Gen Power',           cat:'specialist',filter:'labor',    skill:'construct', hint:'Maintain power.', important:false, naturalPriority:600, speedFormula:{base:0.3, perLevel:0.0875}, relevantSkills:['construct']},
   {id:'cycle',        name:'Cycle',               cat:'specialist',filter:'labor',    skill:null,        hint:'Odyssey systems.', important:false, naturalPriority:550},
+];
+
+// Stable player-facing strategy groups. Built-in groups use reviewed job IDs;
+// custom and uncovered modded jobs are exposed as direct focus targets by the UI.
+const WORK_FOCUS_GROUPS = [
+  { id: 'construction', label: 'Construction', jobIds: ['construction', 'gen_power'] },
+  { id: 'farming', label: 'Farming', jobIds: ['growing', 'plant_cut'] },
+  { id: 'mining', label: 'Mining', jobIds: ['mining'] },
+  { id: 'research', label: 'Research', jobIds: ['research', 'dark_study'] },
+  { id: 'crafting', label: 'Crafting', jobIds: ['smithing', 'tailoring', 'crafting'] },
+  { id: 'cooking', label: 'Cooking', jobIds: ['cooking'] },
+  { id: 'medical', label: 'Medical', jobIds: ['doctoring', 'tending'] },
+  { id: 'logistics', label: 'Hauling and Logistics', jobIds: ['hauling'] },
+  { id: 'cleaning', label: 'Cleaning', jobIds: ['cleaning'] },
+  { id: 'combat_support', label: 'Combat Support', jobIds: ['guard', 'hunting'] },
 ];
 
 // Minimum biological age per job (Biotech children). Verified against the humanlike
@@ -1020,7 +1126,8 @@ function parseMemesFromXML(xmlString) {
     const impactRaw = parseInt(((m.querySelector('impact') || {}).textContent || '').trim(), 10);
     const tags = Array.from(m.querySelectorAll('exclusionTags > li')).map(li => (li.textContent || '').trim()).filter(Boolean);
     parsed.push({
-      id: 'mod_meme_' + _sanId(defName),
+      id: IdeologyData.customId('meme', defName),
+      defName,
       label: _capFirst(label),
       description: (typeof _cleanGrammarText === 'function' ? _cleanGrammarText(desc) : desc) || 'Scanned from installed content.',
       category: catRaw === 'Structure' ? 'Structure' : 'Theme',
@@ -1048,22 +1155,288 @@ function parseRitualsFromXML(xmlString) {
   const results = {};
   let doc;
   try { doc = new DOMParser().parseFromString(xmlString || '', 'text/xml'); } catch (_) { return results; }
-  // The install scan also returns the base game's own ritual defs; those already
-  // exist as built-in IDEO_RITUALS entries, so skip anything with a matching label.
-  const builtinLabels = new Set((typeof IDEO_RITUALS !== 'undefined' ? IDEO_RITUALS : []).map(r => r.label.toLowerCase()));
+  // Only exact supported definitions are built-ins. A mod may reuse a label.
   for (const p of doc.querySelectorAll('PreceptDef')) {
     if (p.getAttribute('Abstract') === 'True') continue;
     const defName = ((p.querySelector('defName') || {}).textContent || '').trim();
     if (!defName) continue;
     const label = ((p.querySelector('label') || {}).textContent || defName).trim();
-    if (builtinLabels.has(label.toLowerCase())) continue;
+    if (Object.hasOwn(IdeologyData.ritualDefs, defName)) continue;
     const desc = ((p.querySelector('description') || {}).textContent || '').trim();
-    results['mod_ritual_' + _sanId(defName)] = {
+    results[IdeologyData.customId('ritual', defName)] = {
+      defName,
       label: _capFirst(label),
       description: (typeof _cleanGrammarText === 'function' ? _cleanGrammarText(desc) : desc) || 'Scanned from installed content.',
       category: 'Modded',
       modSource: 'Scanned mod'
     };
+  }
+  return results;
+}
+
+// Parse installed ideology role PreceptDefs into exact, definition-driven role
+// records. Active-package and game-version filtering prevents stale workshop
+// version folders from overriding the definitions used by the imported save.
+// Relevant unapplied patches or conflicting active definitions make capability
+// fields permissive instead of guessing which restriction won RimWorld's load.
+function parseRolesFromXML(xmlString, options) {
+  const results = {};
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString || '');
+  if (!doc) return results;
+  const sourceMap = opts.sourceMap && typeof opts.sourceMap === 'object' ? opts.sourceMap : {};
+  const active = opts.activePackageResolution || { ids: [], completeness: 'unknown', reasons: [] };
+  const activeIds = new Set(Array.isArray(active.ids)
+    ? active.ids.map(id => String(id).toLowerCase()) : []);
+  const runtime = opts.runtimeFingerprint || {};
+  const runtimeVersion = String(runtime.version || runtime.displayVersion || '').match(/^(\d+\.\d+)/);
+  const runtimeBranch = runtimeVersion ? runtimeVersion[1] : null;
+  const uncertainty = opts.uncertainty || { byType: {}, dataset: {} };
+
+  const listField = (scope, field) => {
+    const container = _directChild(scope, field);
+    if (!container) return { present: false, inheritFalse: false, values: [] };
+    const children = _directChildren(container, 'li');
+    const values = children.length
+      ? children.map(node => String(node.textContent || '').trim()).filter(Boolean)
+      : String(container.textContent || '').split(',').map(value => value.trim()).filter(Boolean);
+    return {
+      present: true,
+      inheritFalse: _boolAttribute(container, 'Inherit') === false,
+      values: _uniqueStrings(values.filter(value => !/^none$/i.test(value))),
+    };
+  };
+  const mergeList = (parent, child) => {
+    if (!child || !child.present) return parent || { present: false, inheritFalse: false, values: [] };
+    if (child.inheritFalse) return child;
+    return Object.assign({}, child, {
+      values: _uniqueStrings((parent && parent.values || []).concat(child.values || [])),
+    });
+  };
+  const parseEffects = scope => {
+    const container = _directChild(scope, 'roleEffects');
+    if (!container) return { present: false, inheritFalse: false, values: [], malformed: false };
+    const values = [];
+    let malformed = false;
+    for (const [sourceOrder, node] of _directChildren(container, 'li').entries()) {
+      const classId = node.getAttribute('Class') || '';
+      const statDefId = _textDirect(node, 'statDef');
+      const modifier = _numberDirect(node, 'modifier');
+      if (/RoleEffect_PawnStatOffset$/i.test(classId) || /RoleEffect_PawnStatFactor$/i.test(classId)) {
+        if (!statDefId || modifier == null) { malformed = true; continue; }
+        values.push({
+          kind: /Factor$/i.test(classId) ? 'statFactor' : 'statOffset',
+          statDefId,
+          value: modifier,
+          classId,
+          sourceOrder,
+        });
+      } else {
+        values.push({ kind: 'unsupported', classId: classId || null, sourceOrder });
+      }
+    }
+    return {
+      present: true,
+      inheritFalse: _boolAttribute(container, 'Inherit') === false,
+      values,
+      malformed,
+    };
+  };
+  const mergeEffects = (parent, child) => {
+    if (!child || !child.present) return parent || { present: false, inheritFalse: false, values: [], malformed: false };
+    if (child.inheritFalse) return child;
+    return Object.assign({}, child, {
+      values: (parent && parent.values || []).concat(child.values || []),
+      malformed: !!(child.malformed || (parent && parent.malformed)),
+    });
+  };
+  const parseRequirements = scope => {
+    const container = _directChild(scope, 'roleRequirements');
+    if (!container) return { present: false, inheritFalse: false, values: [] };
+    const values = [];
+    for (const [sourceOrder, node] of _directChildren(container, 'li').entries()) {
+      const skills = [];
+      const skillsContainer = _directChild(node, 'skills');
+      if (skillsContainer) {
+        for (const skillNode of _elementChildren(skillsContainer)) {
+          const minimum = Number(String(skillNode.textContent || '').trim());
+          skills.push({ skillDefId: skillNode.tagName, minimum: Number.isFinite(minimum) ? minimum : null });
+        }
+      }
+      values.push({ classId: node.getAttribute('Class') || null, skills, sourceOrder });
+    }
+    return {
+      present: true,
+      inheritFalse: _boolAttribute(container, 'Inherit') === false,
+      values,
+    };
+  };
+  const mergeRequirements = (parent, child) => {
+    if (!child || !child.present) return parent || { present: false, inheritFalse: false, values: [] };
+    if (child.inheritFalse) return child;
+    return Object.assign({}, child, { values: (parent && parent.values || []).concat(child.values || []) });
+  };
+  const sourceFor = (key, occurrence) => {
+    const sources = sourceMap[key];
+    return Array.isArray(sources) ? sources[occurrence] || null : null;
+  };
+  const sourceMatchesRuntime = source => {
+    if (!source || !source.file || !runtimeBranch) return true;
+    const branch = String(source.file).match(/[\\/](1\.\d+)[\\/]/);
+    return !branch || branch[1] === runtimeBranch;
+  };
+  const counts = {};
+  const raw = [];
+  for (const node of doc.querySelectorAll('PreceptDef')) {
+    const defName = _textDirect(node, 'defName');
+    const abstractName = node.getAttribute('Name') || null;
+    const key = defName || (abstractName ? '@' + abstractName : null);
+    if (!key) continue;
+    const occurrence = counts[key] || 0;
+    counts[key] = occurrence + 1;
+    const source = sourceFor(key, occurrence);
+    const modId = source && source.modId ? String(source.modId).toLowerCase() : null;
+    if (active.completeness === 'complete' && modId && !activeIds.has(modId)) continue;
+    if (!sourceMatchesRuntime(source)) continue;
+    const preceptClass = _textDirect(node, 'preceptClass') || '';
+    const isRole = /Role/i.test(preceptClass) || /PreceptRole/i.test(String(node.getAttribute('ParentName') || ''))
+      || !!_directChild(node, 'roleTags') || !!_directChild(node, 'roleEffects')
+      || !!_directChild(node, 'roleDisabledWorkTags') || !!_directChild(node, 'roleRequiredWorkTags');
+    if (!isRole) continue;
+    const effects = parseEffects(node);
+    const reasons = effects.malformed ? ['unparseableRoleEffect'] : [];
+    raw.push({
+      defName: defName || null,
+      abstractName,
+      parentName: node.getAttribute('ParentName') || null,
+      isAbstract: _boolAttribute(node, 'Abstract') === true,
+      rawFields: {
+        definitionSource: {
+          modId: source && source.modId ? source.modId : (opts.modId || null),
+        },
+        label: _textDirect(node, 'label'),
+        description: _textDirect(node, 'description'),
+        disabledWorkTags: listField(node, 'roleDisabledWorkTags'),
+        requiredWorkTags: listField(node, 'roleRequiredWorkTags'),
+        requiredWorkTagAny: listField(node, 'roleRequiredWorkTagAny'),
+        roleTags: listField(node, 'roleTags'),
+        abilities: listField(node, 'grantedAbilities'),
+        effects,
+        requirements: parseRequirements(node),
+      },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: reasons,
+      _provenance: source
+        ? { modId: source.modId || null, sources: [Object.assign({}, source)] }
+        : _definitionProvenance(opts, occurrence, key),
+    });
+  }
+
+  const resolved = _resolveInheritance(raw, (parent, child) => ({
+    definitionSource: child.definitionSource || parent.definitionSource,
+    label: child.label != null ? child.label : parent.label,
+    description: child.description != null ? child.description : parent.description,
+    disabledWorkTags: mergeList(parent.disabledWorkTags, child.disabledWorkTags),
+    requiredWorkTags: mergeList(parent.requiredWorkTags, child.requiredWorkTags),
+    requiredWorkTagAny: mergeList(parent.requiredWorkTagAny, child.requiredWorkTagAny),
+    roleTags: mergeList(parent.roleTags, child.roleTags),
+    abilities: mergeList(parent.abilities, child.abilities),
+    effects: mergeEffects(parent.effects, child.effects),
+    requirements: mergeRequirements(parent.requirements, child.requirements),
+  }));
+  const groups = {};
+  for (const definition of resolved) {
+    if (!groups[definition.defName]) groups[definition.defName] = [];
+    groups[definition.defName].push(definition);
+  }
+  const uncertaintyReasons = defName => {
+    const byType = uncertainty.byType && uncertainty.byType.PreceptRoleDef;
+    const narrow = byType && byType[defName];
+    const dataset = uncertainty.dataset && uncertainty.dataset.PreceptRoleDef;
+    const sourceMetadata = uncertainty.sources;
+    if (sourceMetadata && sourceMetadata.byType && sourceMetadata.dataset) {
+      const sourceByType = sourceMetadata.byType.PreceptRoleDef || {};
+      const sourceDataset = sourceMetadata.dataset.PreceptRoleDef || [];
+      const entries = (Array.isArray(sourceByType[defName]) ? sourceByType[defName] : [])
+        .concat(Array.isArray(sourceDataset) ? sourceDataset : []);
+      return _uniqueStrings(entries.filter(entry => {
+        if (!entry || typeof entry !== 'object') return false;
+        const modId = entry.modId ? String(entry.modId).toLowerCase() : null;
+        if (active.completeness === 'complete' && modId && !activeIds.has(modId)) return false;
+        return sourceMatchesRuntime(entry);
+      }).map(entry => entry.reason).filter(Boolean));
+    }
+    return _uniqueStrings((Array.isArray(narrow) ? narrow : []).concat(Array.isArray(dataset) ? dataset : []));
+  };
+  const signature = definition => JSON.stringify({
+    disabled: (definition.disabledWorkTags && definition.disabledWorkTags.values || []).slice().sort(),
+    required: (definition.requiredWorkTags && definition.requiredWorkTags.values || []).slice().sort(),
+    requiredAny: (definition.requiredWorkTagAny && definition.requiredWorkTagAny.values || []).slice().sort(),
+    effects: (definition.effects && definition.effects.values || []).map(item => ({
+      kind: item.kind, statDefId: item.statDefId || null, value: item.value == null ? null : item.value,
+      classId: item.classId || null,
+    })),
+  });
+
+  for (const [defName, definitions] of Object.entries(groups)) {
+    const chosen = definitions[definitions.length - 1];
+    const signatures = new Set(definitions.map(signature));
+    let reasons = _uniqueStrings(definitions.flatMap(definition => definition._completenessReasons || [])
+      .concat(uncertaintyReasons(defName)));
+    if (signatures.size > 1) reasons = _uniqueStrings(reasons.concat('conflictingActiveDefinitions'));
+    // Identical definitions repeated in versioned content are safe once the runtime
+    // branch filter has removed stale folders.
+    if (signatures.size === 1) {
+      reasons = reasons.filter(reason => reason !== 'duplicateDefinitionConflict'
+        && reason !== 'sourceOrderingUncertain');
+    }
+    const safe = reasons.length === 0;
+    const provenance = definitions.reduce((combined, definition) =>
+      _mergeProvenance(combined, definition._provenance), null) || { modId: null, sources: [] };
+    const modIds = _uniqueStrings((provenance.sources || []).map(source => source.modId).filter(Boolean));
+    // Inherited fields carry parent provenance too, but the role belongs to its
+    // concrete PreceptDef source. Use that source for active-mod checks and UI.
+    const modId = chosen.definitionSource
+      ? chosen.definitionSource.modId
+      : (modIds.length === 1 ? modIds[0] : provenance.modId);
+    const disabled = chosen.disabledWorkTags && chosen.disabledWorkTags.values || [];
+    const effects = chosen.effects && chosen.effects.values || [];
+    const statOffsets = safe ? effects.filter(item => item.kind === 'statOffset').map(item => ({
+      statDefId: item.statDefId, value: item.value, sourceOrder: item.sourceOrder,
+    })) : [];
+    const statFactors = safe ? effects.filter(item => item.kind === 'statFactor').map(item => ({
+      statDefId: item.statDefId, value: item.value, sourceOrder: item.sourceOrder,
+    })) : [];
+    const role = {
+      id: ROLE_DEF_TO_APP_ID[defName] || 'mod_role_' + _sanId(defName),
+      defName,
+      label: _capFirst(chosen.label || defName),
+      description: (typeof _cleanGrammarText === 'function'
+        ? _cleanGrammarText(chosen.description || '') : (chosen.description || ''))
+        || 'Scanned from installed content.',
+      skillMods: {},
+      workSpeed: (statOffsets.find(item => item.statDefId === 'WorkSpeedGlobal') || {}).value || 0,
+      incap: safe ? _uniqueStrings(disabled.map(tag => WORKTAG_TO_INCAP[tag]
+        || WORKTAG_TO_INCAP[String(tag).toLowerCase()]).filter(Boolean)) : [],
+      disabledWorkTagsExact: safe ? disabled.slice() : undefined,
+      requiredWorkTagsExact: (chosen.requiredWorkTags && chosen.requiredWorkTags.values || []).slice(),
+      requiredWorkTagAnyExact: (chosen.requiredWorkTagAny && chosen.requiredWorkTagAny.values || []).slice(),
+      roleTags: (chosen.roleTags && chosen.roleTags.values || []).slice(),
+      grantedAbilities: (chosen.abilities && chosen.abilities.values || []).slice(),
+      requirements: (chosen.requirements && chosen.requirements.values || []).map(value => Object.assign({}, value, {
+        skills: (value.skills || []).map(skill => Object.assign({}, skill)),
+      })),
+      statOffsetsExact: statOffsets,
+      statFactorsExact: statFactors,
+      unsupportedRoleEffects: effects.filter(item => item.kind === 'unsupported')
+        .map(item => item.classId).filter(Boolean),
+      definitionDriven: true,
+      definitionCompleteness: safe ? 'complete' : 'partial',
+      definitionCompletenessReasons: reasons,
+      modSource: modId && !/^ludeon\.rimworld(?:\.|$)/i.test(modId) ? modId : '',
+      _provenance: { modId: modId || null, sources: [] },
+    };
+    results[defName] = role;
   }
   return results;
 }
@@ -1595,18 +1968,31 @@ const TRAITS = [
 // WORKTAG_TO_INCAP; "Constructing" has no dedicated incap id so it rides on
 // 'skilled_labor', which is safe because every role that disables Constructing also
 // disables Crafting (the other jobs skilled_labor blocks).
+const ROLE_DEF_TO_APP_ID = Object.freeze({
+  IdeoRole_Leader: 'leader',
+  IdeoRole_Moralist: 'guide',
+  IdeoRole_MedicalSpecialist: 'medical',
+  IdeoRole_ResearchSpecialist: 'research',
+  IdeoRole_ShootingSpecialist: 'shooting',
+  IdeoRole_MeleeSpecialist: 'melee',
+  IdeoRole_ProductionSpecialist: 'production',
+  IdeoRole_PlantSpecialist: 'plants',
+  IdeoRole_PlantsSpecialist: 'plants',
+  IdeoRole_AnimalsSpecialist: 'animal',
+  IdeoRole_MiningSpecialist: 'mining',
+});
 const DEFAULT_ROLES = [
   { id: 'none', label: 'No Role', skillMods: {}, workSpeed: 0, incap: [], disabledWorkTagsExact: [], description: 'Standard member.' },
-  { id: 'leader', label: 'Colony Leader', skillMods: { social: 4 }, workSpeed: 0.1, incap: [], disabledWorkTagsExact: [], description: 'Inspired leadership. +4 Social, +10% work speed. No work restrictions.' },
-  { id: 'guide', label: 'Moral Guide', skillMods: { social: 6 }, workSpeed: 0, incap: [], disabledWorkTagsExact: [], description: 'Spiritual focus. +6 Social. No work restrictions.' },
-  { id: 'production', label: 'Production Specialist', skillMods: { craft: 6, construct: 6 }, workSpeed: 0.5, incap: ['dumb_labor', 'animals', 'cooking', 'plantwork', 'mining'], disabledWorkTagsExact: ['ManualDumb', 'Animals', 'Cooking', 'PlantWork', 'Mining'], description: 'Focus on efficiency. +6 Craft/Build, +50% work speed. Refuses dumb labour, animals, cooking, plant work and mining.' },
-  { id: 'shooting', label: 'Shooting Specialist', skillMods: { shoot: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'mining', 'skilled_labor'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Mining', 'Constructing'], description: 'Combat elite. +4 Shooting, Aiming speed bonus. Refuses crafting, cooking, plant work, mining and construction.' },
-  { id: 'melee', label: 'Melee Specialist', skillMods: { melee: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'mining', 'skilled_labor', 'hunting'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Mining', 'Constructing', 'Hunting', 'Shooting'], description: 'CQC Expert. +4 Melee. Refuses crafting, cooking, plant work, mining, construction and hunting.' },
-  { id: 'medical', label: 'Medical Specialist', skillMods: { medicine: 4 }, workSpeed: 0, incap: ['violence'], disabledWorkTagsExact: ['Violent'], description: 'Master healer. +4 Medicine, +50% tend speed. Refuses all violence.' },
-  { id: 'mining', label: 'Mining Specialist', skillMods: { mine: 4 }, workSpeed: 0.5, incap: ['animals', 'crafting', 'cooking', 'plantwork', 'skilled_labor'], disabledWorkTagsExact: ['Animals', 'Crafting', 'Cooking', 'PlantWork', 'Constructing'], description: 'Deep driller. +4 Mining, +50% mining speed. Refuses animals, crafting, cooking, plant work and construction.' },
-  { id: 'plants', label: 'Plants Specialist', skillMods: { plant: 4 }, workSpeed: 0.5, incap: ['animals', 'crafting', 'cooking', 'skilled_labor', 'mining'], disabledWorkTagsExact: ['Animals', 'Crafting', 'Cooking', 'Constructing', 'Mining'], description: 'Green thumb. +4 Plants, +50% harvest yield/speed. Refuses animals, crafting, cooking, construction and mining.' },
-  { id: 'animal', label: 'Animal Specialist', skillMods: { animal: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'skilled_labor', 'mining'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Constructing', 'Mining'], description: 'Beast master. +4 Animals, +50% tame/train chance. Refuses crafting, cooking, plant work, construction and mining.' },
-  { id: 'research', label: 'Research Specialist', skillMods: { intel: 4 }, workSpeed: 0.5, incap: ['dumb_labor', 'animals', 'cooking', 'plantwork', 'mining'], disabledWorkTagsExact: ['ManualDumb', 'Animals', 'Cooking', 'PlantWork', 'Mining'], description: 'Great thinker. +4 Intellectual, +50% research speed. Refuses dumb labour, animals, cooking, plant work and mining.' },
+  { id: 'leader', defName: 'IdeoRole_Leader', label: 'Colony Leader', skillMods: { social: 4 }, workSpeed: 0.1, incap: [], disabledWorkTagsExact: [], description: 'Inspired leadership. +4 Social, +10% work speed. No work restrictions.' },
+  { id: 'guide', defName: 'IdeoRole_Moralist', label: 'Moral Guide', skillMods: { social: 6 }, workSpeed: 0, incap: [], disabledWorkTagsExact: [], description: 'Spiritual focus. +6 Social. No work restrictions.' },
+  { id: 'production', defName: 'IdeoRole_ProductionSpecialist', label: 'Production Specialist', skillMods: { craft: 6, construct: 6 }, workSpeed: 0.5, incap: ['dumb_labor', 'animals', 'cooking', 'plantwork', 'mining'], disabledWorkTagsExact: ['ManualDumb', 'Animals', 'Cooking', 'PlantWork', 'Mining'], description: 'Focus on efficiency. +6 Craft/Build, +50% work speed. Refuses dumb labour, animals, cooking, plant work and mining.' },
+  { id: 'shooting', defName: 'IdeoRole_ShootingSpecialist', label: 'Shooting Specialist', skillMods: { shoot: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'mining', 'skilled_labor'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Mining', 'Constructing'], description: 'Combat elite. +4 Shooting, Aiming speed bonus. Refuses crafting, cooking, plant work, mining and construction.' },
+  { id: 'melee', defName: 'IdeoRole_MeleeSpecialist', label: 'Melee Specialist', skillMods: { melee: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'mining', 'skilled_labor', 'hunting'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Mining', 'Constructing', 'Hunting', 'Shooting'], description: 'CQC Expert. +4 Melee. Refuses crafting, cooking, plant work, mining, construction and hunting.' },
+  { id: 'medical', defName: 'IdeoRole_MedicalSpecialist', label: 'Medical Specialist', skillMods: { medicine: 4 }, workSpeed: 0, incap: ['violence'], disabledWorkTagsExact: ['Violent'], description: 'Master healer. +4 Medicine, +50% tend speed. Refuses all violence.' },
+  { id: 'mining', defName: 'IdeoRole_MiningSpecialist', label: 'Mining Specialist', skillMods: { mine: 4 }, workSpeed: 0.5, incap: ['animals', 'crafting', 'cooking', 'plantwork', 'skilled_labor'], disabledWorkTagsExact: ['Animals', 'Crafting', 'Cooking', 'PlantWork', 'Constructing'], description: 'Deep driller. +4 Mining, +50% mining speed. Refuses animals, crafting, cooking, plant work and construction.' },
+  { id: 'plants', defName: 'IdeoRole_PlantSpecialist', label: 'Plants Specialist', skillMods: { plant: 4 }, workSpeed: 0.5, incap: ['animals', 'crafting', 'cooking', 'skilled_labor', 'mining'], disabledWorkTagsExact: ['Animals', 'Crafting', 'Cooking', 'Constructing', 'Mining'], description: 'Green thumb. +4 Plants, +50% harvest yield/speed. Refuses animals, crafting, cooking, construction and mining.' },
+  { id: 'animal', defName: 'IdeoRole_AnimalsSpecialist', label: 'Animal Specialist', skillMods: { animal: 4 }, workSpeed: 0, incap: ['crafting', 'cooking', 'plantwork', 'skilled_labor', 'mining'], disabledWorkTagsExact: ['Crafting', 'Cooking', 'PlantWork', 'Constructing', 'Mining'], description: 'Beast master. +4 Animals, +50% tame/train chance. Refuses crafting, cooking, plant work, construction and mining.' },
+  { id: 'research', defName: 'IdeoRole_ResearchSpecialist', label: 'Research Specialist', skillMods: { intel: 4 }, workSpeed: 0.5, incap: ['dumb_labor', 'animals', 'cooking', 'plantwork', 'mining'], disabledWorkTagsExact: ['ManualDumb', 'Animals', 'Cooking', 'PlantWork', 'Mining'], description: 'Great thinker. +4 Intellectual, +50% research speed. Refuses dumb labour, animals, cooking, plant work and mining.' },
 ];
 
 const INCAP_OPTIONS = [
@@ -1708,7 +2094,7 @@ const IDEO_MEMES = [
   { id: 'painIsVirtue', label: 'Pain is Virtue', category: 'Theme', color: '#c97af5', description: 'Virtue is shown through suffering of self and others.', impact: 'high', effects: { painFactor: -0.20, mood: 0 }, conflicts: [], specialists: [], forcedPrecepts: { scarification: 'required' }, unlocks: { rituals: ['Scarification', 'Symbol burning'], buildables: ['Slab bed', 'Slab double bed'], apparel: ['Torture crown'] }, agreeingTraits: ['Ascetic', 'Tortured artist', 'Masochist'], conflictingTraits: ['Wimp', 'Gourmand'], culture: 'Morbid' },
   { id: 'blindsight', label: 'Blindsight', category: 'Theme', color: '#333366', description: 'Only the blind can perceive true reality. +30% psychic sensitivity when blind.', impact: 'high', effects: { psychicSensitivity: 0.40, mood: -8 }, conflicts: [], specialists: [], forcedPrecepts: { autonomous_weapons: 'neutral', blindness: 'respected' } },
   { id: 'darkness', label: 'Darkness', category: 'Theme', color: '#444466', description: 'Light burns and destroys. People ought to live in darkness.', impact: 'high', effects: { mood: 0, workSpeed: 0.05 }, conflicts: [], specialists: ['mining'] },
-  { id: 'rancher', label: 'Rancher', category: 'Theme', color: '#e0955a', description: 'Raising animals is the right way; raising plants to eat is not.', impact: 'medium', effects: { animalSkill: 4, mood: 2 }, conflicts: ['animalist'], specialists: ['animals'], forcedPrecepts: { meat_eating: 'carnivore' } },
+  { id: 'rancher', label: 'Rancher', category: 'Theme', color: '#e0955a', description: 'Raising animals is the right way; raising plants to eat is not.', impact: 'medium', effects: { animalSkill: 4, mood: 2 }, conflicts: ['animalist'], specialists: ['animals'], forcedPrecepts: { ranching: 'central' } },
   { id: 'animalist', label: 'Animal Personhood', category: 'Theme', color: '#6ad4c8', description: 'Animals deserve the same respect as people. It is wrong to kill them.', impact: 'high', effects: { mood: 4, animalSkill: 2 }, conflicts: ['rancher'], specialists: ['animals'], forcedPrecepts: { meat_eating: 'vegetarian' } },
   { id: 'raider', label: 'Raider', category: 'Theme', color: '#d14040', description: 'The strong should take from the weak.', impact: 'medium', effects: { combatSkill: 3, mood: -3 }, conflicts: [], specialists: ['shooting', 'melee'] },
   { id: 'nudism', label: 'Nudism', category: 'Theme', color: '#f5b8d4', description: 'Clothing binds, controls, and suffocates us. We should all hang free.', impact: 'high', effects: { mood: 5, workSpeed: 0 }, conflicts: [], specialists: [], forcedPrecepts: { nudity: 'approved' }, agreeingTraits: ['Nudist'] },
@@ -1719,9 +2105,9 @@ const IDEO_MEMES = [
   { id: 'femaleSupremacy', label: 'Female Supremacy', category: 'Theme', color: '#e85a9e', description: 'Women are the superior gender and should rule.', impact: 'medium', effects: { mood: 0 }, conflicts: ['maleSupremacy'], specialists: [], agreeingTraits: ['Misandrist'], conflictingTraits: ['Misogynist'] },
   { id: 'maleSupremacy', label: 'Male Supremacy', category: 'Theme', color: '#5a7ae8', description: 'Men are the superior gender and should rule.', impact: 'medium', effects: { mood: 0 }, conflicts: ['femaleSupremacy'], specialists: [], agreeingTraits: ['Misogynist'], conflictingTraits: ['Misandrist'] },
   // DLC memes
-  { id: 'bloodfeeding', label: 'Bloodfeeding', category: 'Theme', color: '#8b0000', description: 'Drinking blood is sacred. Bloodfeeders should be worshipped.', impact: 'medium', dlc: 'Biotech', effects: { mood: 0 }, conflicts: [], specialists: [], forcedPrecepts: { organ_harvest: 'neutral', cannibalism: 'neutral' }, unlocks: { research: ['Electricity', 'Deathrest'] }, culture: 'Morbid' },
+  { id: 'bloodfeeding', label: 'Bloodfeeding', category: 'Theme', color: '#8b0000', description: 'Drinking blood is sacred. Bloodfeeders should be worshipped.', impact: 'medium', dlc: 'Biotech', effects: { mood: 0 }, conflicts: [], specialists: [], forcedPrecepts: { organ_harvest: 'acceptable' }, requiredPrecepts: { cannibalism: ['acceptable', 'preferred'], execution: ['dont_care', 'respected_guilty', 'required'] }, unlocks: { research: ['Electricity', 'Deathrest'] }, culture: 'Morbid' },
   { id: 'ritualist', label: 'Ritualist', category: 'Theme', color: '#7a3d9e', description: 'Through ritual we can understand and harness a greater energy in the universe.', impact: 'medium', dlc: 'Anomaly', effects: { mood: 0, researchSpeed: -0.15 }, conflicts: [], specialists: [], culture: 'Morbid' },
-  { id: 'inhuman', label: 'Inhuman', category: 'Theme', color: '#444444', description: 'Humanity is a barrier to our connection with the machine god.', impact: 'high', dlc: 'Anomaly', effects: { mood: 0 }, conflicts: [], specialists: [], forcedPrecepts: { execution: 'accepted', cannibalism: 'neutral', corpses: 'sky_burial', nudity: 'neutral', organ_harvest: 'neutral', slavery: 'neutral' } },
+  { id: 'inhuman', label: 'Inhuman', category: 'Theme', color: '#444444', description: 'Humanity is a barrier to our connection with the machine god.', impact: 'high', dlc: 'Anomaly', effects: { mood: 0 }, conflicts: [], specialists: [], forcedPrecepts: { execution: 'respected_guilty', cannibalism: 'acceptable', corpses: 'dont_care', nudity: 'neutral', organ_harvest: 'acceptable', slavery: 'acceptable' } },
   { id: 'shipborn', label: 'Shipborn', category: 'Theme', color: '#4a6a9e', description: 'Humans were destined to live among the stars.', impact: 'medium', dlc: 'Odyssey', effects: { mood: 0 }, conflicts: [], specialists: [], forcedPrecepts: { nutrient_paste: 'fine' }, conflictingTraits: ['Undergrounder'] },
   // Social memes
   { id: 'proselytizer', label: 'Proselytizer', category: 'Social', color: '#f5d06a', description: 'It is our duty to spread our beliefs.', impact: 'medium', effects: { socialSkill: 3, convertSpeed: 0.50 }, conflicts: [], specialists: [] },
@@ -1973,6 +2359,111 @@ const IDEO_PRECEPT_DEFS = [
   ]},
 ];
 
+// Exact save identities for planner choices. This is a UI mapping, not a claim
+// that the planner's heuristic modifiers reproduce every in-game effect.
+// Unrepresented options remain visible as unmapped save data, never guessed.
+const IdeologyData = {
+  memeDefs: {
+    Structure_TheistEmbodied: 'structure_theistEmbodied', Structure_TheistAbstract: 'structure_theistAbstract',
+    Structure_Animist: 'structure_animist', Structure_Archist: 'structure_archist', Structure_Ideological: 'structure_ideological',
+    Collectivist: 'collectivist', Individualist: 'individualist', Supremacist: 'supremacist', Guilty: 'guilty', Loyalist: 'loyalist',
+    Transhumanist: 'transhumanist', FleshPurity: 'fleshPurity', Tunneler: 'tunneler', NaturePrimacy: 'naturePrimacy',
+    TreeConnection: 'treeConnection', PainIsVirtue: 'painIsVirtue', Blindsight: 'blindsight', Darkness: 'darkness',
+    Rancher: 'rancher', AnimalPersonhood: 'animalist', Raider: 'raider', Nudism: 'nudism', Cannibal: 'cannibal',
+    HighLife: 'highLife', HumanPrimacy: 'humanPrimacy', FemaleSupremacy: 'femaleSupremacy', MaleSupremacy: 'maleSupremacy',
+    Bloodfeeding: 'bloodfeeding', Ritualist: 'ritualist', Inhuman: 'inhuman', Shipborn: 'shipborn', Proselytizer: 'proselytizer',
+  },
+  ritualDefs: {
+    Classic_DanceParty: 'dance_party', Classic_DrumParty: 'drum_party', Festival: 'feast', GladiatorDuel: 'gladiator_duel',
+    ScarificationCeremony: 'scarification', BlindingCeremony: 'blinding', TreeConnection: 'tree_celebration', Funeral: 'funeral',
+  },
+  // Each entry binds an exact PreceptDef family and exact suffix to an existing
+  // planner option. Similar names and translated/custom labels are not aliases.
+  preceptGroups: {
+    Cannibalism: ['cannibalism', { Abhorrent: 'abhorrent', Horrible: 'horrible', Disapproved: 'disapproved', Acceptable: 'acceptable', Preferred: 'preferred', RequiredStrong: 'required_strong', RequiredRavenous: 'required_ravenous' }],
+    Execution: ['execution', { Abhorrent: 'always_abhorrent', Horrible: 'always_horrible', HorribleIfInnocent: 'horrible_if_innocent', DontCare: 'dont_care', RespectedIfGuilty: 'respected_guilty', Required: 'required' }],
+    Research: ['research', { ExtremelySlow: 'extremely_slow', VerySlow: 'very_slow', Slow: 'slow', Normal: 'neutral' }],
+    IdeoDiversity: ['diversity_of_thought', { Abhorrent: 'intense_bigotry', Horrible: 'moderate_bigotry', Disapproved: 'mild_bigotry', Standard: 'neutral', Approved: 'appreciated', Respected: 'highly_appreciated', Exalted: 'exalted' }],
+    NutrientPasteEating: ['nutrient_paste', { Disgusting: 'disgusting', DontMind: 'fine' }],
+    FungusEating: ['fungus', { Despised: 'despised', Preferred: 'preferred' }],
+    InsectMeatEating: ['insect_meat', { Despised_Classic: 'despised', Loved: 'loved' }],
+    Corpses: ['corpses', { Ugly: 'ugly', DontCare: 'dont_care' }],
+    OrganUse: ['organ_harvest', { Abhorrent: 'abhorrent', Acceptable: 'acceptable' }],
+    Slavery: ['slavery', { Abhorrent: 'abhorrent', Horrible: 'horrible', Disapproved: 'disapproved', Acceptable: 'acceptable', Honorable: 'honorable' }],
+    Blindness: ['blindness', { Respected: 'respected', Elevated: 'elevated', Sublime: 'sublime' }],
+    Blinding: ['blindness', { Horrible: 'horrible' }],
+    BodyMod: ['body_modification', { Abhorrent: 'abhorrent', Disapproved: 'disapproved', Approved: 'approved' }],
+    DrugUse: ['drugs', { Prohibited: 'prohibited', MedicalOnly: 'medical', MedicalOrSocial: 'social', Essential: 'essential' }],
+    Charity: ['charity', { Essential: 'essential', Important: 'important', Worthwhile: 'worthwhile' }],
+    Apostasy: ['apostasy', { Abhorrent: 'abhorrent', Disapproved: 'disapproved' }],
+    Skullspike: ['skullspike', { Disapproved: 'disapproved', Desired: 'desired' }],
+    AnimalSlaughter: ['slaughter_animals', { Horrible: 'horrible', Disapproved: 'disapproved' }],
+    KillingInnocentAnimals: ['killing_animals', { Horrible: 'horrible', Disapproved: 'disapproved' }],
+    Mining: ['mining', { Prohibited: 'prohibited', Horrible: 'horrible', Disapproved: 'disapproved' }],
+    Raiding: ['raiding', { Respected: 'respected', Required: 'required' }],
+    Ranching: ['ranching', { Central: 'central' }],
+    AgeReversal: ['age_reversal', { Demanded: 'demanded' }],
+    Biosculpting: ['biosculpting', { Accelerated: 'accelerated' }],
+    Proselytizing: ['proselytizing', { Occasionally: 'occasional', Sometimes: 'sometimes', Frequently: 'frequent' }],
+    Lovin: ['physical_love', { Free: 'free' }],
+    Nudity_Male: ['male_clothing', { Mandatory: 'fully_nude', CoveringAnythingButGroinDisapproved: 'pants_at_most', NoRules: 'no_rules' }],
+    Nudity_Female: ['female_clothing', { Mandatory: 'fully_nude', CoveringAnythingButGroinDisapproved: 'pants_at_most', NoRules: 'no_rules' }],
+    SpouseCount_Male: ['spouse_count_male', { MaxOne: 'one', MaxTwo: 'two', MaxThree: 'three', MaxFour: 'four', Unlimited: 'unlimited' }],
+    SpouseCount_Female: ['spouse_count_female', { MaxOne: 'one', MaxTwo: 'two', MaxThree: 'three', MaxFour: 'four', Unlimited: 'unlimited' }],
+  },
+  customId(kind, defName) {
+    // Retain exact identity, including case and punctuation, without collisions
+    // introduced by the old lowercasing/sanitising scanner keys.
+    return `ideo_${kind}:${defName}`;
+  },
+  sanitiseDefinition(value, fallback = '') {
+    const v = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const text = (x, d = '') => typeof x === 'string' ? x : d;
+    const strings = x => Array.isArray(x) ? x.filter(s => typeof s === 'string') : [];
+    const effects = {};
+    for (const key of ['mood', 'workSpeed', 'combatSkill', 'socialSkill', 'animalSkill', 'researchSpeed',
+      'miningSpeed', 'plantSpeed', 'painFactor', 'immunityGain', 'psychicSensitivity', 'convertSpeed']) {
+      if (Number.isFinite(v.effects && v.effects[key])) effects[key] = v.effects[key];
+    }
+    return { defName: text(v.defName), label: text(v.label, fallback), description: text(v.description),
+      category: text(v.category, 'Modded'), impact: ['low', 'medium', 'high'].includes(v.impact) ? v.impact : 'medium',
+      color: typeof _safeColor === 'function' ? _safeColor(v.color, '#888888') : '#888888',
+      effects, conflicts: strings(v.conflicts), specialists: [], modSource: text(v.modSource, 'Custom'),
+      quality: text(v.quality, 'medium') };
+  },
+  mergeDefinition(store, kind, definition, ideology) {
+    const defName = definition.defName;
+    const builtins = kind === 'meme' ? this.memeDefs : this.ritualDefs;
+    const builtin = Object.hasOwn(builtins, defName) ? builtins[defName] : null;
+    const id = builtin || this.customId(kind, defName);
+    const legacyIds = ['mod_' + kind + '_' + _sanId(defName),
+      defName.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase().replace(/\s+/g, '_')];
+    const aliases = Object.keys(store).filter(key => key !== id && store[key]
+      && (store[key].defName === defName || (!store[key].defName && legacyIds.includes(key))));
+    if (!builtin) {
+      const previous = Object.assign({}, ...aliases.map(key => store[key]), store[id]);
+      store[id] = { ...previous, ...definition, defName };
+    }
+    aliases.forEach(key => { delete store[key]; });
+    const field = kind === 'meme' ? 'memes' : 'rituals';
+    if (ideology && Array.isArray(ideology[field])) {
+      ideology[field] = [...new Set(ideology[field].map(key => aliases.includes(key) ? id : key))];
+    }
+    for (const value of Object.values(store)) {
+      if (value && Array.isArray(value.conflicts)) value.conflicts = value.conflicts.map(key => aliases.includes(key) ? id : key);
+    }
+    return id;
+  },
+  preceptChoice(defName) {
+    for (const [prefix, [id, options]] of Object.entries(this.preceptGroups)) {
+      if (!defName.startsWith(prefix + '_')) continue;
+      const suffix = defName.slice(prefix.length + 1);
+      if (Object.hasOwn(options, suffix)) return { id, option: options[suffix] };
+    }
+    return null;
+  },
+};
+
 const CAT_LABELS = {
   emergency:   'Emergency & Med',
   social:      'Social & Warden',
@@ -2205,11 +2696,11 @@ const GENE_CATEGORIES = [
 ];
 
 const THREAT_PRESETS = [
-  { id: 'none', label: 'Unarmoured / Naked', sharp: 0, blunt: 0, ap: 0 },
-  { id: 'flak', label: 'Raider (Flak Vest)', sharp: 1.00, blunt: 0.36, ap: 0.16 },
-  { id: 'centipede', label: 'Centipede (Mechanoid)', sharp: 0.72, blunt: 0.22, ap: 0.20 },
-  { id: 'marine', label: 'Elite (Marine Armour)', sharp: 1.06, blunt: 0.45, ap: 0.35 },
-  { id: 'cataphract', label: 'Boss (Cataphract)', sharp: 1.20, blunt: 0.50, ap: 0.45 },
+  { id: 'none', label: 'Unarmoured / Naked', sharp: 0, blunt: 0 },
+  { id: 'flak', label: 'Raider (Flak Vest)', sharp: 1.00, blunt: 0.36 },
+  { id: 'centipede', label: 'Centipede (Mechanoid)', sharp: 0.72, blunt: 0.22 },
+  { id: 'marine', label: 'Elite (Marine Armour)', sharp: 1.06, blunt: 0.45 },
+  { id: 'cataphract', label: 'Boss (Cataphract)', sharp: 1.20, blunt: 0.50 },
 ];
 
 const BACKSTORIES = [
@@ -4362,7 +4853,7 @@ function resolveC4ActivePackageIds(importMeta) {
 }
 
 // Parent index for each body part (depth-first tree). -1 = root (torso).
-// Used to detect redundant "missing" entries (e.g. right hand missing → skip right fingers).
+// Used to detect redundant "missing" entries (e.g. right hand missing - skip right fingers).
 const HUMAN_BODY_PARENT = [
   /* 0  torso            */ -1,
   /* 1  ribcage          */  0,

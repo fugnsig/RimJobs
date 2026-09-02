@@ -15,12 +15,12 @@
 <!-- ─── Global error boundary ─── -->
 <div id="error-overlay" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(0,0,0,0.92); color:#e8e9eb; font-family:system-ui,-apple-system,sans-serif; padding:40px; overflow-y:auto">
   <div style="max-width:560px; margin:0 auto">
-    <div style="font-size:calc(24px * var(--font-scale)); font-weight:800; color:#f0857a; margin-bottom:8px">Something went wrong</div>
+    <div style="font-size:calc(24px * var(--font-scale)); font-weight:800; color:var(--p4-txt); margin-bottom:8px">Something went wrong</div>
     <div style="font-size:calc(13px * var(--font-scale)); color:#aaa; margin-bottom:20px">Your data was auto-saved. You can reload or try to dismiss this and continue.</div>
-    <pre id="error-details" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:16px; font-size:calc(12px * var(--font-scale)); color:#f0857a; white-space:pre-wrap; word-break:break-word; max-height:300px; overflow-y:auto; margin-bottom:20px"></pre>
+    <pre id="error-details" style="background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:16px; font-size:calc(12px * var(--font-scale)); color:var(--p4-txt); white-space:pre-wrap; word-break:break-word; max-height:300px; overflow-y:auto; margin-bottom:20px"></pre>
     <div style="display:flex; gap:10px">
-      <button onclick="_copyErrorText(this)" style="flex:1; padding:10px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; background:transparent; color:#f0857a; font-weight:700; font-size:calc(14px * var(--font-scale)); cursor:pointer">Copy Error</button>
-      <button onclick="location.reload()" style="flex:1; padding:10px; border:none; border-radius:8px; background:#e8a838; color:#000; font-weight:700; font-size:calc(14px * var(--font-scale)); cursor:pointer">Reload</button>
+      <button onclick="_copyErrorText(this)" style="flex:1; padding:10px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; background:transparent; color:var(--p4-txt); font-weight:700; font-size:calc(14px * var(--font-scale)); cursor:pointer">Copy Error</button>
+      <button onclick="location.reload()" style="flex:1; padding:10px; border:none; border-radius:8px; background:var(--accent); color:var(--bg); font-weight:700; font-size:calc(14px * var(--font-scale)); cursor:pointer">Reload</button>
       <button onclick="document.getElementById('error-overlay').style.display='none'" style="flex:1; padding:10px; border:1px solid rgba(255,255,255,0.2); border-radius:8px; background:transparent; color:#e8e9eb; font-weight:700; font-size:calc(14px * var(--font-scale)); cursor:pointer">Dismiss</button>
     </div>
   </div>
@@ -89,7 +89,7 @@
   <div class="overlay-controls">
     <label class="overlay-opacity-label" title="Window opacity">
       <input type="range" min="30" max="100" value="100" class="overlay-opacity-slider"
-        oninput="window.overlay.setOpacity(this.value/100)">
+        aria-label="Window opacity" oninput="App.setWindowOpacity(this.value/100)">
     </label>
     <button class="overlay-btn" id="widgetToggleBtn" onclick="window.overlay.toggleWidgetMode()" title="Toggle widget / full window">&#9634;</button>
     <button class="overlay-btn" onclick="window.overlay.snapLeft()" title="Snap to left half">&#9699;</button>
@@ -306,10 +306,26 @@
     <!-- VIEW: WORK -->
     <div id="view-work" class="view-container">
       <div id="summaryBar" class="summary-bar"></div>
-      <div class="filter-tabs" id="filterTabs" style="margin-bottom:var(--gap-md); display:flex; gap:var(--gap-sm); align-items:center; justify-content:flex-end">
-        <button class="btn btn-sm" id="manualPrioBtn" onclick="App.toggleManualPriorities()" title="Switch the table between Manual priorities (numbers 1-4) and Simple on/off mode, matching RimWorld's Work tab." style="font-size:var(--f-xs); padding:5px 12px">Manual</button>
+      <div class="filter-tabs" id="filterTabs" style="margin-bottom:var(--gap-md); display:flex; flex-wrap:wrap; gap:var(--gap-sm); align-items:center; justify-content:flex-end">
+        <button class="btn btn-sm" id="manualPrioBtn" onclick="App.toggleManualPriorities()" title="Switch the table between numbered priorities and Simple on/off mode." style="font-size:var(--f-xs); padding:5px 12px">Manual</button>
+        <label class="priority-range-pill" id="priorityRangePill" title="Select the 1-X range used by manual editing, Auto-Assign, and Work Planner suggestions.">
+          <span>Range</span>
+          <select id="priorityRangeSelect" aria-label="Maximum priority" onchange="App.setManualPriorityMax(this.value)">
+            <option value="4">1-4</option><option value="5">1-5</option><option value="6">1-6</option>
+            <option value="7">1-7</option><option value="8">1-8</option><option value="9">1-9</option>
+          </select>
+        </label>
+        <label class="colony-focus-pill" id="colonyFocusPill" title="Bias Auto-Assign and Work Planner towards suitable workers for one strategic goal. Restrictions and essential sole-worker coverage still win.">
+          <span>Focus</span>
+          <select id="strategicFocusSelect" aria-label="Colony Focus" onchange="App.setStrategicFocus(this.value)">
+            <option value="">Balanced</option>
+          </select>
+          <select id="strategicFocusStrength" aria-label="Colony Focus strength" onchange="App.setStrategicFocusStrength(this.value)" disabled>
+            <option value="normal">Normal</option><option value="strong">Strong</option>
+          </select>
+        </label>
         <button class="btn btn-sm" onclick="App.openJobColumnManager()" title="Choose which job columns show (vanilla/DLC by default; add modded or custom jobs). Drag column headers to reorder." style="font-size:var(--f-xs); padding:5px 12px; margin-right:auto">Columns</button>
-        <button class="btn btn-sm btn-accent" id="autoAssignBtn" onclick="App.autoAssignAll()" title="Automatically assign job priorities based on Min-Max logic. Does not account for xenotype weaknesses or modded xenotypes." style="font-size:var(--f-xs); padding:5px 12px">Auto-Assign</button>
+        <button class="btn btn-sm btn-accent" id="autoAssignBtn" onclick="App.autoAssignAll()" title="Automatically assign visible jobs across the selected 1-X range from pawn capability, skill, passion, work speed, role, and available xenotype or mod evidence." style="font-size:var(--f-xs); padding:5px 12px">Auto-Assign</button>
         <button class="btn btn-sm priority-lock-pill" id="priorityLockBtn" onclick="App.togglePriorityLock()" aria-pressed="false" title="Lock priority editing while keeping the table scrollable." style="font-size:var(--f-xs); padding:5px 12px">&#128275; Unlocked</button>
         <button class="btn btn-sm" id="optimizerToggle" onclick="App.openWorkPlanner()" style="font-size:var(--f-xs); padding:5px 12px">Work Planner</button>
       </div>
@@ -366,6 +382,7 @@
             <div id="comp-form-b" class="comp-form-grid"></div>
           </div>
         </div>
+        <div id="weaponThreatControls" class="settings-card" style="margin-bottom:0"></div>
         <div id="comparisonAnalysis" class="settings-card" style="background:var(--surface2); border:1px solid var(--accent-glow)"></div>
       </div>
 
@@ -434,7 +451,7 @@
 <div id="global-tooltip" style="display:none; position:fixed; z-index:999999; width:240px; background:var(--surface3); border:1px solid var(--accent); padding:var(--gap-md); border-radius:var(--radius-sm); color:var(--text2); font-size:var(--f-xs); line-height:1.5; box-shadow:0 8px 24px rgba(0,0,0,0.5); pointer-events:none; font-family:Arial,sans-serif;"></div>
 
 <!-- XENOTYPE MODAL -->
-<div class="modal-overlay" id="xenoModal">
+<div class="modal-overlay" id="xenoModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="max-width:800px">
     <div class="modal-body" id="xenoModalBody"></div>
     <div class="modal-footer">
@@ -444,7 +461,7 @@
 </div>
 
 <!-- TRAIT MODAL -->
-<div class="modal-overlay" id="traitModal">
+<div class="modal-overlay" id="traitModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal">
     <div class="modal-body" id="traitModalBody"></div>
     <div class="modal-footer">
@@ -454,7 +471,7 @@
 </div>
 
 <!-- MATERIAL MODAL -->
-<div class="modal-overlay" id="materialModal">
+<div class="modal-overlay" id="materialModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="max-width: 400px">
     <div class="modal-header">
       <h2 class="modal-title">New Material</h2>
@@ -468,7 +485,7 @@
 </div>
 
 <!-- WEAPON MODAL -->
-<div class="modal-overlay" id="weaponModal">
+<div class="modal-overlay" id="weaponModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="max-width: 600px">
     <div class="modal-header">
       <h2 class="modal-title" id="weaponModalTitle">Add New Weapon</h2>
@@ -482,7 +499,7 @@
 </div>
 
 <!-- APPAREL MODAL -->
-<div class="modal-overlay" id="apparelModal">
+<div class="modal-overlay" id="apparelModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="max-width: 640px">
     <div class="modal-header">
       <h2 class="modal-title" id="apparelModalTitle">Add Apparel Item</h2>
@@ -496,7 +513,7 @@
 </div>
 
 <!-- ROOM TAG MODAL -->
-<div class="modal-overlay" id="roomTagModal">
+<div class="modal-overlay" id="roomTagModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="max-width: 460px">
     <div class="modal-header">
       <h2 class="modal-title" id="roomTagModalTitle">Place Tag</h2>
@@ -509,7 +526,7 @@
   </div>
 </div>
 <!-- STAMP SAVE MODAL -->
-<div class="modal-overlay" id="stampModal">
+<div class="modal-overlay" id="stampModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="max-width: 420px">
     <div class="modal-header">
       <h2 class="modal-title">Save Stamp</h2>
@@ -550,7 +567,7 @@
 </div>
 
 <!-- BIOME MODAL -->
-<div class="modal-overlay" id="biomeModal">
+<div class="modal-overlay" id="biomeModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="max-width: 400px">
     <div class="modal-header">
       <h2 class="modal-title">Custom Background Colour</h2>
@@ -563,7 +580,7 @@
   </div>
 </div>
 
-<div class="modal-overlay" id="relationModal">
+<div class="modal-overlay" id="relationModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal" style="max-width: 420px">
     <div class="modal-header">
       <h2 class="modal-title">Add Relation</h2>
@@ -598,8 +615,8 @@
       <!-- Level filter pills -->
       <div id="consoleFilters" style="display:flex; gap:3px; align-items:center">
         <button onclick="App._setConsoleFilter('all')" data-filter="all" class="con-filter active" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:var(--accent,#e8a838); color:#000; font-weight:700">All</button>
-        <button onclick="App._setConsoleFilter('error')" data-filter="error" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:#f0857a; font-weight:600"><span class="con-badge-error"></span>Errors</button>
-        <button onclick="App._setConsoleFilter('warn')" data-filter="warn" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:#e8a838; font-weight:600"><span class="con-badge-warn"></span>Warns</button>
+        <button onclick="App._setConsoleFilter('error')" data-filter="error" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:var(--p4-txt); font-weight:600"><span class="con-badge-error"></span>Errors</button>
+        <button onclick="App._setConsoleFilter('warn')" data-filter="warn" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:var(--accent); font-weight:600"><span class="con-badge-warn"></span>Warns</button>
         <button onclick="App._setConsoleFilter('info')" data-filter="info" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:var(--text3,#888); font-weight:600">Info</button>
         <button onclick="App._setConsoleFilter('log')" data-filter="log" class="con-filter" style="padding:1px 7px; font-size:10px; border-radius:3px; cursor:pointer; border:1px solid var(--border,#444); background:transparent; color:var(--text3,#888); font-weight:600">Log</button>
       </div>
@@ -616,12 +633,13 @@
   <div id="consoleDrawerBody" style="overflow-y:auto; flex:1; padding:4px 12px"></div>
 </div>
 <!-- Console error badge (visible when drawer closed but errors exist) -->
-<div id="consoleBadge" onclick="App.toggleConsoleDrawer()" style="display:none; position:fixed; bottom:12px; right:12px; z-index:99997; background:#f0857a; color:#000; font-size:11px; font-weight:700; font-family:monospace; padding:4px 10px; border-radius:12px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.4); animation:consoleBadgePulse 2s ease-in-out infinite" title="Console errors detected - click to open">0 errors</div>
+<div id="consoleBadge" onclick="App.toggleConsoleDrawer()" style="display:none; position:fixed; bottom:12px; right:12px; z-index:99997; background:var(--p4-txt); color:var(--bg); font-size:11px; font-weight:700; font-family:monospace; padding:4px 10px; border-radius:12px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.4); animation:consoleBadgePulse 2s ease-in-out infinite" title="Console errors detected - click to open">0 errors</div>
 <style>
   @keyframes consoleBadgePulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
 </style>
 
 <!-- MODULAR SCRIPTS -->
+<script src="perf.js"></script>
 <script src="data.js"></script>
 <script src="capability-evidence.js"></script>
 <script src="capacity-resolver.js"></script>

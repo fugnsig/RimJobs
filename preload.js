@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('overlay', {
   minimize: () => ipcRenderer.send('window-minimize'),
   close: () => ipcRenderer.send('window-close'),
   setOpacity: (val) => ipcRenderer.send('window-set-opacity', val),
+  setOpacityLock: (locked) => ipcRenderer.send('window-set-opacity-lock', locked),
   toggleAlwaysOnTop: () => ipcRenderer.send('window-toggle-top'),
   setAlwaysOnTop: (val) => ipcRenderer.send('window-set-always-on-top', val),
   toggleLockPosition: () => ipcRenderer.send('window-toggle-lock'),
@@ -36,6 +37,9 @@ contextBridge.exposeInMainWorld('overlay', {
   onNativeHotkey: (callback) => ipcRenderer.on('native-hotkey', (_, data) => callback(data)),
   onNativeInputStop: (callback) => ipcRenderer.on('native-input-stop', () => callback()),
   getVersion: () => ipcRenderer.invoke('get-app-version'),
+  getGraphicsStatus: () => ipcRenderer.invoke('get-graphics-status'),
+  recordCrashProbe: (eventName, details) => ipcRenderer.invoke('record-crash-probe', eventName, details),
+  getCrashReportPath: () => ipcRenderer.invoke('get-crash-report-path'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   exportBlueprintXml: (name, xml) => ipcRenderer.invoke('export-blueprint-xml', name, xml),
   importBlueprintXml: () => ipcRenderer.invoke('import-blueprint-xml'),
@@ -46,9 +50,10 @@ contextBridge.exposeInMainWorld('overlay', {
   clipboardRead: () => ipcRenderer.sendSync('clipboard-read-sync'),
   openSaveFile: () => ipcRenderer.invoke('open-save-file'),
   readSaveFile: (filePath) => ipcRenderer.invoke('read-save-file', filePath),
+  readSaveFileChunk: (filePath, offset, bytes) => ipcRenderer.invoke('read-save-file-chunk', filePath, offset, bytes),
   exportEditedSave: (defaultName, text) => ipcRenderer.invoke('export-edited-save', defaultName, text),
   scanXenotypeDefs: (dirPath) => ipcRenderer.invoke('scan-xenotype-defs', dirPath),
-  scanTraitGeneDefs: (dirPath) => ipcRenderer.invoke('scan-trait-gene-defs', dirPath),
+  scanTraitGeneDefs: (dirPath, options) => ipcRenderer.invoke('scan-trait-gene-defs', dirPath, options),
   findRimworldPath: () => ipcRenderer.invoke('find-rimworld-path'),
   onTraitGeneScanProgress: (callback) => {
     ipcRenderer.removeAllListeners('trait-gene-scan-progress');
@@ -57,10 +62,12 @@ contextBridge.exposeInMainWorld('overlay', {
   scanDefLabels: (installPath) => ipcRenderer.invoke('scan-def-labels', installPath),
   onDefLabelProgress: (callback) => ipcRenderer.on('def-label-progress', (_, data) => callback(data)),
   pickDirectory: (defaultPath) => ipcRenderer.invoke('pick-directory', defaultPath),
+  loadAppState: (source) => ipcRenderer.sendSync('load-app-state-sync', source),
+  saveAppState: (json) => ipcRenderer.invoke('save-app-state', json),
   saveToFile: (filePath, json) => ipcRenderer.invoke('save-to-file', filePath, json),
   loadFromFile: (filePath) => ipcRenderer.invoke('load-from-file', filePath),
   pickSaveLocation: (defaultPath) => ipcRenderer.invoke('pick-save-location', defaultPath),
-  scanModEquipment: (installPath) => ipcRenderer.invoke('scan-mod-equipment', installPath),
+  scanModEquipment: (installPath, options) => ipcRenderer.invoke('scan-mod-equipment', installPath, options),
   onModScanProgress: (callback) => {
     ipcRenderer.removeAllListeners('mod-scan-progress');
     ipcRenderer.on('mod-scan-progress', (_, data) => callback(data));

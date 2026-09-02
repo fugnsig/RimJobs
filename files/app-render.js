@@ -6,18 +6,26 @@
  */
 Object.assign(App, {
   renderAll(opts) {
-    const safe = (fn, name) => { try { fn(); } catch(e) { console.error(`renderAll: ${name} failed`, e); } };
-    let _c7Map;
-    const c7Map = () => _c7Map ||= this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    Perf.start('renderAll.total');
+    Perf._activeOp = 'renderAll';
+    const safe = (fn, name) => { try { Perf.measure('render.' + name, fn); } catch(e) { console.error(`renderAll: ${name} failed`, e); } };
+    let _c7Map = (opts && opts.contextMap) || null;
+    const c7Map = () => _c7Map ||= Perf.measure('c7.contextMap.total', () =>
+      this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn));
     if (!opts || !opts.skipSidebar) safe(() => this.renderSidebar(c7Map()), 'sidebar');
     safe(() => this.renderSummary(c7Map()), 'summary');
-    safe(() => this.renderTable(c7Map()), 'table');
-    if (this.state.activeTab === 'dash') safe(() => this.renderDashboard(c7Map()), 'dashboard');
-    if (this.state.activeTab === 'blue') safe(() => this.renderBlueprint(), 'blueprint');
-    if (this.state.activeTab === 'sched') safe(() => this.renderSchedule(c7Map()), 'schedule');
-    if (this.state.activeTab === 'armoury') safe(() => this.renderArmoury(), 'armoury');
-    if (this.state.activeTab === 'relations') safe(() => this._relRefresh(), 'relations');
-    if (this.state.activeTab === 'records') safe(() => this.renderRecords(), 'records');
+    if (!opts || !opts.skipTable) safe(() => this.renderTable(c7Map()), 'table');
+    if (!opts || !opts.skipActiveView) {
+      if (this.state.activeTab === 'dash') safe(() => this.renderDashboard(c7Map()), 'dashboard');
+      if (this.state.activeTab === 'blue') safe(() => this.renderBlueprint(), 'blueprint');
+      if (this.state.activeTab === 'sched') safe(() => this.renderSchedule(c7Map()), 'schedule');
+      if (this.state.activeTab === 'armoury') safe(() => this.renderArmoury(), 'armoury');
+      if (this.state.activeTab === 'relations') safe(() => this._relRefresh(), 'relations');
+      if (this.state.activeTab === 'records') safe(() => this.renderRecords(), 'records');
+    }
+    Perf._activeOp = null;
+    Perf.end('renderAll.total');
+    Perf.increment('renderAll.calls');
   },
   
   // Pre-built option HTML caches (rebuilt each render cycle)
@@ -32,7 +40,8 @@ Object.assign(App, {
     ).join('');
     // Role options
     this._rcRoleOpts = this.allRoles.map(r =>
-      '<option value="' + r.id + '">Role: ' + _escapeHtml(r.label) + '</option>'
+      '<option value="' + r.id + '">Role: ' + _escapeHtml(r.label)
+        + (r.modSource ? ' - ' + _escapeHtml(r.modSource) : '') + '</option>'
     ).join('');
     // Sorted traits (alphabetical -pawn-specific on/off ordering applied at render time)
     this._rcTraitsSorted = [...this.allTraits].sort((a, b) => a.label.localeCompare(b.label));
@@ -44,7 +53,9 @@ Object.assign(App, {
   // When this changes, the card must be re-rendered; otherwise skip it.
   _pawnCardHash(p) {
     const t = p.traits || [];
-    const s = SKILLS.map(sk => p.skills[sk.id] + ',' + (p.passions[sk.id]||0)).join(';');
+    const skills = p.skills || {};
+    const passions = p.passions || {};
+    const s = SKILLS.map(sk => (skills[sk.id] ?? '') + ',' + (passions[sk.id] || 0)).join(';');
     const provider = this.state.effectivenessProvider || {};
     const providerKey = String(provider.providerFingerprint || '') + ':'
       + JSON.stringify(provider.runtimeFingerprint || null);
@@ -81,8 +92,8 @@ Object.assign(App, {
 
     const avatarBg = _safeColor(p.avatarBg || AVATARS[p.avatarIdx].bg);
     const avatarColor = _safeColor(p.avatarColor || AVATARS[p.avatarIdx].color, '#ffffff');
-    const avatarIcon = _escapeHtml(((p.nickname || p.name) || '?')[0].toUpperCase());
-    const displayName = p.nickname || p.name || '';
+    const displayName = _pawnDisplayName(p, '');
+    const avatarIcon = _escapeHtml((displayName || '?')[0].toUpperCase());
     const pawnName = _escapeHtml(displayName);
     const hasFullName = p.firstName || p.lastName;
     const fullNameStr = hasFullName ? _escapeHtml([p.firstName, p.lastName].filter(Boolean).join(' ')) : '';
@@ -109,7 +120,7 @@ Object.assign(App, {
           <div class="pawn-header" style="margin-bottom:0">
             <div class="avatar" style="width:calc(var(--f-base) * 1.6); height:calc(var(--f-base) * 1.6); font-size:var(--f-xs); background:${avatarBg};color:${avatarColor}">${avatarIcon}</div>
             <input class="pawn-name" draggable="false" value="${pawnName}" oninput="App.renameNickname('${p.id}', this.value)" style="font-size:var(--f-sm)">
-            ${ageDisplay ? `<span style="font-size:var(--f-xs); color:var(--text3); font-weight:600; margin-right:2px" title="Bio age${chronoDisplay ? ' (Chrono: '+p.chronoAge+')' : ''}">${ageDisplay}</span>` : ''}${uvBadge ? `<span style="font-size:var(--f-xs); color:#e8a838; margin-right:2px" title="${uvLevel===2?'Intense':'Mild'} UV Sensitivity">${uvBadge}</span>` : ''}<div class="ws-pill" style="font-size:var(--f-xs); color:${wsColor}; font-weight:700; margin-right:4px" title="${_escapeHtml(wsTitle)}">${wsDisplay}</div>
+            ${ageDisplay ? `<span style="font-size:var(--f-xs); color:var(--text3); font-weight:600; margin-right:2px" title="Bio age${chronoDisplay ? ' (Chrono: '+p.chronoAge+')' : ''}">${ageDisplay}</span>` : ''}${uvBadge ? `<span style="font-size:var(--f-xs); color:var(--accent); margin-right:2px" title="${uvLevel===2?'Intense':'Mild'} UV Sensitivity">${uvBadge}</span>` : ''}<div class="ws-pill" style="font-size:var(--f-xs); color:${wsColor}; font-weight:700; margin-right:4px" title="${_escapeHtml(wsTitle)}">${wsDisplay}</div>
             <button class="pawn-del" onclick="App.duplicatePawn('${p.id}')" title="Clone Pawn" style="width:calc(var(--f-base) * 1.4); height:calc(var(--f-base) * 1.4); font-size:var(--f-xs); margin-right:4px; color:var(--accent)">Copy</button>
             <button class="pawn-del" onclick="App.removePawn('${p.id}')" style="width:calc(var(--f-base) * 1.4); height:calc(var(--f-base) * 1.4); font-size:var(--f-xs)">&times;</button>
           </div>
@@ -171,7 +182,7 @@ Object.assign(App, {
         <div class="pawn-header">
           <div class="avatar" style="background:${avatarBg};color:${avatarColor}">${avatarIcon}</div>
           <input class="pawn-name" draggable="false" value="${pawnName}" oninput="App.renameNickname('${p.id}', this.value)">
-          ${ageDisplay ? `<span style="font-size:var(--f-xs); color:var(--text3); font-weight:600; margin-right:4px" title="Bio age${chronoDisplay ? ' (Chrono: '+p.chronoAge+')' : ''}">${ageDisplay}</span>` : ''}${uvBadge ? `<span style="font-size:var(--f-xs); color:#e8a838; margin-right:4px" title="${uvLevel===2?'Intense':'Mild'} UV Sensitivity">${uvBadge}</span>` : ''}
+          ${ageDisplay ? `<span style="font-size:var(--f-xs); color:var(--text3); font-weight:600; margin-right:4px" title="Bio age${chronoDisplay ? ' (Chrono: '+p.chronoAge+')' : ''}">${ageDisplay}</span>` : ''}${uvBadge ? `<span style="font-size:var(--f-xs); color:var(--accent); margin-right:4px" title="${uvLevel===2?'Intense':'Mild'} UV Sensitivity">${uvBadge}</span>` : ''}
           <div class="ws-pill" style="font-size:var(--f-xs); padding:2px 6px; background:var(--surface3); border:1px solid ${wsColor}; border-radius:12px; color:${wsColor}; margin-right:8px; font-weight:700" title="${_escapeHtml(wsTitle)}">${wsDisplay}</div>
           <button class="icon-btn collapse-btn" onclick="App.toggleCollapse('${p.id}')">${collapsed?'▼':'▲'}</button>
           <button class="pawn-del" onclick="App.removePawn('${p.id}')" title="Delete Pawn">&times;</button>
@@ -258,10 +269,12 @@ Object.assign(App, {
     const search = (document.getElementById('pawnSearch')?.value || "").toLowerCase();
     // Sync sidebar search to priorities table filter in realtime
     this.state.pawnFilter = search;
-    const filteredPawns = this._sortPawns(this.state.pawns.filter(p => p.name.toLowerCase().includes(search)));
+    const filteredPawns = this._sortPawns(this.state.pawns.filter(p =>
+      _pawnDisplayName(p, '').toLowerCase().includes(search)
+      || (p.name || '').toLowerCase().includes(search)
+    ));
     const compact = this.state.settings.compactSidebar;
-    const pawnContexts = c7ContextMap || this._c7PawnContextMap(
-      filteredPawns, this._c7EvidenceOptionsByPawn);
+    const pawnContexts = this._useOrBuildContextMap(c7ContextMap);
 
     // Populate sort dropdown (only rebuild if options missing)
     const sortEl = document.getElementById('pawnSort');
@@ -293,7 +306,7 @@ Object.assign(App, {
       const htmlParts = filteredPawns.map(p => { try {
         newHashes[p.id] = this._pawnCardHash(p);
         return this._renderPawnCardHtml(p, compact, pawnContexts.get(p.id));
-      } catch(err) { console.warn('Render error for pawn', p?.id, err); return `<div class="pawn-card" data-pawn-id="${p?.id}" style="border:1px solid #ef5350;padding:12px"><span style="color:#ef5350;font-weight:700">! Render error</span></div>`; } });
+      } catch(err) { console.warn('Render error for pawn', p?.id, err); return `<div class="pawn-card" data-pawn-id="${p?.id}" style="border:1px solid var(--p4-txt);padding:12px"><span style="color:var(--p4-txt);font-weight:700">! Render error</span></div>`; } });
       el.innerHTML = htmlParts.join('');
       this._pawnCardHashes = newHashes;
     } else {
@@ -360,18 +373,24 @@ Object.assign(App, {
   _isPortrait() { return window.innerHeight > window.innerWidth; },
 
   renderTable(c7ContextMap) {
+    Perf.start('render.priorities');
     if (typeof this._syncPriorityLockControls === 'function') this._syncPriorityLockControls();
-    const wrap = document.getElementById('tableWrap'); if (!wrap) return;
+    const priorityMax = typeof this._manualPriorityMax === 'function' ? this._manualPriorityMax() : 4;
+    const wrap = document.getElementById('tableWrap'); if (!wrap) { Perf.end('render.priorities'); return; }
     // Reflect the current priorities mode on the toolbar toggle.
     const mpBtn = document.getElementById('manualPrioBtn');
     if (mpBtn) {
       const manual = this.state.settings.manualPriorities !== false;
-      mpBtn.textContent = manual ? 'Manual (1-4)' : 'Simple (on/off)';
+      mpBtn.textContent = manual ? `Manual (1-${priorityMax})` : 'Simple (on/off)';
       mpBtn.classList.toggle('btn-accent', !manual);
     }
-    const contextMap = c7ContextMap || this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const rangeSelect = document.getElementById('priorityRangeSelect');
+    if (rangeSelect && rangeSelect.value !== String(priorityMax)) rangeSelect.value = String(priorityMax);
+    if (typeof this._syncStrategicFocusControls === 'function') this._syncStrategicFocusControls();
+    const contextMap = this._useOrBuildContextMap(c7ContextMap);
     if (this._isPortrait()) { this._renderTableVertical(wrap, contextMap); } else { this._renderTableHorizontal(wrap, contextMap); }
     this.renderSummary(contextMap);
+    Perf.end('render.priorities');
   },
 
   // Source key for a job column (vanilla / Biotech / Anomaly / Odyssey / modded).
@@ -452,8 +471,22 @@ Object.assign(App, {
     `);
   },
 
+  _c4SnapshotCache: null,
+  _c4SnapshotRevision: 0,
+  _c4CacheRevisionSeen: -1,
+
+  _c4InvalidateSnapshot() {
+    this._c4SnapshotRevision++;
+    Perf.increment('c4.snapshot.invalidations');
+  },
+
   _c4DefinitionSnapshot() {
-    return RequirementRegistry.createSnapshot({
+    if (this._c4SnapshotCache && this._c4CacheRevisionSeen === this._c4SnapshotRevision) {
+      Perf.increment('c4.snapshot.cacheHit');
+      return this._c4SnapshotCache;
+    }
+    Perf.increment('c4.snapshot.cacheMiss');
+    const snapshot = Perf.measure('c4.snapshot.build', () => RequirementRegistry.createSnapshot({
       jobCatalog: this.allJobs,
       workTypeDefs: this.state.scannedWorkTypeDefs || {},
       workGiverDefs: this.state.scannedWorkGiverDefs || {},
@@ -461,7 +494,10 @@ Object.assign(App, {
       raceWorkPolicies: this.state.scannedRaceWorkPolicies || {},
       activePackageIds: this.state.activePackageResolution || null,
       definitionUncertainty: this.state.requirementUncertainty || {},
-    });
+    }));
+    this._c4SnapshotCache = snapshot;
+    this._c4CacheRevisionSeen = this._c4SnapshotRevision;
+    return snapshot;
   },
 
   _c5EffectivenessSnapshot() {
@@ -493,23 +529,51 @@ Object.assign(App, {
     };
   },
 
+  _useOrBuildContextMap(existing) {
+    if (existing) {
+      Perf._contextMapStats.requested++;
+      Perf._contextMapStats.reused++;
+      return existing;
+    }
+    return this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+  },
+
   _c7PawnContextMap(pawns, evidenceOptionsByPawn) {
-    const definitionSnapshot = this._c4DefinitionSnapshot();
-    const effectivenessSnapshot = this._c5EffectivenessSnapshot();
+    Perf._contextMapStats.requested++;
+    Perf._contextMapStats.created++;
+    const definitionSnapshot = Perf.measure('c7.snapshot.c4', () => this._c4DefinitionSnapshot());
+    const effectivenessSnapshot = Perf.measure('c7.snapshot.c5', () => this._c5EffectivenessSnapshot());
     const contexts = new Map();
     (pawns || []).forEach(pawn => {
       const evidenceOptions = evidenceOptionsByPawn && evidenceOptionsByPawn.get(pawn.id) || {};
-      contexts.set(pawn.id, C7EvaluationCoordinator.createPawnContext(
-        pawn, this._c7CoordinatorOptions(
-          definitionSnapshot, evidenceOptions, effectivenessSnapshot)));
+      Perf.measure('c7.context.create', () => {
+        contexts.set(pawn.id, C7EvaluationCoordinator.createPawnContext(
+          pawn, this._c7CoordinatorOptions(
+            definitionSnapshot, evidenceOptions, effectivenessSnapshot)));
+      });
     });
+    Perf.increment('c7.context.created', (pawns || []).length);
     return contexts;
   },
 
-  _c7CellState(pawnContext, job) {
+  _c7CellState(pawnContext, job, pawn) {
     const permission = pawnContext.permission(job);
     if (permission.state === 'blocked') return { state: 'blocked', permission };
-    if (permission.state === 'unknown') return { state: 'unknown', permission };
+    if (permission.state === 'unknown') {
+      if (pawn) {
+        const hasPawnUncertainty = (permission.unknowns || []).some(u => {
+          const code = u.explanation && u.explanation.code || '';
+          return code.includes('.job.') || code.includes('.workType.') || code.includes('.workTag.');
+        });
+        if (!hasPawnUncertainty) {
+          if (this.isIncapable(pawn, job)) return { state: 'blocked', permission };
+        } else {
+          return { state: 'unknown', permission };
+        }
+      } else {
+        return { state: 'unknown', permission };
+      }
+    }
     const availability = pawnContext.availability(job);
     if (availability.state === 'unavailable') {
       return { state: 'unavailable', permission, availability };
@@ -564,8 +628,8 @@ Object.assign(App, {
     return html.replace(' tabindex=', ' title="' + fullTitle + '" tabindex=');
   },
 
-  _c7GridCellHTML(pawnId, job, priority, pawnContext) {
-    const cellInfo = this._c7CellState(pawnContext, job);
+  _c7GridCellHTML(pawnId, job, priority, pawnContext, pawn) {
+    const cellInfo = this._c7CellState(pawnContext, job, pawn);
     const title = this._c7Tooltip(cellInfo);
     if (cellInfo.state === 'blocked') {
       return '<td class="td-job"><div class="prio-box incap" title="'
@@ -578,6 +642,7 @@ Object.assign(App, {
   },
 
   _renderTableHorizontal(wrap, c7ContextMap) {
+    const priorityMax = typeof this._manualPriorityMax === 'function' ? this._manualPriorityMax() : 4;
     const tooltip = `
       <div class="info-btn" style="margin-left:8px">?
         <div class="tooltip">
@@ -585,15 +650,16 @@ Object.assign(App, {
           • Left Click: Increase Priority<br>
           • Right Click: Decrease Priority<br>
           • Mouse Wheel: Rapid Sweep<br>
-          • Keys 1-4: Direct Input<br>
+          • Keys 1-${priorityMax}: Direct Input<br>
           • Keys 0/Del: Clear Cell
         </div>
       </div>`;
 
     const pSearch = (this.state.pawnFilter || "").toLowerCase();
     const filteredJobs = this._visibleJobs();
-    const filteredPawns = this.state.pawns.filter(p => !pSearch || (p.nickname || p.name).toLowerCase().includes(pSearch));
-    const pawnContexts = c7ContextMap || this._c7PawnContextMap(filteredPawns, this._c7EvidenceOptionsByPawn);
+    const filteredPawns = this._sortPawns(this.state.pawns.filter(p => !pSearch
+      || _pawnDisplayName(p, '').toLowerCase().includes(pSearch)));
+    const pawnContexts = this._useOrBuildContextMap(c7ContextMap);
 
     const catSpans = [];
     filteredJobs.forEach(j => { 
@@ -606,7 +672,7 @@ Object.assign(App, {
     wrap.innerHTML = `<div class="h-table-scroll"><table class="${tableCls}"><colgroup><col class="col-pawn-name">${filteredJobs.map(() => `<col class="col-job">`).join('')}</colgroup><thead><tr class="cat-header-row"><th class="th-pawn-name" rowspan="2">Members ${tooltip}</th>${catSpans.map(cs => `<th class="th-cat" colspan="${cs.count}"><input class="cat-label-input" value="${_escapeHtml(cs.label)}" oninput="App.updateCatLabel('${cs.cat}', this.value)"></th>`).join('')}</tr><tr class="job-header-row">${filteredJobs.map(j => `<th class="th-job" draggable="true" ondragstart="App._jobColDragStart(event,'${j.id}')" ondragover="App._jobColDragOver(event)" ondrop="App._jobColDrop(event,'${j.id}')" title="${this._jobHeaderTitle(j)}"><div class="th-job-name" title="${this._jobHeaderTitle(j)}">${_escapeHtml(j.name)}</div></th>`).join('')}</tr></thead><tbody>${filteredPawns.map(p => { try {
           const avatarBg = _safeColor(p.avatarBg || AVATARS[(p.avatarIdx||0) % AVATARS.length].bg);
           const avatarColor = _safeColor(p.avatarColor || AVATARS[(p.avatarIdx||0) % AVATARS.length].color, '#ffffff');
-          const pawnDisplayName = p.nickname || p.name || '?';
+          const pawnDisplayName = _pawnDisplayName(p, '?');
           const avatarIcon = _escapeHtml((pawnDisplayName || '?')[0].toUpperCase());
           const xeno = this.getXeno(p.xenotype);
           return `
@@ -623,14 +689,15 @@ Object.assign(App, {
             </td>
             ${filteredJobs.map(j => {
               const prio = this.state.priorities[p.id]?.[j.id];
-              return this._c7GridCellHTML(p.id, j, prio, pawnContexts.get(p.id));
+              return this._c7GridCellHTML(p.id, j, prio, pawnContexts.get(p.id), p);
             }).join('')}
           </tr>`;
-        } catch(err) { console.warn('Table render error for pawn', p?.id, err); return `<tr><td class="td-pawn-name" style="color:#ef5350">! ${_escapeHtml(p?.nickname||p?.name||'?')}</td>${filteredJobs.map(()=>'<td></td>').join('')}</tr>`; } }).join('')}</tbody></table></div>`;
+        } catch(err) { console.warn('Table render error for pawn', p?.id, err); return `<tr><td class="td-pawn-name" style="color:var(--p4-txt)">! ${_escapeHtml(_pawnDisplayName(p, '?'))}</td>${filteredJobs.map(()=>'<td></td>').join('')}</tr>`; } }).join('')}</tbody></table></div>`;
   },
 
   // Portrait: jobs = rows, pawns = columns
   _renderTableVertical(wrap, c7ContextMap) {
+    const priorityMax = typeof this._manualPriorityMax === 'function' ? this._manualPriorityMax() : 4;
     const tooltip = `
       <div class="info-btn" style="margin-left:8px">?
         <div class="tooltip">
@@ -638,21 +705,22 @@ Object.assign(App, {
           • Left Click: Increase Priority<br>
           • Right Click: Decrease Priority<br>
           • Mouse Wheel: Rapid Sweep<br>
-          • Keys 1-4: Direct Input<br>
+          • Keys 1-${priorityMax}: Direct Input<br>
           • Keys 0/Del: Clear Cell
         </div>
       </div>`;
 
     const pSearch = (this.state.pawnFilter || "").toLowerCase();
     const filteredJobs = this._visibleJobs();
-    const filteredPawns = this.state.pawns.filter(p => !pSearch || (p.nickname || p.name).toLowerCase().includes(pSearch));
-    const pawnContexts = c7ContextMap || this._c7PawnContextMap(filteredPawns, this._c7EvidenceOptionsByPawn);
+    const filteredPawns = this._sortPawns(this.state.pawns.filter(p => !pSearch
+      || _pawnDisplayName(p, '').toLowerCase().includes(pSearch)));
+    const pawnContexts = this._useOrBuildContextMap(c7ContextMap);
 
     // Pawn header cells
     const pawnHeaders = filteredPawns.map(p => { try {
       const avatarBg = _safeColor(p.avatarBg || AVATARS[(p.avatarIdx||0) % AVATARS.length].bg);
       const avatarColor = _safeColor(p.avatarColor || AVATARS[(p.avatarIdx||0) % AVATARS.length].color, '#ffffff');
-      const pawnDisplayName = p.nickname || p.name || '?';
+      const pawnDisplayName = _pawnDisplayName(p, '?');
       const avatarIcon = _escapeHtml((pawnDisplayName || '?')[0].toUpperCase());
       const xeno = this.getXeno(p.xenotype);
       return `<th class="th-job" style="min-width:var(--pawn-col-width);position:sticky;top:0;z-index:9;background:var(--surface3)">
@@ -662,7 +730,7 @@ Object.assign(App, {
           <div style="font-size:var(--f-xs); color:${_safeColor(xeno.color)}; opacity:0.8; font-weight:600">${_escapeHtml(xeno.label)}${p.bioAge != null ? ` · ${p.bioAge}y` : ''}${(xeno.uvSensitivity||0) >= 1 ? ' UV' : ''}</div>
         </div>
       </th>`;
-    } catch(err) { return `<th class="th-job" style="color:#ef5350">!</th>`; } }).join('');
+    } catch(err) { return `<th class="th-job" style="color:var(--p4-txt)">!</th>`; } }).join('');
 
     // One row per job
     let lastCat = null;
@@ -671,7 +739,7 @@ Object.assign(App, {
       lastCat = j.cat;
       const cells = filteredPawns.map(p => {
         const prio = this.state.priorities[p.id]?.[j.id];
-        return this._c7GridCellHTML(p.id, j, prio, pawnContexts.get(p.id));
+        return this._c7GridCellHTML(p.id, j, prio, pawnContexts.get(p.id), p);
       }).join('');
       return `${catRow}<tr class="pawn-row"><td class="td-pawn-name" draggable="true" ondragstart="App._jobColDragStart(event,'${j.id}')" ondragover="App._jobColDragOver(event)" ondrop="App._jobColDrop(event,'${j.id}')" style="white-space:nowrap; font-size:var(--job-font-size); font-weight:700; cursor:grab" title="${this._jobHeaderTitle(j)}">${_escapeHtml(j.name)}</td>${cells}</tr>`;
     }).join('');
@@ -682,10 +750,11 @@ Object.assign(App, {
   renderDashboard(c7ContextMap) {
     const container = document.getElementById('view-dash');
     if (!container) return;
-    const contextMap = c7ContextMap || this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const contextMap = this._useOrBuildContextMap(c7ContextMap);
     const viability = Engine.calculateViability(
       this.state.pawns, this.state.priorities, this.state.precepts, contextMap);
     const alerts = Engine.getBottlenecks(this.state.pawns, this.state.priorities, contextMap);
+    const coverage = Engine.getCriticalWorkCoverage(this.state.pawns, this.state.priorities, contextMap);
     const portrait = this._isPortrait();
 
     const isWidget = window.innerWidth <= 550;
@@ -702,10 +771,18 @@ Object.assign(App, {
         : Math.max(400, Math.min(Math.round(availW * 0.95), Math.round(availH * 0.95), 640));
 
     const viabilityColour = viability > 70 ? 'var(--p1-txt)' : viability > 40 ? 'var(--p3-txt)' : 'var(--p4-txt)';
-    const viabilityTip = 'The Survival Index rates how well your colony covers its essential work. It reads 0% until your colonists actually have jobs to do - set work priorities on the Work tab (or hit Auto-Assign), then return here for a true measure of your colony’s resilience.';
-    const viabilityHint = viability === 0
-      ? 'No work priorities set yet. Assign jobs on the Work tab or use Auto-Assign to get a real reading.'
-      : 'Colony health score. 70%+ safe; below 40% critical.';
+    const viabilityTip = 'A planning indicator based on essential work coverage, specialist roles, trait break thresholds and planned ideology mood. The score cannot exceed the percentage of essential jobs covered. Blocked or unavailable pawns do not provide coverage; incomplete capability evidence remains provisional. This is not a survival prediction.';
+    const viabilityHint = !this.state.pawns.length
+      ? 'Add or import pawns to assess work coverage.'
+      : !coverage.hasAssignments
+        ? 'No work priorities set yet. Assign jobs on the Priorities tab or use Auto-Assign.'
+        : !coverage.covered
+          ? 'Priorities are set, but no essential jobs have an eligible assigned worker. Check capability, availability and assignments.'
+          : coverage.covered < coverage.total
+            ? 'Some essential jobs lack an eligible assigned worker. Review Labour Bottlenecks and the Priorities tab.'
+            : viability === 0
+              ? 'Essential jobs are covered, but trait and ideology modifiers reduce the planning score to zero.'
+              : 'Essential jobs are covered. This planning score does not predict survival or guarantee enough labour.';
     const viabilityCard = `
       <div class="dash-card">
         <div class="trait-title" style="display:flex; align-items:center; gap:6px">Survival Index
@@ -713,6 +790,7 @@ Object.assign(App, {
         </div>
         <div class="dash-val" style="color:${viabilityColour}">${viability}%</div>
         <div class="dash-gauge"><div class="dash-gauge-fill" style="width:${Math.max(0, Math.min(100, viability))}%; background:${viabilityColour}"></div></div>
+        <div class="settings-desc">${coverage.covered}/${coverage.total} essential jobs covered.</div>
         <div class="settings-desc">${viabilityHint}</div>
       </div>`;
     const colonistsCard = `
@@ -725,7 +803,7 @@ Object.assign(App, {
       <div class="dash-card" style="flex:1; display:flex; flex-direction:column; min-height:0">
         <div class="trait-title" style="flex-shrink:0">Labour Bottlenecks</div>
         <div class="hover-scroll" style="margin-top:8px; column-count:${alerts.length > 4 ? 2 : 1}; column-gap:12px; overflow-y:auto; max-height:180px; flex:1; min-height:0">
-          ${alerts.length > 0 ? alerts.map(a => `<div style="color:var(--p4-txt); font-size:var(--f-sm); break-inside:avoid; margin-bottom:6px"> ${a}</div>`).join('') : `<div style="color:var(--p1-txt); font-size:var(--f-sm)"> No critical gaps.</div>`}
+          ${alerts.length > 0 ? alerts.map(a => `<div style="color:var(--p4-txt); font-size:var(--f-sm); break-inside:avoid; margin-bottom:6px"> ${_escapeHtml(a)}</div>`).join('') : `<div style="color:var(--p1-txt); font-size:var(--f-sm)"> No critical gaps.</div>`}
         </div>
       </div>`;
     const radarCard = `
@@ -747,7 +825,7 @@ Object.assign(App, {
         <div class="dash-card" style="flex-shrink:0">
           <div class="trait-title">Labour Bottlenecks</div>
           <div style="margin-top:8px; column-count:${alerts.length > 4 ? 2 : 1}; column-gap:12px">
-            ${alerts.length > 0 ? alerts.map(a => `<div style="color:var(--p4-txt); font-size:var(--f-sm); break-inside:avoid; margin-bottom:6px"> ${a}</div>`).join('') : `<div style="color:var(--p1-txt); font-size:var(--f-sm)"> No critical gaps.</div>`}
+            ${alerts.length > 0 ? alerts.map(a => `<div style="color:var(--p4-txt); font-size:var(--f-sm); break-inside:avoid; margin-bottom:6px"> ${_escapeHtml(a)}</div>`).join('') : `<div style="color:var(--p1-txt); font-size:var(--f-sm)"> No critical gaps.</div>`}
           </div>
         </div>`;
       container.innerHTML = `
@@ -783,10 +861,11 @@ Object.assign(App, {
   },
 
   renderSummary(c7ContextMap) {
+    Perf.start('render.summary');
     const el = document.getElementById('summaryBar');
-    if (!el) return;
+    if (!el) { Perf.end('render.summary'); return; }
     const total = this.state.pawns.length;
-    const contextMap = c7ContextMap || this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const contextMap = this._useOrBuildContextMap(c7ContextMap);
     
     // 1. Important Job Pills (existing)
     const pills = JOBS.filter(j => j.important).map(j => {
@@ -820,6 +899,7 @@ Object.assign(App, {
     }
 
     el.innerHTML = `<div class="sum-pill" style="color:var(--text2)">${total} colonist${total !== 1 ? 's' : ''}</div>` + pills.join('') + alertsHtml;
+    Perf.end('render.summary');
   },
 
   toggleSummaryAlerts() { this._summaryAlertsExpanded = !this._summaryAlertsExpanded; this.renderSummary(); },
@@ -829,6 +909,8 @@ Object.assign(App, {
     this.state.settings.uiScale = 1.0;
     this.state.settings.fontScale = 1.0;
     this.state.settings.theme = 'dark';
+    this.state.settings.colourBlindMode = false;
+    this.state.settings.dyslexiaFontMode = false;
     this.applySettings();
     this.applyTheme();
     this.renderSettings();

@@ -2024,7 +2024,7 @@ ${allLis}
     // Grid Coordinates Overlay (Task 15)
     if (this.state.showGridCoords) {
       ctx.fillStyle = 'rgba(232,168,56,0.5)';
-      ctx.font = `bold ${Math.max(8, Math.floor(ts * 0.4))}px Arial`;
+      ctx.font = this._canvasFont(Math.max(8, Math.floor(ts * 0.4)), 'bold');
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       for (let i = 0; i < gw; i += 11) {
@@ -2104,7 +2104,7 @@ ${allLis}
 
       // Dimensions Text
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 12px Arial';
+      ctx.font = this._canvasFont(12, 'bold');
       ctx.textAlign = 'center';
       const label = `${w} x ${h}`;
       const lx = (x1 + w/2) * ts;
@@ -2158,7 +2158,7 @@ ${allLis}
 
       // Size label
       ctx.fillStyle = 'rgba(0,0,0,0.7)';
-      ctx.font = 'bold 11px Arial';
+      ctx.font = this._canvasFont(11, 'bold');
       ctx.textAlign = 'center';
       const slabel = `${stamp.name} (${stamp.w}×${stamp.h})`;
       const slw = ctx.measureText(slabel).width + 10;
@@ -2172,7 +2172,7 @@ ${allLis}
     // Tags / Labels - rendered at their stored x,y positions
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `bold ${Math.max(11, Math.floor(ts * 0.6))}px Arial`;
+    ctx.font = this._canvasFont(Math.max(11, Math.floor(ts * 0.6)), 'bold');
 
     Object.keys(this.state.roomLabels).forEach(rid => {
       const label = this.state.roomLabels[rid];
