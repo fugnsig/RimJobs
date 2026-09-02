@@ -1,6 +1,7 @@
 const { app, BrowserWindow, globalShortcut, ipcMain, screen, Tray, Menu, dialog, clipboard, shell, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { execSync } = require('child_process');
 
 const APP_VERSION = require('./package.json').version;
@@ -72,6 +73,207 @@ const keyboardHook = require('./keyboard-hook');
 app.setName('RimJobs');
 process.title = 'RimJobs';
 
+// A renderer OOM can be the final symptom of repeated Chromium GPU-process
+// failures under system commit pressure. Hardware acceleration must be disabled
+// before Electron becomes ready, so persist a small marker and apply software
+// rendering on the next launch or safe restart.
+const GPU_SAFE_MODE_MARKER = path.join(app.getPath('userData'), '.gpu-safe-mode.json');
+
+function readGpuSafeModeMarker() {
+  try {
+    if (!fs.existsSync(GPU_SAFE_MODE_MARKER)) return null;
+    const marker = JSON.parse(fs.readFileSync(GPU_SAFE_MODE_MARKER, 'utf8'));
+    return marker && marker.enabled === true ? marker : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeGpuSafeModeMarker(reason) {
+  try {
+    fs.mkdirSync(path.dirname(GPU_SAFE_MODE_MARKER), { recursive: true });
+    fs.writeFileSync(GPU_SAFE_MODE_MARKER, JSON.stringify({
+      enabled: true,
+      appVersion: APP_VERSION,
+      reason: String(reason || 'graphics-process-failure').slice(0, 80),
+      createdAt: new Date().toISOString()
+    }), 'utf8');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function priorReportShowsGpuLinkedOom() {
+  try {
+    const reportPath = path.join(app.getPath('userData'), 'crash-report.ndjson');
+    if (!fs.existsSync(reportPath)) return false;
+    const sessions = new Map();
+    const lines = fs.readFileSync(reportPath, 'utf8').trim().split(/\r?\n/);
+    for (const line of lines) {
+      let entry;
+      try { entry = JSON.parse(line); } catch (_) { continue; }
+      const session = String(entry && entry.session || '');
+      if (!session) continue;
+      if (!sessions.has(session)) sessions.set(session, { gpuFailures: 0, gpuLinkedOom: false });
+      const state = sessions.get(session);
+      if (entry.event === 'electron.child-process-gone'
+        && String(entry.details && entry.details.type || '').toUpperCase() === 'GPU'
+        && String(entry.details && entry.details.reason || '') !== 'clean-exit') {
+        state.gpuFailures++;
+      }
+      if (entry.event === 'renderer.process-gone'
+        && entry.details && entry.details.reason === 'oom'
+        && state.gpuFailures >= 2) {
+        state.gpuLinkedOom = true;
+      }
+    }
+    return Array.from(sessions.values()).some(state => state.gpuLinkedOom);
+  } catch (_) {
+    return false;
+  }
+}
+
+if (!readGpuSafeModeMarker() && priorReportShowsGpuLinkedOom()) {
+  writeGpuSafeModeMarker('prior-session-gpu-linked-oom');
+}
+
+const GPU_SAFE_MODE_ACTIVE = !!readGpuSafeModeMarker();
+if (GPU_SAFE_MODE_ACTIVE) app.disableHardwareAcceleration();
+
+function restartInGpuSafeMode(reason) {
+  if (!writeGpuSafeModeMarker(reason)) return false;
+  appendCrashReport('graphics.safe-restart-requested', { reason });
+  try {
+    const portableExecutable = process.env.PORTABLE_EXECUTABLE_FILE;
+    if (portableExecutable) app.relaunch({ execPath: portableExecutable, args: [] });
+    else app.relaunch();
+    doQuit();
+    return true;
+  } catch (error) {
+    appendCrashReport('graphics.safe-restart-failed', { message: error && error.message });
+    return false;
+  }
+}
+
+// Bounded, privacy-conscious crash report shared by the main and renderer
+// processes. Each line is standalone JSON so a hard process exit cannot corrupt
+// earlier evidence. Never record save contents, clipboard data, or personal paths.
+const CRASH_REPORT_MAX_BYTES = 256 * 1024;
+const CRASH_REPORT_KEEP_BYTES = 128 * 1024;
+const CRASH_REPORT_SESSION = `${Date.now()}-${process.pid}`;
+
+function getCrashReportPath() {
+  try { return path.join(app.getPath('userData'), 'crash-report.ndjson'); }
+  catch (_) { return path.join(__dirname, 'crash-report.ndjson'); }
+}
+
+function sanitiseCrashValue(value) {
+  if (value == null || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+  let text = String(value).replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  // Redact Windows and file URL paths that can appear in error messages/stacks.
+  text = text.replace(/(?:file:\/\/\/)?[A-Za-z]:[\\/][^\s)]+/g, '[path]');
+  return text.slice(0, 600);
+}
+
+function sanitiseCrashDetails(details) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return {};
+  const out = {};
+  let count = 0;
+  for (const [rawKey, value] of Object.entries(details)) {
+    if (count >= 20) break;
+    const key = String(rawKey).replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 48);
+    if (!key || /path|filename|xml|clipboard|content|savetext/i.test(key)) continue;
+    if (!['string', 'number', 'boolean'].includes(typeof value) && value != null) continue;
+    out[key] = sanitiseCrashValue(value);
+    count++;
+  }
+  return out;
+}
+
+function appendCrashReport(eventName, details) {
+  try {
+    const reportPath = getCrashReportPath();
+    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+    const memory = process.memoryUsage();
+    let rendererMetric = null;
+    if (app.isReady() && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      const rendererPid = win.webContents.getOSProcessId();
+      rendererMetric = app.getAppMetrics().find(metric => metric.pid === rendererPid) || null;
+    }
+    const entry = {
+      ts: new Date().toISOString(),
+      session: CRASH_REPORT_SESSION,
+      event: String(eventName || 'unknown').replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 80),
+      appVersion: APP_VERSION,
+      mainRssMb: Math.round(memory.rss / 1048576),
+      mainHeapMb: Math.round(memory.heapUsed / 1048576),
+      systemFreeMb: Math.round(os.freemem() / 1048576),
+      rendererWorkingSetMb: rendererMetric ? Math.round(rendererMetric.memory.workingSetSize / 1024) : null,
+      rendererPrivateMb: rendererMetric && rendererMetric.memory.privateBytes != null
+        ? Math.round(rendererMetric.memory.privateBytes / 1024) : null,
+      details: sanitiseCrashDetails(details)
+    };
+    const line = JSON.stringify(entry) + '\n';
+    const currentSize = fs.existsSync(reportPath) ? fs.statSync(reportPath).size : 0;
+    if (currentSize + Buffer.byteLength(line, 'utf8') > CRASH_REPORT_MAX_BYTES) {
+      const old = fs.readFileSync(reportPath);
+      let tail = old.subarray(Math.max(0, old.length - CRASH_REPORT_KEEP_BYTES)).toString('utf8');
+      const firstLineEnd = tail.indexOf('\n');
+      if (firstLineEnd >= 0) tail = tail.slice(firstLineEnd + 1);
+      fs.writeFileSync(reportPath, tail, 'utf8');
+    }
+    fs.appendFileSync(reportPath, line, 'utf8');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+if (GPU_SAFE_MODE_ACTIVE) {
+  appendCrashReport('graphics.safe-mode-active', { hardwareAcceleration: false });
+}
+
+// Observe fatal main-process errors without changing Node's normal crash behaviour.
+process.on('uncaughtExceptionMonitor', (error, origin) => {
+  appendCrashReport('main.uncaught-exception', {
+    origin,
+    message: error && error.message,
+    stack: error && error.stack
+  });
+});
+const recentGpuCrashTimes = [];
+const GPU_CRASH_WINDOW_MS = 30000;
+
+function noteGpuProcessFailure(details) {
+  const type = String(details && details.type || '').toUpperCase();
+  const reason = String(details && details.reason || '');
+  if (type !== 'GPU' || reason === 'clean-exit') return 0;
+  const now = Date.now();
+  recentGpuCrashTimes.push(now);
+  while (recentGpuCrashTimes.length && now - recentGpuCrashTimes[0] > GPU_CRASH_WINDOW_MS) {
+    recentGpuCrashTimes.shift();
+  }
+  if (recentGpuCrashTimes.length >= 2 && !GPU_SAFE_MODE_ACTIVE) {
+    writeGpuSafeModeMarker('repeated-gpu-process-failure');
+  }
+  return recentGpuCrashTimes.length;
+}
+
+app.on('child-process-gone', (_event, details) => {
+  const recentGpuFailures = noteGpuProcessFailure(details);
+  appendCrashReport('electron.child-process-gone', {
+    type: details && details.type,
+    reason: details && details.reason,
+    exitCode: details && details.exitCode,
+    serviceName: details && details.serviceName,
+    name: details && details.name,
+    recentGpuFailures,
+    gpuSafeModeActive: GPU_SAFE_MODE_ACTIVE
+  });
+});
+
 // Remove the default application menu so pressing Alt (used as the eyedropper
 // Alt+Click modifier) doesn't activate/focus the native window menu bar.
 Menu.setApplicationMenu(null);
@@ -88,21 +290,44 @@ function forceTaskbar() {
   try { win.setSkipTaskbar(true); win.setSkipTaskbar(false); } catch (_) {}
 }
 
-// Reveal the window exactly once, after the renderer has settled into its final startup mode.
-// A short opacity fade gives a polished cold open instead of a pop-in or a visible resize.
+// Reveal once per native window. show:false keeps startup hidden without setting
+// native opacity to zero. A late did-finish-load or a reload must not hide it again.
 let appRevealed = false;
-function revealWindow() {
-  if (!win || appRevealed) return;
+let requestedWindowOpacity = 1;
+let opacityLocked = false;
+function recordWindowVisibility(reason) {
+  if (!win || win.isDestroyed()) return;
+  const bounds = win.getBounds();
+  appendCrashReport('window.revealed', {
+    reason,
+    visible: win.isVisible(),
+    minimised: win.isMinimized(),
+    opacity: win.getOpacity(),
+    x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+    softwareRendering: GPU_SAFE_MODE_ACTIVE
+  });
+}
+
+function revealWindow(reason = 'renderer-ready') {
+  if (!win || win.isDestroyed() || appRevealed) return;
+  const target = win;
   appRevealed = true;
   win.showInactive();
   forceTaskbar();
   setTimeout(() => forceTaskbar(), 600);
+  // Never call setOpacity in software mode, even with 1. On Windows that API
+  // enables layered-window attributes, which can break software presentation.
+  if (GPU_SAFE_MODE_ACTIVE) {
+    recordWindowVisibility(reason);
+    return;
+  }
   let o = 0;
   const fade = () => {
-    if (!win) return;
-    o = Math.min(1, o + 0.14);
-    try { win.setOpacity(o); } catch (_) {}
-    if (o < 1) setTimeout(fade, 16);
+    if (win !== target || target.isDestroyed()) return;
+    o = Math.min(requestedWindowOpacity, o + 0.14);
+    try { target.setOpacity(o); } catch (_) {}
+    if (o < requestedWindowOpacity) setTimeout(fade, 16);
+    else recordWindowVisibility(reason);
   };
   fade();
 }
@@ -120,6 +345,7 @@ let quitting = false;
 // thread is still alive; app.exit() terminates the process outright.
 function doQuit() {
   if (quitting) return;
+  appendCrashReport('app.quit-requested');
   quitting = true;
   forceQuit = true;
   try { keyboardHook.stopCapture && keyboardHook.stopCapture(); } catch (_) {}
@@ -225,7 +451,10 @@ function createWindow() {
     minWidth: WIDGET_SIZE.width,
     minHeight: WIDGET_SIZE.height,
     frame: false,
-    transparent: true,
+    // Recovery must use an opaque surface as well as software rendering. The
+    // normal transparent overlay remains unchanged outside graphics safe mode.
+    transparent: !GPU_SAFE_MODE_ACTIVE,
+    backgroundColor: GPU_SAFE_MODE_ACTIVE ? '#14181d' : '#00000000',
     resizable: true,
     skipTaskbar: false,
     // Non-focusable: a fullscreen game won't surrender keyboard focus, so the
@@ -240,6 +469,14 @@ function createWindow() {
       nodeIntegration: false
     }
   });
+
+  appRevealed = false;
+  const createdWindow = win;
+  // Independent of renderer load/readiness: a stalled renderer must not leave
+  // an invisible process indefinitely. Do not reveal a later replacement window.
+  setTimeout(() => {
+    if (win === createdWindow) revealWindow('startup-timeout');
+  }, 8000);
 
   win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -259,7 +496,9 @@ function createWindow() {
 
   win.webContents.on('did-finish-load', () => {
     if (!win) return;
-    win.setOpacity(0); // stay hidden until the renderer is in its final mode, then fade in
+    appendCrashReport('renderer.did-finish-load');
+    // Do not reset opacity here. This event also runs on Reload, and can arrive
+    // after renderer-ready; appRevealed may already be true in either case.
     try { win.setIcon(path.join(__dirname, 'files', 'rimjobs.ico')); } catch (_) {}
     // Baseline = WINDOW mode, centred. The renderer applies the user's chosen startup mode
     // (window/fullscreen/widget) via 'apply-startup-mode' and then signals 'renderer-ready',
@@ -278,7 +517,7 @@ function createWindow() {
     win.webContents.send('fullscreen-changed', false);
     win.webContents.send('widget-mode-changed', false);
     // Safety net: reveal even if the renderer never signals readiness.
-    setTimeout(() => revealWindow(), 2500);
+    setTimeout(() => revealWindow('load-timeout'), 2500);
     console.log('[overlay] Ready');
   });
 
@@ -295,15 +534,33 @@ function createWindow() {
   // ─── Renderer crash / unresponsive handling ───
   win.webContents.on('render-process-gone', (_event, details) => {
     console.error('[overlay] Renderer crashed:', details.reason);
+    const rendererOomAfterGpuFailures = details && details.reason === 'oom'
+      && recentGpuCrashTimes.length >= 2;
+    if (rendererOomAfterGpuFailures) {
+      writeGpuSafeModeMarker('renderer-oom-after-gpu-failures');
+    }
+    appendCrashReport('renderer.process-gone', {
+      reason: details && details.reason,
+      exitCode: details && details.exitCode,
+      recentGpuFailures: recentGpuCrashTimes.length,
+      safeRestartOffered: rendererOomAfterGpuFailures
+    });
+    const crashMessage = rendererOomAfterGpuFailures
+      ? `The graphics process failed repeatedly before the interface ran out of memory.\n\nA diagnostic report was saved to:\n${getCrashReportPath()}\n\nYour data was auto-saved. Restart Safely will relaunch RimJobs with software rendering to avoid the same graphics crash.`
+      : `The overlay crashed unexpectedly.\n\nReason: ${details.reason}\n\nA diagnostic report was saved to:\n${getCrashReportPath()}\n\nYour data was auto-saved. Click Reload to restart the interface, or Close to quit.`;
     dialog.showMessageBox({
       type: 'error',
-      title: 'RimJobs -Renderer Crashed',
-      message: `The overlay crashed unexpectedly.\n\nReason: ${details.reason}\n\nYour data was auto-saved. Click Reload to restart the interface, or Close to quit.`,
-      buttons: ['Reload', 'Close'],
+      title: 'RimJobs - Renderer Crashed',
+      message: crashMessage,
+      buttons: rendererOomAfterGpuFailures ? ['Restart Safely', 'Close'] : ['Reload', 'Close'],
       defaultId: 0
     }).then(({ response }) => {
       if (response === 0) {
-        win.loadFile(path.join(__dirname, 'files', 'rimjobs.html'));
+        if (rendererOomAfterGpuFailures) {
+          if (!restartInGpuSafeMode('renderer-oom-after-gpu-failures')) doQuit();
+        } else if (win) {
+          win.loadFile(path.join(__dirname, 'files', 'rimjobs.html'));
+        }
       } else {
         doQuit();
       }
@@ -312,6 +569,7 @@ function createWindow() {
 
   win.on('unresponsive', () => {
     console.warn('[overlay] Window unresponsive');
+    appendCrashReport('renderer.unresponsive');
     dialog.showMessageBox({
       type: 'warning',
       title: 'RimJobs -Not Responding',
@@ -323,6 +581,10 @@ function createWindow() {
         win.loadFile(path.join(__dirname, 'files', 'rimjobs.html'));
       }
     });
+  });
+
+  win.webContents.on('responsive', () => {
+    appendCrashReport('renderer.responsive');
   });
 
   win.on('close', (e) => {
@@ -340,6 +602,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  appendCrashReport('app.session-start', { platform: process.platform, arch: process.arch });
   createWindow();
 
   const iconPath = path.join(__dirname, 'files', 'rimjobs.ico');
@@ -399,6 +662,10 @@ app.whenReady().then(() => {
 
 // ─── Version request from renderer ───
 ipcMain.handle('get-app-version', () => APP_VERSION);
+ipcMain.handle('get-graphics-status', () => ({
+  softwareRendering: GPU_SAFE_MODE_ACTIVE,
+  opacitySupported: !GPU_SAFE_MODE_ACTIVE
+}));
 
 // ─── Open an external URL in the user's default browser ───
 // Renderer links can't open windows in this frameless, non-focusable overlay,
@@ -441,23 +708,83 @@ function extractColonyWealth(xml) {
   } catch (_) { return null; }
 }
 
+async function extractColonyWealthFromFile(filePath) {
+  const markerTailLength = 128;
+  const maximumCaptureLength = 16 * 1024 * 1024;
+  let prefix = '';
+  let capture = '';
+  let capturing = false;
+  const startPattern = /<li>\s*<def>Wealth<\/def>\s*<recorders>/;
+  try {
+    const stream = fs.createReadStream(filePath, { encoding: 'utf8', highWaterMark: 256 * 1024 });
+    for await (const chunk of stream) {
+      if (!capturing) {
+        const candidate = prefix + chunk;
+        const match = startPattern.exec(candidate);
+        if (!match) {
+          prefix = candidate.slice(-markerTailLength);
+          continue;
+        }
+        capturing = true;
+        capture = candidate.slice(match.index);
+        prefix = '';
+      } else {
+        capture += chunk;
+      }
+      const end = capture.indexOf('</recorders>');
+      if (end >= 0) return extractColonyWealth(capture.slice(0, end + 12));
+      if (capture.length > maximumCaptureLength) return null;
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function describeSaveFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return { error: 'File not found' };
+  const stat = await fs.promises.stat(filePath);
+  return {
+    filePath,
+    bytes: stat.size,
+    wealth: await extractColonyWealthFromFile(filePath)
+  };
+}
+
 ipcMain.handle('open-save-file', async () => {
   const fs = require('fs');
+  appendCrashReport('save.picker-requested');
   const savePath = path.join(
     process.env.LOCALAPPDATA || '', '..', 'LocalLow',
     'Ludeon Studios', 'RimWorld by Ludeon Studios', 'Saves'
   );
   const defaultPath = fs.existsSync(savePath) ? savePath : undefined;
-  const result = await dialog.showOpenDialog(win, {
+  const dialogOptions = {
     title: 'Import RimWorld Save',
     defaultPath,
     filters: [{ name: 'RimWorld Saves', extensions: ['rws'] }],
     properties: ['openFile']
-  });
+  };
+  let result;
+  const lowerOverlay = !!(win && !win.isDestroyed() && win.isAlwaysOnTop());
+  try {
+    // The overlay is permanently non-focusable. Parenting a native picker to it can
+    // terminate the Windows dialog handoff before the picker appears. Open the picker
+    // independently and lower the overlay so the native window remains visible.
+    if (lowerOverlay) win.setAlwaysOnTop(false);
+    result = await dialog.showOpenDialog(dialogOptions);
+  } finally {
+    if (win && !win.isDestroyed()) {
+      win.showInactive();
+      win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
+      forceTaskbar();
+      isVisible = true;
+    }
+  }
+  appendCrashReport('save.picker-closed', { cancelled: !!result.canceled });
   if (result.canceled || !result.filePaths[0]) return null;
   const filePath = result.filePaths[0];
   // Warn on very large save files (>150MB) -could cause high memory usage
   const stat = fs.statSync(filePath);
+  appendCrashReport('save.file-selected', { bytes: stat.size });
   const sizeMB = stat.size / (1024 * 1024);
   if (sizeMB > 150) {
     const proceed = dialog.showMessageBoxSync(win, {
@@ -470,16 +797,43 @@ ipcMain.handle('open-save-file', async () => {
     });
     if (proceed === 1) return null;
   }
-  const xml = fs.readFileSync(filePath, 'utf-8');
-  return { xml, filePath, wealth: extractColonyWealth(xml) };
+  const descriptor = await describeSaveFile(filePath);
+  appendCrashReport('save.file-stream-ready', { bytes: descriptor.bytes || 0 });
+  return descriptor;
 });
+
+ipcMain.handle('record-crash-probe', (_event, eventName, details) => {
+  return appendCrashReport(eventName, details);
+});
+
+ipcMain.handle('get-crash-report-path', () => getCrashReportPath());
 
 // Re-read a save file by path (for refresh/re-import)
 ipcMain.handle('read-save-file', async (_, filePath) => {
-  const fs = require('fs');
-  if (!filePath || !fs.existsSync(filePath)) return { error: 'File not found: ' + filePath };
-  const xml = fs.readFileSync(filePath, 'utf-8');
-  return { xml, filePath, wealth: extractColonyWealth(xml) };
+  return describeSaveFile(filePath);
+});
+
+// Stream save text to the renderer in bounded chunks. Returning an entire 50 MB
+// string through invoke keeps another full copy alive in the main-process V8 heap,
+// so a later re-import can exhaust the system commit limit before parsing starts.
+ipcMain.handle('read-save-file-chunk', async (_event, filePath, offset, requestedBytes) => {
+  const chunkBytes = Math.min(1024 * 1024, Math.max(64 * 1024, Number(requestedBytes) || 1024 * 1024));
+  const position = Math.max(0, Number(offset) || 0);
+  if (!filePath || !fs.existsSync(filePath)) return { error: 'File not found' };
+  const handle = await fs.promises.open(filePath, 'r');
+  try {
+    const stat = await handle.stat();
+    if (position >= stat.size) return { data: Buffer.alloc(0), bytesRead: 0, totalBytes: stat.size };
+    const buffer = Buffer.allocUnsafe(Math.min(chunkBytes, stat.size - position));
+    const result = await handle.read(buffer, 0, buffer.length, position);
+    return {
+      data: buffer.subarray(0, result.bytesRead),
+      bytesRead: result.bytesRead,
+      totalBytes: stat.size
+    };
+  } finally {
+    await handle.close();
+  }
 });
 
 // ─── Xenotype XML Scanner ───
@@ -531,13 +885,25 @@ ipcMain.handle('scan-xenotype-defs', async (_, dirPath) => {
 // Finds TraitDef / GeneDef / BackstoryDef / prosthetic HediffDef blocks under a
 // directory tree (plus the Steam workshop). Runs ASYNC in batches with yields so
 // the main process never blocks, and emits 'trait-gene-scan-progress' events.
-ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
+ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
   const fs = require('fs');
   const fsp = fs.promises;
   const pathMod = require('path');
   const crypto = require('crypto');
+  const os = require('os');
 
   if (!dirPath || !fs.existsSync(dirPath)) return { error: 'Directory not found: ' + dirPath };
+  if (options && options.background) {
+    const freeBytes = os.freemem();
+    const minimumBytes = 4 * 1024 * 1024 * 1024;
+    if (freeBytes < minimumBytes) {
+      appendCrashReport('background-scan.skipped-low-memory', {
+        freeMemoryMb: Math.round(freeBytes / 1048576),
+        minimumMemoryMb: Math.round(minimumBytes / 1048576)
+      });
+      return { error: 'Background scan skipped due to low available memory', skippedLowMemory: true };
+    }
+  }
 
   const readRuntimeFingerprint = async () => {
     let versionText = null;
@@ -576,7 +942,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   // next scan a file whose mtime+size still match is reused from the cache and its
   // bytes are never touched again. Bump CACHE_VERSION whenever the extraction
   // below changes, so stale fragments are discarded wholesale.
-  const CACHE_VERSION = 7; // v7: focused C5 effectiveness definition and operation fragments
+  const CACHE_VERSION = 8; // v8: ideology role PreceptDef fragments and provenance
   let cacheFile = null;
   try { cacheFile = pathMod.join(app.getPath('userData'), 'scan-cache.json'); } catch (_) { cacheFile = null; }
   let oldFiles = {};
@@ -610,7 +976,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   const addDefSources = (frag) => {
     if (!frag || !frag.pkg) return;
     for (const part of [frag.sk, frag.tr, frag.ge, frag.gt, frag.bs, frag.re, frag.ah,
-      frag.pa, frag.sd, frag.wt, frag.wg, frag.rc, frag.jd]) {
+      frag.pa, frag.sd, frag.wt, frag.wg, frag.rc, frag.jd, frag.ro]) {
       if (!part) continue;
       for (const mm of part.matchAll(/<defName>([\w.\-]+)<\/defName>/g)) {
         if (!(mm[1] in defSources)) defSources[mm[1]] = frag.pkg;
@@ -633,6 +999,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     RecipeDef: {},
     JobDef: {},
     PassionDef: {},
+    PreceptRoleDef: {},
     RaceWorkSettings: {},
   };
   const definitionUncertainty = {
@@ -652,6 +1019,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       RecipeDef: {},
       JobDef: {},
       PassionDef: {},
+      PreceptRoleDef: {},
       RaceWorkSettings: {},
     },
     dataset: {
@@ -670,7 +1038,15 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       RecipeDef: [],
       JobDef: [],
       PassionDef: [],
+      PreceptRoleDef: [],
       RaceWorkSettings: [],
+    },
+    // Source metadata lets renderer parsers ignore uncertainty introduced by
+    // inactive mods or stale workshop version folders. Existing string-only
+    // fields remain for C3-C5 consumers that do not yet need source filtering.
+    sources: {
+      byType: { PreceptRoleDef: {} },
+      dataset: { PreceptRoleDef: [] },
     },
   };
   const requirementUncertainty = {
@@ -705,13 +1081,15 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     rc: 'RecipeDef',
     jd: 'JobDef',
     pa: 'PassionDef',
+    ro: 'PreceptRoleDef',
   };
   const addReason = (list, reason) => { if (list.indexOf(reason) < 0) list.push(reason); };
   const addDefinitionMetadata = (frag, file, scanOrder) => {
     for (const [field, type] of Object.entries(C3_FRAGMENT_TYPES)) {
       const xml = frag[field];
       if (!xml) continue;
-      const tag = type === 'RaceThingDef' || type === 'RaceWorkSettings' ? 'ThingDef' : type;
+      const tag = type === 'RaceThingDef' || type === 'RaceWorkSettings' ? 'ThingDef'
+        : type === 'PreceptRoleDef' ? 'PreceptDef' : type;
       const blocks = xml.match(new RegExp('<' + tag + '[\\s>][\\s\\S]*?<\\/' + tag + '>', 'g')) || [];
       for (let i = 0; i < blocks.length; i++) {
         const mm = blocks[i].match(/<defName>\s*([^<]+?)\s*<\/defName>/i);
@@ -748,10 +1126,22 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       for (const defName of names) {
         if (!definitionUncertainty.byType[type][defName]) definitionUncertainty.byType[type][defName] = [];
         addReason(definitionUncertainty.byType[type][defName], 'relevantPatchNotApplied');
+        if (type === 'PreceptRoleDef') {
+          const sourceRoot = definitionUncertainty.sources.byType.PreceptRoleDef;
+          if (!sourceRoot[defName]) sourceRoot[defName] = [];
+          sourceRoot[defName].push({
+            reason: 'relevantPatchNotApplied', modId: frag.pkg || null, file,
+          });
+        }
       }
     }
     for (const type of patchInfo.datasetTypes || []) {
       if (definitionUncertainty.dataset[type]) addReason(definitionUncertainty.dataset[type], 'relevantPatchNotApplied');
+      if (type === 'PreceptRoleDef') {
+        definitionUncertainty.sources.dataset.PreceptRoleDef.push({
+          reason: 'relevantPatchNotApplied', modId: frag.pkg || null, file,
+        });
+      }
     }
     const c4 = patchInfo.c4 || {};
     for (const [defName, dimensions] of Object.entries(c4.workType || {})) {
@@ -823,7 +1213,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   // Pull every supported def fragment out of one file's text. Must stay in sync
   // with CACHE_VERSION; the result is what gets cached per file.
   const extractDefs = (content) => {
-    const out = { sk: '', tr: '', ge: '', gt: '', bs: '', re: '', ah: '', hp: '', pa: '', me: '', pc: '', sd: '', rc: '', jd: '', bd: '', bp: '', cd: '', rd: '', wt: '', wg: '', pu: null };
+    const out = { sk: '', tr: '', ge: '', gt: '', bs: '', re: '', ah: '', hp: '', pa: '', me: '', pc: '', ro: '', sd: '', rc: '', jd: '', bd: '', bp: '', cd: '', rd: '', wt: '', wg: '', pu: null };
     if (content.includes('<SkillDef')) { const m = content.match(/<SkillDef[\s>][\s\S]*?<\/SkillDef>/g); if (m) out.sk = m.join('\n'); }
     if (content.includes('<TraitDef')) { const m = content.match(/<TraitDef[\s>][\s\S]*?<\/TraitDef>/g); if (m) out.tr = m.join('\n'); }
     if (content.includes('<GeneDef')) { const m = content.match(/<GeneDef[\s>][\s\S]*?<\/GeneDef>/g); if (m) out.ge = m.join('\n'); }
@@ -835,7 +1225,18 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     if (content.includes('<MemeDef')) { const m = content.match(/<MemeDef[\s>][\s\S]*?<\/MemeDef>/g); if (m) out.me = m.join('\n'); }
     if (content.includes('<PreceptDef')) {
       const m = content.match(/<PreceptDef[\s>][\s\S]*?<\/PreceptDef>/g);
-      if (m) { const rituals = m.filter(b => /<preceptClass>[^<]*Ritual/.test(b)); if (rituals.length) out.pc = rituals.join('\n'); }
+      if (m) {
+        const rituals = m.filter(b => /<preceptClass>[^<]*Ritual/.test(b));
+        if (rituals.length) out.pc = rituals.join('\n');
+        // Role definitions are capability-critical. PatchOperation files remain
+        // uncertainty evidence and are not treated as already-applied definitions.
+        if (!/PatchOperation/i.test(content)) {
+          const roles = m.filter(b => /<preceptClass>[^<]*Role/i.test(b)
+            || /<role(?:Tags|DisabledWorkTags|RequiredWorkTags|RequiredWorkTagAny|Effects|Requirements)>/i.test(b)
+            || /\b(?:Name|ParentName)=["']PreceptRole/i.test(b));
+          if (roles.length) out.ro = roles.join('\n');
+        }
+      }
     }
     // Modded passions (Vanilla Skills Expanded framework, also used by Alpha Skills)
     // are defined as <VSE.Passions.PassionDef> and serialise into the vanilla
@@ -867,7 +1268,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       }
     }
     if (/PatchOperation/i.test(content)) {
-      const byType = { BodyDef: [], BodyPartDef: [], PawnCapacityDef: [], RaceThingDef: [], HediffDef: [], WorkTypeDef: [], WorkGiverDef: [], RaceWorkSettings: [] };
+      const byType = { BodyDef: [], BodyPartDef: [], PawnCapacityDef: [], RaceThingDef: [], HediffDef: [], WorkTypeDef: [], WorkGiverDef: [], PreceptRoleDef: [], RaceWorkSettings: [] };
       const datasetTypes = [];
       const c4 = {
         workType: {}, workGiver: {}, raceWork: {},
@@ -922,6 +1323,8 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
         else if (/\bHediffDef\b/.test(xpath) && /\b(?:stages|capMods|partEfficiencyOffset|partIgnoreMissingHP|addedPartProps|partEfficiency)\b/i.test(xpath)) type = 'HediffDef';
         else if (/\bWorkTypeDef\b/.test(xpath)) type = 'WorkTypeDef';
         else if (/\bWorkGiverDef\b/.test(xpath)) type = 'WorkGiverDef';
+        else if (/\bPreceptDef\b/.test(xpath)
+          && /\b(?:roleDisabledWorkTags|roleRequiredWorkTags|roleRequiredWorkTagAny|roleEffects|roleRequirements|grantedAbilities)\b/i.test(xpath)) type = 'PreceptRoleDef';
         else if (/\bThingDef\b/.test(xpath) && /\b(?:race|body)\b/i.test(xpath)) type = 'RaceThingDef';
         const names = [];
         const namePatterns = [
@@ -1051,7 +1454,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
   for (const r of roots) { await walk(r, 0); await yieldToMain(); }
 
   // ── Phase 2: stat + (cache-or-read) + extract, in async batches ──
-  let traits = '<Defs>\n', genes = '<Defs>\n', backstories = '<Defs>\n', hediffs = '<Defs>\n', allHediffs = '<Defs>\n', relationDefs = '<Defs>\n', passionDefs = '<Defs>\n', memeDefs = '<Defs>\n', ritualPreceptDefs = '<Defs>\n';
+  let traits = '<Defs>\n', genes = '<Defs>\n', backstories = '<Defs>\n', hediffs = '<Defs>\n', allHediffs = '<Defs>\n', relationDefs = '<Defs>\n', passionDefs = '<Defs>\n', memeDefs = '<Defs>\n', ritualPreceptDefs = '<Defs>\n', rolePreceptDefs = '<Defs>\n';
   let bodyDefs = '<Defs>\n', bodyPartDefs = '<Defs>\n', capacityDefs = '<Defs>\n', raceThingDefs = '<Defs>\n';
   let workTypeDefs = '<Defs>\n', workGiverDefs = '<Defs>\n';
   let skillDefs = '<Defs>\n', geneTemplateDefs = '<Defs>\n', statDefs = '<Defs>\n';
@@ -1074,12 +1477,12 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
         const ex = extractDefs(content);
         // Only resolve the mod packageId for files that actually yielded a def we track.
         const hasDef = ex.sk || ex.tr || ex.ge || ex.gt || ex.bs || ex.re || ex.ah
-          || ex.pa || ex.me || ex.pc || ex.sd || ex.rc || ex.jd || ex.bd || ex.bp
+          || ex.pa || ex.me || ex.pc || ex.ro || ex.sd || ex.rc || ex.jd || ex.bd || ex.bp
           || ex.cd || ex.rd || ex.wt || ex.wg || ex.pu;
         const pkg = hasDef ? await findPackageId(pathMod.dirname(key)) : '';
         frag = { m: st.mtimeMs, s: st.size, sk: ex.sk, tr: ex.tr, ge: ex.ge,
           gt: ex.gt, bs: ex.bs, re: ex.re, ah: ex.ah, hp: ex.hp, pa: ex.pa,
-          me: ex.me, pc: ex.pc, sd: ex.sd, rc: ex.rc, jd: ex.jd, bd: ex.bd,
+          me: ex.me, pc: ex.pc, ro: ex.ro, sd: ex.sd, rc: ex.rc, jd: ex.jd, bd: ex.bd,
           bp: ex.bp, cd: ex.cd, rd: ex.rd, wt: ex.wt, wg: ex.wg, pu: ex.pu, pkg };
         readCount++;
       }
@@ -1097,6 +1500,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
       if (frag.pa) { passionDefs += frag.pa + '\n'; }
       if (frag.me) { memeDefs += frag.me + '\n'; }
       if (frag.pc) { ritualPreceptDefs += frag.pc + '\n'; }
+      if (frag.ro) { rolePreceptDefs += frag.ro + '\n'; }
       if (frag.bd) { bodyDefs += frag.bd + '\n'; }
       if (frag.bp) { bodyPartDefs += frag.bp + '\n'; }
       if (frag.cd) { capacityDefs += frag.cd + '\n'; }
@@ -1118,7 +1522,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     try { await fsp.writeFile(cacheFile, JSON.stringify({ v: CACHE_VERSION, files: newFiles }), 'utf-8'); } catch (_) { /* ignore */ }
   }
 
-  traits += '</Defs>'; genes += '</Defs>'; backstories += '</Defs>'; hediffs += '</Defs>'; allHediffs += '</Defs>'; relationDefs += '</Defs>'; passionDefs += '</Defs>'; memeDefs += '</Defs>'; ritualPreceptDefs += '</Defs>';
+  traits += '</Defs>'; genes += '</Defs>'; backstories += '</Defs>'; hediffs += '</Defs>'; allHediffs += '</Defs>'; relationDefs += '</Defs>'; passionDefs += '</Defs>'; memeDefs += '</Defs>'; ritualPreceptDefs += '</Defs>'; rolePreceptDefs += '</Defs>';
   bodyDefs += '</Defs>'; bodyPartDefs += '</Defs>'; capacityDefs += '</Defs>'; raceThingDefs += '</Defs>';
   workTypeDefs += '</Defs>'; workGiverDefs += '</Defs>';
   skillDefs += '</Defs>'; geneTemplateDefs += '</Defs>'; statDefs += '</Defs>';
@@ -1133,7 +1537,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath) => {
     jobDefsXml: jobDefs, backstoriesXml: backstories, hediffsXml: hediffs,
     allHediffsXml: allHediffs, relationDefsXml: relationDefs,
     passionDefsXml: passionDefs, memesXml: memeDefs,
-    ritualPreceptsXml: ritualPreceptDefs, bodyDefsXml: bodyDefs,
+    ritualPreceptsXml: ritualPreceptDefs, rolePreceptsXml: rolePreceptDefs, bodyDefsXml: bodyDefs,
     bodyPartDefsXml: bodyPartDefs, capacityDefsXml: capacityDefs,
     raceThingDefsXml: raceThingDefs, workTypeDefsXml: workTypeDefs,
     workGiverDefsXml: workGiverDefs, defSources, definitionSources,
@@ -1360,12 +1764,24 @@ ipcMain.handle('scan-def-labels', async (event, installPath) => {
 // Scans RimWorld Data/, Mods/, and Steam Workshop for weapon and apparel ThingDefs.
 // Extracts combat stats (damage, accuracy, armour ratings, layers, etc.)
 // and returns structured arrays ready for the armoury/apparel tabs.
-ipcMain.handle('scan-mod-equipment', async (event, installPath) => {
+ipcMain.handle('scan-mod-equipment', async (event, installPath, options) => {
   const fs = require('fs');
   const fsp = fs.promises;
   const pathMod = require('path');
+  const os = require('os');
 
   if (!installPath || !fs.existsSync(installPath)) return { error: 'Install path not found' };
+  if (options && options.background) {
+    const freeBytes = os.freemem();
+    const minimumBytes = 4 * 1024 * 1024 * 1024;
+    if (freeBytes < minimumBytes) {
+      appendCrashReport('background-equipment-scan.skipped-low-memory', {
+        freeMemoryMb: Math.round(freeBytes / 1048576),
+        minimumMemoryMb: Math.round(minimumBytes / 1048576)
+      });
+      return { error: 'Background equipment scan skipped due to low available memory', skippedLowMemory: true };
+    }
+  }
 
   // Directories to scan: vanilla Data/ (for abstract base defs only),
   // local Mods/, and Steam Workshop
@@ -2215,6 +2631,69 @@ ipcMain.handle('find-rimworld-path', async () => {
 });
 
 // ─── File-based save/load ───
+const INTERNAL_STATE_MAX_BYTES = 64 * 1024 * 1024;
+let internalStateSaveQueue = Promise.resolve();
+
+function getInternalStatePaths() {
+  const dir = app.getPath('userData');
+  return {
+    primary: path.join(dir, 'rimjobs-state.json'),
+    backup: path.join(dir, 'rimjobs-state.backup.json')
+  };
+}
+
+async function writeInternalAppState(jsonString) {
+  if (typeof jsonString !== 'string') throw new Error('Invalid app state');
+  const bytes = Buffer.byteLength(jsonString, 'utf8');
+  if (bytes > INTERNAL_STATE_MAX_BYTES) throw new Error('App state exceeds the 64 MB safety limit');
+
+  const paths = getInternalStatePaths();
+  const temp = paths.primary + '.' + process.pid + '.tmp';
+  await fs.promises.mkdir(path.dirname(paths.primary), { recursive: true });
+  await fs.promises.writeFile(temp, jsonString, 'utf8');
+  try {
+    if (fs.existsSync(paths.primary)) await fs.promises.copyFile(paths.primary, paths.backup);
+    await fs.promises.rename(temp, paths.primary);
+  } catch (error) {
+    try { await fs.promises.unlink(temp); } catch (_) {}
+    throw error;
+  }
+  return bytes;
+}
+
+// Large colony state bypasses Chromium localStorage. A synchronous read happens
+// once during startup so the existing renderer initialisation order stays intact.
+ipcMain.on('load-app-state-sync', (event, source) => {
+  try {
+    const paths = getInternalStatePaths();
+    const selected = source === 'backup' ? paths.backup : paths.primary;
+    if (!fs.existsSync(selected)) {
+      event.returnValue = { ok: false, error: 'File not found' };
+      return;
+    }
+    event.returnValue = { ok: true, data: fs.readFileSync(selected, 'utf8') };
+  } catch (error) {
+    event.returnValue = { ok: false, error: error.message };
+  }
+});
+
+ipcMain.handle('save-app-state', (_event, jsonString) => {
+  const save = internalStateSaveQueue.then(async () => {
+    const bytes = await writeInternalAppState(jsonString);
+    appendCrashReport('storage.internal-save-complete', { bytes });
+    return { ok: true, bytes };
+  }, async () => {
+    const bytes = await writeInternalAppState(jsonString);
+    appendCrashReport('storage.internal-save-complete', { bytes });
+    return { ok: true, bytes };
+  }).catch(error => {
+    appendCrashReport('storage.internal-save-failed', { message: error.message });
+    return { ok: false, error: error.message };
+  });
+  internalStateSaveQueue = save.then(() => undefined, () => undefined);
+  return save;
+});
+
 // Save colony data to a user-chosen file path
 ipcMain.handle('save-to-file', async (_, filePath, jsonString) => {
   const fs = require('fs');
@@ -2396,9 +2875,13 @@ ipcMain.on('window-minimize', () => {
 });
 ipcMain.on('window-close', () => win?.close());
 ipcMain.on('window-set-opacity', (_, value) => {
-  if (!win) return;
+  if (!win || GPU_SAFE_MODE_ACTIVE || opacityLocked || !Number.isFinite(value)) return;
   const clamped = Math.max(0.3, Math.min(1.0, value));
+  requestedWindowOpacity = clamped;
   try { win.setOpacity(clamped); } catch (_) {}
+});
+ipcMain.on('window-set-opacity-lock', (_, locked) => {
+  opacityLocked = locked === true;
 });
 ipcMain.on('window-toggle-top', () => {
   if (!win) return;
@@ -2611,7 +3094,10 @@ ipcMain.on('set-native-theme', (_, theme) => {
 });
 
 // Renderer has finished its first render in the correct mode - reveal the window.
-ipcMain.on('renderer-ready', () => revealWindow());
+ipcMain.on('renderer-ready', () => {
+  appendCrashReport('renderer.ready');
+  revealWindow();
+});
 
 // ─── Fullscreen toggle (works from both widget and full modes) ───
 // "Fullscreen" here means filling the monitor's WORK AREA via bounds (excludes

@@ -71,26 +71,38 @@ const Engine = {
   },
 
   /**
-   * Survival Index calculation.
+   * Dashboard coverage uses actual enabled priorities, never missing/invalid cells.
+   * Keep eligibility on the caller's shared C7 contexts.
+   */
+  _hasWorkPriority(value) {
+    const max = typeof PriorityScale !== 'undefined' ? PriorityScale.lowestManual() : 4;
+    return Number.isInteger(value) && value >= 1 && value <= max;
+  },
+
+  getCriticalWorkCoverage(pawns, priorities, contextMap) {
+    const jobs = [...JOBS, ...(App.state.customJobs || [])];
+    const criticals = jobs.filter(j => j.important);
+    const covered = criticals.filter(j => pawns.some(p =>
+      this._hasWorkPriority(priorities[p.id]?.[j.id])
+      && this._c7IsEligible(contextMap, p, j))).length;
+    const hasAssignments = pawns.some(p => jobs.some(j =>
+      this._hasWorkPriority(priorities[p.id]?.[j.id])));
+    return { total: criticals.length, covered, hasAssignments };
+  },
+
+  /**
+   * Survival Index: a planning heuristic, capped by essential work coverage.
    */
   calculateViability(pawns, priorities, precepts, contextMap) {
     if (pawns.length === 0) return 0;
     
     let score = 50; // Base baseline
     
-    // Critical Job Coverage
-    const criticals = JOBS.filter(j => j.important);
-    criticals.forEach(j => {
-      // A real worker = an assigned priority (1-4) on a capable pawn. Use loose
-      // `!= null` so an *unset* priority (undefined) is not mistaken for an
-      // assignment - otherwise the "no doctor/cook" penalty silently never fires.
-      const hasWorker = pawns.some(p => priorities[p.id]?.[j.id] != null
-        && this._c7IsEligible(contextMap, p, j));
-      if (!hasWorker) score -= 10;
-    });
+    const coverage = this.getCriticalWorkCoverage(pawns, priorities, contextMap);
+    score -= (coverage.total - coverage.covered) * 10;
 
     // Specialization check
-    const specialists = pawns.filter(p => p.role !== 'none').length;
+    const specialists = pawns.filter(p => p.role && p.role !== 'none').length;
     score += (specialists * 4);
 
     // Mental Stability Check (Factor in Traits)
@@ -112,7 +124,9 @@ const Engine = {
     const ideoFx = App.getIdeoEffects();
     if (ideoFx.mood) score += (ideoFx.mood * 2); // Each mood point is roughly 2 viability pts
 
-    return Math.max(0, Math.min(100, Math.round(score)));
+    // Role and mood bonuses cannot hide missing essential workers.
+    const coverageCeiling = coverage.total ? Math.floor(coverage.covered / coverage.total * 100) : 0;
+    return Math.max(0, Math.min(coverageCeiling, Math.round(score)));
   },
 
   /**
@@ -122,37 +136,43 @@ const Engine = {
     const gaps = [];
     const jobs = [...JOBS, ...(App.state.customJobs || [])];
     const importantJobs = jobs.filter(j => j.important);
+    const simpleMode = App.state.settings?.manualPriorities === false;
+    const highPriorityCeiling = typeof PriorityScale !== 'undefined'
+      && typeof PriorityScale.autoPriority === 'function'
+      ? PriorityScale.autoPriority(2) : 2;
+
     const isCapable = (p, j) => this._c7IsEligible(contextMap, p, j);
-    
+
     // 1. Basic coverage check
     importantJobs.forEach(j => {
-      const hasP1 = pawns.some(p => priorities[p.id]?.[j.id] === 1 && isCapable(p, j));
-      if (!hasP1) {
-        const hasAny = pawns.some(p => priorities[p.id]?.[j.id] !== null && isCapable(p, j));
-        if (!hasAny) gaps.push(`NO COVERAGE: ${j.name}`);
-        else gaps.push(`Low priority for ${j.name}`);
+      const hasAny = pawns.some(p => this._hasWorkPriority(priorities[p.id]?.[j.id]) && isCapable(p, j));
+      if (!hasAny) gaps.push(`NO COVERAGE: ${j.name}`);
+      else if (!simpleMode && !pawns.some(p => priorities[p.id]?.[j.id] === 1 && isCapable(p, j))) {
+        gaps.push(`Low priority for ${j.name}`);
       }
     });
 
+    // Simple mode only has enabled/disabled work, not numeric P1 conflicts.
+    if (simpleMode) return gaps;
+
     // 2. Conflict Detection
-    // Warn when two pawns are both P1 on the same high-demand job but neither covers an uncovered critical job
     const highDemandIds = ['construction', 'growing', 'mining', 'hauling', 'cleaning', 'research', 'crafting'];
     const criticalIds = ['firefight', 'patient', 'doctoring'];
-    
+
     const uncoveredCriticals = criticalIds.filter(id => {
       const job = jobs.find(j => j.id === id);
       if (!job) return false;
-      return !pawns.some(p => (priorities[p.id]?.[id] !== null && priorities[p.id]?.[id] <= 2) && isCapable(p, job));
+      return !pawns.some(p => (this._hasWorkPriority(priorities[p.id]?.[id])
+        && priorities[p.id]?.[id] <= highPriorityCeiling) && isCapable(p, job));
     });
 
     if (uncoveredCriticals.length > 0) {
       highDemandIds.forEach(id => {
         const job = jobs.find(j => j.id === id);
         if (!job) return;
-        
+
         const p1Pawns = pawns.filter(p => priorities[p.id]?.[id] === 1 && isCapable(p, job));
         if (p1Pawns.length >= 2) {
-          // Check if any of these p1Pawns COULD cover an uncovered critical
           const capableOfCritical = p1Pawns.filter(p => {
             return uncoveredCriticals.some(critId => {
               const critJob = jobs.find(j => j.id === critId);
@@ -167,7 +187,7 @@ const Engine = {
         }
       });
     }
-    
+
     return gaps;
   },
 
@@ -179,6 +199,144 @@ const Engine = {
     }
     // Temporary compatibility for non-UI legacy callers while C7 migrates them.
     return !App.isIncapable(pawn, job);
+  },
+
+  evaluateJobPermission(pawn, job) {
+    const hardBlocks = [];
+    const uncertainties = [];
+
+    if (pawn.downed) {
+      hardBlocks.push({ source: 'status', id: 'downed', reason: 'Incapacitated in bed' });
+      return { status: 'blocked', hardBlocks, uncertainties };
+    }
+    if (job && typeof JOB_MIN_AGE !== 'undefined' && JOB_MIN_AGE[job.id] != null &&
+        pawn.bioAge != null && pawn.bioAge < JOB_MIN_AGE[job.id]) {
+      hardBlocks.push({ source: 'age', id: 'too_young', reason: `Under ${JOB_MIN_AGE[job.id]} (age ${pawn.bioAge})` });
+    }
+    if (job && typeof MANIPULATION_GATED_JOBS !== 'undefined' && MANIPULATION_GATED_JOBS.includes(job.id) && App._manipulationLost(pawn)) {
+      hardBlocks.push({ source: 'capacity', id: 'no_manipulation', reason: 'No working arms/hands' });
+    }
+    if (job.incapBlocks) {
+      const tagProv = new Map();
+      const pawnIncap = Array.isArray(pawn.incapable) ? pawn.incapable : [];
+      pawnIncap.forEach(tag => { if (!tagProv.has(tag)) tagProv.set(tag, { source: 'backstory/manual', sourceId: null }); });
+      const xeno = App.getXeno(pawn.xenotype);
+      (xeno.incapable || []).forEach(tag => { if (!tagProv.has(tag)) tagProv.set(tag, { source: 'xenotype', sourceId: pawn.xenotype || null }); });
+      let unresolvedGenes = 0;
+      if (xeno.genes && xeno.genes.length > 0) {
+        xeno.genes.forEach(gId => {
+          const gene = App._resolveGeneDef(gId);
+          if (gene && gene.incapable) gene.incapable.forEach(tag => { if (!tagProv.has(tag)) tagProv.set(tag, { source: 'gene', sourceId: gId }); });
+          else if (!gene && gId) unresolvedGenes++;
+        });
+      }
+      const role = App.getRole(pawn.role || 'none');
+      (role.incap || []).forEach(tag => { if (!tagProv.has(tag)) tagProv.set(tag, { source: 'role', sourceId: pawn.role || null }); });
+      if (Array.isArray(pawn.traits)) {
+        pawn.traits.forEach(tId => {
+          const t = App.getTrait(tId);
+          if (t && t.incapable) t.incapable.forEach(tag => { if (!tagProv.has(tag)) tagProv.set(tag, { source: 'trait', sourceId: tId }); });
+        });
+      }
+      const cbs = App._resolveBackstory(pawn.childhood);
+      if (cbs && cbs.incapable) cbs.incapable.forEach(tag => { if (!tagProv.has(tag)) tagProv.set(tag, { source: 'backstory', sourceId: pawn.childhood || null }); });
+      const abs = App._resolveBackstory(pawn.adulthood);
+      if (abs && abs.incapable) abs.incapable.forEach(tag => { if (!tagProv.has(tag)) tagProv.set(tag, { source: 'backstory', sourceId: pawn.adulthood || null }); });
+      const hediffIncap = App._hediffActiveIncaps(pawn.health);
+      hediffIncap.forEach(tag => { if (!tagProv.has(tag)) tagProv.set(tag, { source: 'hediff', sourceId: null }); });
+
+      job.incapBlocks.forEach(b => {
+        const prov = tagProv.get(b);
+        if (prov) hardBlocks.push({ source: prov.source, sourceId: prov.sourceId, id: b, reason: `Work tag "${b}" disabled by ${prov.source}` });
+      });
+
+      if (unresolvedGenes > 0) {
+        uncertainties.push({
+          dimension: 'allowed',
+          source: 'unresolved_genes',
+          reason: `${unresolvedGenes} gene${unresolvedGenes > 1 ? 's' : ''} could not be resolved - work-tag effects unknown`
+        });
+      }
+    }
+
+    if (hardBlocks.length > 0) return { status: 'blocked', hardBlocks, uncertainties };
+    if (uncertainties.length > 0) return { status: 'uncertain', hardBlocks, uncertainties };
+    return { status: 'allowed', hardBlocks, uncertainties };
+  },
+
+  // Legacy C1 aggregation surface. No new callers - consumers migrate to C7 coordinator.
+  evaluatePawnJob(pawn, job) {
+    const permission = this.evaluateJobPermission(pawn, job);
+    const hasSkill = !!job.skill;
+
+    const skill = {
+      id: hasSkill ? (job.skill || null) : null,
+      level: hasSkill ? App.effectiveSkill(pawn, job.skill) : null,
+      passion: hasSkill ? this.passionBucket(pawn, job.skill) : null,
+      applicable: hasSkill
+    };
+
+    const speedMod = this.calculateWorkSpeedMod(pawn);
+    const speed = this.calculateRealWorkSpeed(pawn, job);
+
+    const work = { speed, globalModifier: speedMod };
+
+    const advantages = [];
+    const penalties = [];
+
+    if (hasSkill) {
+      if (skill.level >= 15) advantages.push(`${job.skill} ${skill.level} (expert)`);
+      else if (skill.level >= 10) advantages.push(`${job.skill} ${skill.level}`);
+      if (skill.passion >= 2) advantages.push('Major passion');
+      else if (skill.passion === 1) advantages.push('Minor passion');
+      else if (skill.passion < 0) penalties.push('Negative passion');
+
+      const roleDef = App.getRole(pawn.role || 'none');
+      if (roleDef.skillMods && roleDef.skillMods[job.skill]) advantages.push('Role skill bonus');
+
+      const xeno = App.getXeno(pawn.xenotype);
+      const xenoMod = (xeno.skillMods && xeno.skillMods[job.skill]) || 0;
+      if (xenoMod > 0) advantages.push('Xenotype affinity');
+      else if (xenoMod < 0) penalties.push('Xenotype penalty');
+    }
+
+    if (speedMod > 1.05) advantages.push(`${Math.round(speedMod * 100)}% work speed`);
+    else if (speedMod < 0.95) penalties.push(`${Math.round(speedMod * 100)}% work speed`);
+
+    const confidence = {
+      permission: permission.status === 'uncertain' ? 'medium'
+        : permission.uncertainties.length > 0 ? 'medium' : 'high',
+      skill: 'high',
+      workSpeed: 'high',
+      overall: 'high'
+    };
+    if (confidence.permission !== 'high') confidence.overall = 'medium';
+
+    const evidence = [];
+    if (permission.status === 'blocked') {
+      permission.hardBlocks.forEach(b => evidence.push(b.reason));
+    }
+    if (hasSkill) {
+      evidence.push(`${job.skill} ${skill.level}`);
+      if (skill.passion >= 2) evidence.push('Major passion');
+      else if (skill.passion === 1) evidence.push('Minor passion');
+    } else {
+      evidence.push('Skillless job');
+    }
+    evidence.push(`${Math.round(speed * 100)}% speed`);
+    permission.uncertainties.forEach(u => evidence.push(u.reason));
+
+    return {
+      pawnId: pawn.id,
+      jobId: job.id,
+      permission,
+      skill,
+      work,
+      advantages,
+      penalties,
+      confidence,
+      evidence
+    };
   },
 
   /**
@@ -215,12 +373,73 @@ const Engine = {
     catch (_) { return ((p.passions || {})[skillId] | 0); }
   },
 
-  runMinMaxAssignment(pawns, roles, priorities, jobs, contextMap) {
+  resolveStrategicFocus(jobs, config) {
+    const jobList = Array.isArray(jobs) ? jobs.filter(j => j && j.id) : [];
+    const id = config && typeof config.id === 'string' ? config.id : '';
+    if (!id) return null;
+    const strength = config.strength === 'strong' ? 'strong' : 'normal';
+    let label = '';
+    let targetIds = [];
+    let allTargetIds = [];
+    if (id.startsWith('group:')) {
+      const groupId = id.slice(6);
+      const groups = typeof WORK_FOCUS_GROUPS !== 'undefined' ? WORK_FOCUS_GROUPS : [];
+      const group = groups.find(item => item.id === groupId);
+      if (group) {
+        label = group.label;
+        allTargetIds = group.jobIds.slice();
+        targetIds = group.jobIds.filter(jobId => jobList.some(job => job.id === jobId));
+      }
+    } else if (id.startsWith('job:')) {
+      const jobId = id.slice(4);
+      const job = jobList.find(item => item.id === jobId);
+      if (job) { label = job.name || job.id; targetIds = [job.id]; allTargetIds = [job.id]; }
+    }
+    if (!targetIds.length) return null;
+    return { id, label, strength, targetIds: new Set(targetIds), allTargetIds: new Set(allTargetIds) };
+  },
+
+  _strategicFocusCandidateQuality(rank, job) {
+    if (!job.skill) return true;
+    return (job.speedFormula && rank.realSpeed >= 0.4)
+      || rank.skill >= 3 || rank.passion >= 1
+      || !!rank.isRoleSkill || rank.hasXenoAffinity;
+  },
+
+  _strategicFocusProtectedPawns(pawns, jobs, focus, capableByJob) {
+    const protectedPawns = new Set();
+    if (!focus) return protectedPawns;
+    const focusIds = focus.allTargetIds || focus.targetIds;
+    jobs.filter(job => job.important && !focusIds.has(job.id)).forEach(job => {
+      const capable = capableByJob.get(job.id) || [];
+      if (capable.length === 1) protectedPawns.add(capable[0].id);
+    });
+    return protectedPawns;
+  },
+
+  runMinMaxAssignment(pawns, roles, priorities, jobs, contextMap, assignmentOptions) {
     if (pawns.length === 0) return;
     // Scope to the provided job set (the table's visible columns) when given.
     const jobList = jobs && jobs.length ? jobs : JOBS;
     const assignmentPriorityScale = typeof PriorityScale !== 'undefined'
-      ? PriorityScale : { highest: 1, lowestAuto: () => 4 };
+      ? PriorityScale : { highest: 1, lowestAuto: () => 4, autoPriority: tier => tier };
+    const autoPriority = tier => typeof assignmentPriorityScale.autoPriority === 'function'
+      ? assignmentPriorityScale.autoPriority(tier) : tier;
+    const strategicFocus = this.resolveStrategicFocus(jobList, assignmentOptions);
+    let focusCapableByJob = null;
+    let focusProtectedPawns = new Set();
+    if (strategicFocus) {
+      const protectionJobs = assignmentOptions && Array.isArray(assignmentOptions.protectionJobs)
+        ? assignmentOptions.protectionJobs.filter(job => job && job.id)
+        : jobList;
+      const evaluationJobs = [...new Map(
+        [...jobList, ...protectionJobs].map(job => [job.id, job])).values()];
+      focusCapableByJob = new Map();
+      evaluationJobs.forEach(job => focusCapableByJob.set(job.id, pawns.filter(p =>
+        this._c7AnalyserEligible(p, job, contextMap && contextMap.get(p.id)))));
+      focusProtectedPawns = this._strategicFocusProtectedPawns(
+        pawns, protectionJobs, strategicFocus, focusCapableByJob);
+    }
 
     // 1. Reset priorities for the jobs we're assigning
     pawns.forEach(p => {
@@ -231,11 +450,13 @@ const Engine = {
 
     // 2. Iterate through every job to ensure colony-wide coverage
     jobList.forEach(j => {
-      const capable = pawns.filter(p => this._c7AnalyserEligible(
-        p, j, contextMap && contextMap.get(p.id)));
+      const capable = focusCapableByJob
+        ? focusCapableByJob.get(j.id)
+        : pawns.filter(p => this._c7AnalyserEligible(
+          p, j, contextMap && contextMap.get(p.id)));
       if (capable.length === 0) return;
 
-      // Mandatory Emergency Handlers (Everyone capable does these at P1)
+      // Mandatory Emergency Handlers
       if (['firefight', 'patient', 'bed_rest'].includes(j.id)) {
         capable.forEach(p => priorities[p.id][j.id] = assignmentPriorityScale.highest);
         return;
@@ -246,6 +467,8 @@ const Engine = {
         const hasSkill = !!j.skill;
         const skill = hasSkill ? App.effectiveSkill(p, j.skill) : 0;
         const passion = hasSkill ? this.passionBucket(p, j.skill) : 0;
+        const realSpeed = this.calculateRealWorkSpeed(p, j);
+
         const roleDef = App.getRole(p.role || 'none');
         const isRoleSkill = j.skill && (roleDef.skillMods || {})[j.skill];
         const xenoDef = App.getXeno(p.xenotype);
@@ -253,13 +476,10 @@ const Engine = {
         const hasXenoAffinity = xenoSkillMod > 0;
         const hasXenoPenalty = xenoSkillMod < 0;
 
-        // Real work speed from RimWorld's SkillNeed_BaseBonus formulas
-        const realSpeed = Engine.calculateRealWorkSpeed(p, j);
-
         // Score: real speed is the primary factor (scaled to 0-200 range),
         // passion adds growth potential, role/xeno add context
         let score = realSpeed * 100;
-        score += passion * 25;  // Passion matters for XP gain / long-term growth
+        score += passion * 25;
         if (isRoleSkill) score += 50;
         if (j.important) score += 10;
         if (hasXenoAffinity) score += xenoSkillMod * 8;
@@ -300,6 +520,21 @@ const Engine = {
       // Sort by aptitude descending
       rankings.sort((a, b) => b.score - a.score);
 
+      const focusTierByPawn = new Map();
+      if (strategicFocus && strategicFocus.targetIds.has(j.id)) {
+        const qualified = rankings.filter(rank => rank.mood !== 'panic'
+          && !focusProtectedPawns.has(rank.pId)
+          && this._strategicFocusCandidateQuality(rank, j));
+        const share = strategicFocus.strength === 'strong' ? 0.6 : 0.35;
+        const workerCount = qualified.length ? Math.max(1, Math.ceil(qualified.length * share)) : 0;
+        qualified.slice(0, workerCount).forEach((rank, index) => {
+          const targetTier = strategicFocus.strength === 'strong'
+            ? 1
+            : (index === 0 ? 1 : 2);
+          focusTierByPawn.set(rank.pId, targetTier);
+        });
+      }
+
       // Assign priorities using real work speed thresholds + skill/passion context
       rankings.forEach((rank, index) => {
         let pLevel = null;
@@ -314,25 +549,31 @@ const Engine = {
           const hasFormula = !!j.speedFormula;
           const speed = rank.realSpeed;
 
-          // --- PRIORITY 1: The Masters & Elites ---
+          // --- TIER 1: The Masters & Elites ---
           // High real speed (>1.5x) or classic thresholds met
           if ((hasFormula && speed >= 1.5) || rank.skill >= 15 || (rank.skill >= 10 && rank.passion >= 2) || (rank.isRoleSkill && rank.skill >= 12) || (rank.hasXenoAffinity && rank.skill >= 12)) {
-            pLevel = 1;
+            pLevel = autoPriority(1);
           }
-          // --- PRIORITY 2: The Professionals ---
+          // --- TIER 2: The Professionals ---
           // Decent real speed (>0.8x) or classic thresholds
           else if ((hasFormula && speed >= 0.8) || rank.skill >= 8 || (rank.skill >= 4 && rank.passion >= 1) || rank.isRoleSkill || (rank.hasXenoAffinity && rank.skill >= 6)) {
-            pLevel = 2;
+            pLevel = autoPriority(2);
           }
-          // --- PRIORITY 3: The Capable & Best Candidates ---
+          // --- TIER 3: The Capable & Best Candidates ---
           // Low but functional speed (>0.4x) or has passion/some skill
           else if ((hasFormula && speed >= 0.4) || rank.passion >= 1 || rank.skill >= 3 || (index === 0 && pawns.length <= 3)) {
-            pLevel = 3;
+            pLevel = autoPriority(3);
           }
-          // --- PRIORITY 4: The Fallback ---
+          // --- TIER 4: The Fallback ---
           else if (index === 0 || ['hauling', 'cleaning', 'basic_work', 'plant_cut'].includes(j.id)) {
             pLevel = assignmentPriorityScale.lowestAuto();
           }
+        }
+
+        const focusTier = focusTierByPawn.get(rank.pId);
+        if (focusTier != null) {
+          const focusPriority = autoPriority(focusTier);
+          if (pLevel === null || focusPriority < pLevel) pLevel = focusPriority;
         }
 
         // Apply if not already set (Pass 1 might have set a higher priority)
@@ -341,8 +582,6 @@ const Engine = {
         }
       });
 
-      // FINAL SAFETY: If the job is still unassigned after all logic (shouldn't happen),
-      // give it to the best person at P4.
       const isJobAssigned = capable.some(p => priorities[p.id][j.id] !== null);
       if (!isJobAssigned) {
         priorities[rankings[0].pId][j.id] = assignmentPriorityScale.lowestAuto();
@@ -741,7 +980,7 @@ const Engine = {
         // a downed pawn cannot keep a night shift either.
         if (profile.isDowned) {
           p.schedule = Array(24).fill(idxAny);
-          report.push({ id: p.id, name: p.nickname || p.name, mode: 'downed', drivers: driversFor(profile) });
+          report.push({ id: p.id, name: _pawnDisplayName(p), mode: 'downed', drivers: driversFor(profile) });
           return;
         }
 
@@ -759,7 +998,7 @@ const Engine = {
             if (type !== idxSleep && !profile.isYoungChild && !profile.isDowned) coverage[h]++;
           });
           report.push({
-            id: p.id, name: p.nickname || p.name, mode: 'manual',
+            id: p.id, name: _pawnDisplayName(p), mode: 'manual',
             preset: profile.moodPreset, drivers: driversFor(profile)
           });
           return;
@@ -791,7 +1030,7 @@ const Engine = {
           // Track coverage (always awake; children don't staff jobs)
           if (!profile.isYoungChild && !profile.isDowned) for (let h = 0; h < 24; h++) coverage[h]++;
           report.push({
-            id: p.id, name: p.nickname || p.name, mode: 'sleepless',
+            id: p.id, name: _pawnDisplayName(p), mode: 'sleepless',
             sleepStart: null, sleepHours: 0,
             joyStart, joyHours: profile.joyHours,
             workStart, workHours: profile.workHours,
@@ -841,7 +1080,7 @@ const Engine = {
         }
 
         report.push({
-          id: p.id, name: p.nickname || p.name, mode: isNight ? 'night' : 'day',
+          id: p.id, name: _pawnDisplayName(p), mode: isNight ? 'night' : 'day',
           sleepStart, sleepHours: profile.sleepHours,
           joyStart: wakeHour, joyHours: profile.joyHours,
           workStart, workHours: profile.workHours,
@@ -943,7 +1182,7 @@ const Engine = {
         const sched = schedules[p.id];
         const hasSchedule = Array.isArray(sched) && sched.length === 24;
         if (hasSchedule && idxSleep >= 0 && sched[h] === idxSleep) continue;
-        awake.push({ id: p.id, name: p.nickname || p.name, inferredAwake: !hasSchedule });
+        awake.push({ id: p.id, name: _pawnDisplayName(p), inferredAwake: !hasSchedule });
       }
       const count = awake.length;
       hours.push({
@@ -1132,7 +1371,7 @@ const Engine = {
         const origSched = schedules[best.pawn.id];
         proposals.push({
           pawnId: best.pawn.id,
-          pawnName: best.pawn.nickname || best.pawn.name,
+          pawnName: _pawnDisplayName(best.pawn),
           jobId: jobR.jobId,
           jobName: jobR.jobName,
           type: 'gap',
@@ -1226,7 +1465,7 @@ const Engine = {
         const fragOrigSched = proposedScheds[best.pawn.id];
         proposals.push({
           pawnId: best.pawn.id,
-          pawnName: best.pawn.nickname || best.pawn.name,
+          pawnName: _pawnDisplayName(best.pawn),
           jobId: jobR.jobId,
           jobName: jobR.jobName,
           type: 'fragile',
@@ -1313,24 +1552,59 @@ const Engine = {
     return { skill, passion, realSpeed, hasSkill };
   },
 
-  analyzeColony(pawns, priorities, jobs, contextMap) {
+  analyzeColony(pawns, priorities, jobs, contextMap, assignmentOptions) {
     if (pawns.length === 0) return { gaps: [], recommendations: [], singlePoints: [] };
     // Analyse only the provided job set (visible columns) when given.
     const allJobs = jobs && jobs.length ? jobs : [...JOBS, ...(App.state.customJobs || [])];
     const gaps = [];
     const recommendations = [];
     const singlePoints = [];
+    const priorityScale = typeof PriorityScale !== 'undefined' ? PriorityScale : null;
+    const autoPriority = tier => priorityScale && typeof priorityScale.autoPriority === 'function'
+      ? priorityScale.autoPriority(tier) : tier;
+    const professionalPriority = autoPriority(2);
+    const strategicFocus = this.resolveStrategicFocus(allJobs, assignmentOptions);
+    let focusEvaluationMaps = null;
+    let focusProtectedPawns = new Set();
+    if (strategicFocus) {
+      const protectionJobs = assignmentOptions && Array.isArray(assignmentOptions.protectionJobs)
+        ? assignmentOptions.protectionJobs.filter(job => job && job.id)
+        : allJobs;
+      const evaluationJobs = [...new Map(
+        [...allJobs, ...protectionJobs].map(job => [job.id, job])).values()];
+      focusEvaluationMaps = new Map();
+      evaluationJobs.forEach(job => {
+        const evaluationMap = new Map();
+        pawns.forEach(p => {
+          const pawnContext = contextMap && contextMap.get(p.id);
+          const eligible = this._c7AnalyserEligible(p, job, pawnContext);
+          evaluationMap.set(p.id, {
+            eligible,
+            projection: eligible ? this._c7AnalyserProjection(p, job, pawnContext) : null,
+          });
+        });
+        focusEvaluationMaps.set(job.id, evaluationMap);
+      });
+      const capableByJob = new Map(evaluationJobs.map(job => [job.id,
+        pawns.filter(p => focusEvaluationMaps.get(job.id).get(p.id).eligible)]));
+      focusProtectedPawns = this._strategicFocusProtectedPawns(
+        pawns, protectionJobs, strategicFocus, capableByJob);
+    }
 
     allJobs.forEach(j => {
-      const evaluationMap = new Map();
-      pawns.forEach(p => {
-        const pawnContext = contextMap && contextMap.get(p.id);
-        const eligible = this._c7AnalyserEligible(p, j, pawnContext);
-        evaluationMap.set(p.id, {
-          eligible,
-          projection: eligible ? this._c7AnalyserProjection(p, j, pawnContext) : null,
+      const evaluationMap = focusEvaluationMaps
+        ? focusEvaluationMaps.get(j.id)
+        : new Map();
+      if (!focusEvaluationMaps) {
+        pawns.forEach(p => {
+          const pawnContext = contextMap && contextMap.get(p.id);
+          const eligible = this._c7AnalyserEligible(p, j, pawnContext);
+          evaluationMap.set(p.id, {
+            eligible,
+            projection: eligible ? this._c7AnalyserProjection(p, j, pawnContext) : null,
+          });
         });
-      });
+      }
 
       const capable = pawns.filter(p => evaluationMap.get(p.id).eligible);
       if (capable.length === 0 && j.important) {
@@ -1357,12 +1631,8 @@ const Engine = {
           evaluationMap.get(p.id).projection.skill));
         const bestSpeed = Math.max(...atP1.map(p =>
           evaluationMap.get(p.id).projection.realSpeed));
-        // Warn if real work speed is below 60% (slow worker) or raw skill < 4
         if (bestSpeed < 0.6 || bestSkill < 4) {
           const speedPct = (bestSpeed * 100).toFixed(0);
-          // If the best candidate is already at P1 there is nothing to apply - a
-          // "Set P1" button would be a no-op and the warning could never dismiss.
-          // Keep the warning informational instead (no pawn = no button).
           let best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
           if (best && priorities[best.pawnId]?.[j.id] === 1) best = null;
           gaps.push({ jobId: j.id, jobName: j.name, severity: 'warning', reason: `Best ${j.name} pawn: skill ${bestSkill}, ${speedPct}% speed (recommend 80%+)${best ? '' : ' - a skill limitation, not an assignment problem'}`, bestPawn: best });
@@ -1371,24 +1641,55 @@ const Engine = {
 
       // Single point of failure: only one pawn covers an important job
       if (j.important && assigned.length === 1) {
-        singlePoints.push({ jobId: j.id, jobName: j.name, pawnName: assigned[0].nickname || assigned[0].name, pawnId: assigned[0].id });
+        singlePoints.push({ jobId: j.id, jobName: j.name, pawnName: _pawnDisplayName(assigned[0]), pawnId: assigned[0].id });
       }
 
-      // Recommendations: find best capable pawn who isn't assigned but should be
-      if (j.skill && capable.length > 0) {
-        const best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
+      // Recommendations: find best capable pawn who isn't assigned but should be.
+      const isFocused = !!strategicFocus && strategicFocus.targetIds.has(j.id);
+      if ((j.skill || isFocused) && capable.length > 0) {
+        const focusTier = isFocused && strategicFocus.strength === 'strong' ? 1 : 2;
+        const focusPriority = autoPriority(focusTier);
+        let focusCapable = isFocused
+          ? capable.filter(p => !focusProtectedPawns.has(p.id))
+          : capable;
+        if (isFocused) {
+          const needingFocus = focusCapable.filter(p => {
+            const current = priorities[p.id]?.[j.id];
+            return current == null || current > focusPriority;
+          });
+          if (needingFocus.length) focusCapable = needingFocus;
+        }
+        const best = this._bestPawnForJob(focusCapable, j, contextMap, evaluationMap);
         if (best) {
           const currentPrio = priorities[best.pawnId]?.[j.id];
           const speedPct = best.realSpeed ? (best.realSpeed * 100).toFixed(0) + '% speed' : '';
-          // Recommend if best pawn isn't assigned or is at low priority and has decent speed
-          if (j.important && (currentPrio === null || currentPrio > 2) && (best.realSpeed >= 0.6 || best.score >= 80)) {
-            recommendations.push({
+          const focusQuality = isFocused && this._strategicFocusCandidateQuality(best, j);
+          const normalRecommendation = j.important
+            && (currentPrio === null || currentPrio > professionalPriority)
+            && (best.realSpeed >= 0.6 || best.score >= 80);
+          const focusRecommendation = focusQuality
+            && (currentPrio == null || currentPrio > focusPriority);
+          if (normalRecommendation || focusRecommendation) {
+            const focusReason = isFocused
+              ? `, Colony Focus: ${strategicFocus.label} (${strategicFocus.strength})`
+              : '';
+            const aptitudeReason = best.hasSkill
+              ? `Skill ${best.skill}${best.passion >= 2 ? ' + major passion' : best.passion >= 1 ? ' + minor passion' : ''}${speedPct ? ', ' + speedPct : ''}`
+              : 'No linked skill';
+            const baselinePriority = autoPriority(
+              (best.realSpeed >= 1.5) || best.skill >= 15
+                || (best.skill >= 10 && best.passion >= 2) ? 1 : 2);
+            const recommendation = {
               jobId: j.id, jobName: j.name,
               pawnId: best.pawnId, pawnName: best.pawnName,
               skill: best.skill, passion: best.passion,
-              reason: `Skill ${best.skill}${best.passion >= 2 ? ' + major passion' : best.passion >= 1 ? ' + minor passion' : ''}${speedPct ? ', ' + speedPct : ''}, currently ${currentPrio ? 'P'+currentPrio : 'unassigned'}`,
-              suggestedPriority: (best.realSpeed >= 1.5) || best.skill >= 15 || (best.skill >= 10 && best.passion >= 2) ? 1 : 2
-            });
+              reason: `${aptitudeReason}, currently ${currentPrio ? 'P'+currentPrio : 'unassigned'}${focusReason}`,
+              suggestedPriority: focusRecommendation
+                ? Math.min(baselinePriority, focusPriority)
+                : baselinePriority
+            };
+            if (isFocused) recommendation.strategicFocus = true;
+            recommendations.push(recommendation);
           }
         }
       }
@@ -1403,7 +1704,11 @@ const Engine = {
       return true;
     });
 
-    return { gaps, recommendations: uniqueRecs, singlePoints };
+    const result = { gaps, recommendations: uniqueRecs, singlePoints };
+    if (strategicFocus) result.strategicFocus = {
+      id: strategicFocus.id, label: strategicFocus.label, strength: strategicFocus.strength,
+    };
+    return result;
   },
 
   _bestPawnForJob(capable, job, contextMap, evaluationMap) {
@@ -1414,9 +1719,8 @@ const Engine = {
         ? cached.projection
         : this._c7AnalyserProjection(p, job, contextMap && contextMap.get(p.id));
       const { skill, passion, realSpeed, hasSkill } = projection;
-      // Score combines real work speed (dominant) with passion for growth potential
       const score = (realSpeed * 100) + (passion * 25);
-      return { pawnId: p.id, pawnName: p.nickname || p.name,
+      return { pawnId: p.id, pawnName: _pawnDisplayName(p),
         skill, passion, score, realSpeed, hasSkill };
     }).sort((a, b) => b.score - a.score);
     return ranked[0];
@@ -1424,6 +1728,7 @@ const Engine = {
 
   calculateLoadoutProtection(items, ap = 0) {
     let state = { sharp100: 1.0, sharp50blunt: 0.0, blunt100: 0.0, blunt50: 0.0, blunt25: 0.0, zero: 0.0 };
+    items = Array.isArray(items) ? items.filter(item => item && typeof item === 'object') : [];
     
     // Sort items by layer: Belt -> Outer -> Middle -> Skin
     const layerOrder = { belt: 0, outer: 1, middle: 2, skin: 3, utility: 0 };

@@ -85,6 +85,7 @@ const App = {
     hediffCatalog: [], // [{def,label,hediffClass,category,defaultSeverity}] from install scan
     relationCatalog: [], // [{def,label}] directly-assignable PawnRelationDefs from install scan
     passionCatalog: [], // [{def,label,indicator,color,bucket,isBad,description}] modded VSE passions from scan
+    scannedRoles: {}, // role PreceptDef defName -> exact installed role definition
     defSources: {}, // defName -> source mod packageId (from scan), for "mod not in this save" warnings
     geneColors: {}, // gene defName -> [r,g,b] from scan (skin/hair colour genes), for tinting
     customGenes: {},
@@ -157,7 +158,8 @@ const App = {
       a: { name: 'Weapon A', quality: 'normal', damage: 11, warmup: 1.0, cooldown: 1.7, burstCount: 3, burstTicks: 10, accuracyTouch: 0.60, accuracyShort: 0.70, accuracyMedium: 0.65, accuracyLong: 0.55, range: 31, ap: 0.16 },
       b: { name: 'Weapon B', quality: 'normal', damage: 16, warmup: 1.0, cooldown: 2.0, burstCount: 3, burstTicks: 12, accuracyTouch: 0.55, accuracyShort: 0.64, accuracyMedium: 0.55, accuracyLong: 0.45, range: 27.9, ap: 0.35 },
       targetSharp: 0,
-      targetBlunt: 0
+      targetBlunt: 0,
+      targetPreset: 'none'
     },
     weapons: JSON.parse(JSON.stringify(DEFAULT_WEAPONS)),
     weaponEditing: null,
@@ -166,7 +168,8 @@ const App = {
     materials: JSON.parse(JSON.stringify(DEFAULT_MATERIALS)), // vanilla + mod materials
     apparelMode: 'list', // 'list', 'compare', or 'loadout'
     loadout: { weapon: null }, // apparel slots (layer x region) fill in by coverage; see _LOADOUT_APPAREL_SLOTS
-    loadoutB: { head: null, skin: null, middle: null, outer: null, belt: null },
+    loadoutB: { weapon: null },
+    loadoutCoverageRegion: 'torso',
     savedLoadouts: [], // [{ name: 'Melee Tank', slots: { skin, middle, outer, belt } }, ...]
     manualRelations: [], // [{ from, to, def }] - user-defined relations
     ghostPawns: [], // [{ loadID, name, nickname, firstName, lastName, gender, ghost }] - off-map relatives
@@ -178,8 +181,11 @@ const App = {
     modFilter: 'all', // 'all' | 'vanilla' | 'modded' | specific mod name
     settings: {
       verticalTitles: false,
-      manualPriorities: true, // true = numbers 1-4; false = simple on/off, like RimWorld's Work tab
+      manualPriorities: true, // true = numeric priorities; false = simple on/off, like RimWorld's Work tab
+      manualPriorityMax: 4, // persisted 1-X scale used by manual editing and automatic assignment
       priorityLocked: false, // UI edit lock for the Priorities table and its assignment actions
+      strategicFocusId: '', // empty = balanced; otherwise stable group: or job: identifier
+      strategicFocusStrength: 'normal',
       jobOrder: null, // ordered list of visible job-column ids (null = default: vanilla+DLC+custom)
       tableFontSize: 14,
       jobFontSize: 12,
@@ -188,6 +194,8 @@ const App = {
       pawnCardFontSize: 13,
       clickDirection: 'left-to-high',
       theme: 'dark',
+      colourBlindMode: false,
+      dyslexiaFontMode: false,
       uiScale: 1.0,
       fontScale: 1.0,
       sidebarWidth: 320,
@@ -197,6 +205,8 @@ const App = {
       autoSaveEnabled: true,
       startupMode: 'window', // window | fullscreen | widget - mode on launch
       alwaysOnTop: true,
+      windowOpacity: 1,
+      transparencyLocked: false,
       helpFontSize: 13,
       blueprintZoom: 2.0,
       blueprintZoomWidget: 1.0,
@@ -231,6 +241,23 @@ const App = {
   _defLabels: null, // Cached defName -> { label, type, desc } map from game XMLs
   _defLabelsPath: null, // RimWorld install path used for the cache
   _pawnCardHashes: {}, // pawnId -> hash string for differential sidebar rendering
+
+  // Send a small app-wide breadcrumb to the persistent main-process crash
+  // report. The bridge failure is always swallowed so diagnostics can never
+  // break the operation they are observing.
+  _crashProbe(eventName, details = {}) {
+    try {
+      if (!window.overlay || !window.overlay.recordCrashProbe) return Promise.resolve(false);
+      const payload = { ...details };
+      if (typeof performance !== 'undefined' && performance.memory) {
+        payload.rendererHeapMb = Math.round(performance.memory.usedJSHeapSize / 1048576);
+        payload.rendererHeapLimitMb = Math.round(performance.memory.jsHeapSizeLimit / 1048576);
+      }
+      return Promise.resolve(window.overlay.recordCrashProbe(eventName, payload)).catch(() => false);
+    } catch (_) {
+      return Promise.resolve(false);
+    }
+  },
 
   GRID_W: 60,
   GRID_H: 60,
@@ -497,6 +524,7 @@ const App = {
   },
 
   init() {
+    this._crashProbe('renderer.init-start');
     // Capture console.error/warn for in-app console drawer
     this._initConsoleCapture();
 
@@ -508,6 +536,12 @@ const App = {
     // Fetch version from Electron main process (async, non-blocking)
     if (window.overlay && window.overlay.getVersion) {
       window.overlay.getVersion().then(v => { if (v) this._appVersion = v; }).catch(() => {});
+    }
+    if (window.overlay && window.overlay.getGraphicsStatus) {
+      window.overlay.getGraphicsStatus().then(status => {
+        this._opacitySupported = !status || status.opacitySupported !== false;
+        this._applyWindowTransparency();
+      }).catch(() => {});
     }
 
     this.loadData();
@@ -556,6 +590,7 @@ const App = {
     if (window.overlay && window.overlay.setAlwaysOnTop) {
       window.overlay.setAlwaysOnTop(this.state.settings.alwaysOnTop !== false);
     }
+    this._applyWindowTransparency();
 
     this.applySettings();
     this.applyTheme();
@@ -564,7 +599,9 @@ const App = {
     // Apparel was merged into the Armoury tab as a sub-tab.
     if (this.state.activeTab === 'apparel') { this.state.activeTab = 'armoury'; this.state.armourySubTab = 'apparel'; }
     this.setTab(validTabs.includes(this.state.activeTab) ? this.state.activeTab : 'work');
-    this.renderAll();
+    // setTab has already rendered the active view. Build the shared chrome once,
+    // and avoid a second large active-tab render during the startup memory peak.
+    this.renderAll({ skipActiveView: true, skipTable: this.state.activeTab !== 'work' });
     this.setupGlobalEvents();
     this.applyTabVisibility();
     this.updateRaidToolbar();
@@ -599,8 +636,8 @@ const App = {
     // and cache-backed inside _prefetchModData. Skipped if no RimWorld path or the toggle is off.
     if (this.state.settings.autoScanMods !== false && this.state.settings.rimworldPath) {
       const warm = () => { this._prefetchModData(); };
-      if (typeof requestIdleCallback === 'function') requestIdleCallback(() => setTimeout(warm, 2500), { timeout: 8000 });
-      else setTimeout(warm, 4000);
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(() => setTimeout(warm, 15000), { timeout: 30000 });
+      else setTimeout(warm, 20000);
     }
   },
 
@@ -1004,6 +1041,9 @@ const App = {
       _resizeTimer = setTimeout(() => {
         _prevWidth = newWidth;
         this.applySettings();
+        if (this.state.activeTab === 'armoury' && this.refreshArmouryResponsiveLayout) {
+          this.refreshArmouryResponsiveLayout();
+        }
       }, 150);
     });
 
@@ -1154,10 +1194,14 @@ const App = {
   },
   onResizeEnd() {
     if (!App._resizing) return;
+    const resizedSidebar = App._resizing.type === 'sidebar';
     App.saveData();
     document.body.classList.remove('resizing-active');
     App._resizing = null;
     App._hideResizeReadout();
+    if (resizedSidebar && App.state.activeTab === 'armoury' && App.refreshArmouryResponsiveLayout) {
+      App.refreshArmouryResponsiveLayout();
+    }
   },
 
   _showResizeReadout(text, x, y) {
@@ -1344,6 +1388,9 @@ const App = {
     }
     this.state.settings.sidebarCollapsed = !this.state.settings.sidebarCollapsed;
     this.applySettings();
+    if (this.state.activeTab === 'armoury' && this.refreshArmouryResponsiveLayout) {
+      this.refreshArmouryResponsiveLayout();
+    }
     this.triggerAutoSave();
   },
 
@@ -1356,11 +1403,48 @@ const App = {
 
   applyTheme() {
     const theme = this.state.settings.theme || 'dark';
+    const colourBlindMode = this.state.settings.colourBlindMode === true;
+    const dyslexiaFontMode = this.state.settings.dyslexiaFontMode === true;
     document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.setAttribute('data-colour-vision', colourBlindMode ? 'accessible' : 'default');
+    document.documentElement.setAttribute('data-reading-font', dyslexiaFontMode ? 'opendyslexic' : 'default');
     // CSS uses body.light-theme class
     document.body.classList.toggle('light-theme', theme === 'light');
+    document.body.classList.toggle('colour-blind-mode', colourBlindMode);
+    document.body.classList.toggle('dyslexia-font-mode', dyslexiaFontMode);
     // Match Electron's native UI (tray context menu, dialogs) to the chosen theme.
     if (window.overlay && window.overlay.setNativeTheme) window.overlay.setNativeTheme(theme);
+  },
+
+  setColourBlindMode(enabled) {
+    this.state.settings.colourBlindMode = enabled === true;
+    this.applyTheme();
+    this.renderAll();
+    if (this.state.activeTab === 'settings') this.renderSettings();
+    this.triggerAutoSave();
+    this.toast(this.state.settings.colourBlindMode
+      ? 'Colour-blind friendly palette enabled'
+      : 'Default colour palette restored');
+  },
+
+  setDyslexiaFontMode(enabled) {
+    this.state.settings.dyslexiaFontMode = enabled === true;
+    this.applyTheme();
+    this.renderAll();
+    if (this.state.activeTab === 'settings') this.renderSettings();
+    this.triggerAutoSave();
+    this.toast(this.state.settings.dyslexiaFontMode
+      ? 'Dyslexia-friendly font enabled'
+      : 'Default font restored');
+  },
+
+  _canvasFont(sizePx, weight = 'normal', style = 'normal') {
+    const size = Math.max(1, Number(sizePx) || 11);
+    const family = this.state.settings.dyslexiaFontMode === true
+      ? '"OpenDyslexic RimJobs"'
+      : 'Arial';
+    const prefix = `${style === 'normal' ? '' : `${style} `}${weight === 'normal' ? '' : `${weight} `}`;
+    return `${prefix}${size}px ${family}`;
   },
 
   // Lazily warm mod data the first time the user opens a tab that depends on it. Deferred so the
@@ -1372,47 +1456,69 @@ const App = {
   },
 
   setTab(tab) {
+    Perf.start('ui.tabSwitch.total');
+    Perf.start('ui.tabSwitch.' + tab);
+    Perf._activeOp = 'tabSwitch:' + tab;
+    const animationRevision = (this._tabAnimationRevision || 0) + 1;
+    this._tabAnimationRevision = animationRevision;
     this.state.activeTab = tab;
     const containedTabs = ['blue', 'relations', 'help', 'legal'];
     const main = document.querySelector('.main');
 
+    Perf.start('ui.tabSwitch.domToggle');
     document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.id === `tab-${tab}`));
-    // Cleanup relations tab when switching away
     if (this._relCleanup && tab !== 'relations') this._relCleanup();
     ['work', 'settings', 'dash', 'sched', 'help', 'blue', 'notes', 'armoury', 'ideo', 'relations', 'records', 'raid', 'legal'].forEach(v => {
       const el = document.getElementById(`view-${v}`);
       if (el) {
         el.style.display = tab === v ? 'flex' : 'none';
         el.classList.toggle('contained', tab === v && containedTabs.includes(v));
-        if (tab === v) { el.classList.remove('view-anim'); void el.offsetWidth; el.classList.add('view-anim'); }
+        if (tab === v) {
+          el.classList.remove('view-anim');
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (this._tabAnimationRevision === animationRevision && this.state.activeTab === tab) {
+              el.classList.add('view-anim');
+            }
+          }));
+        }
       }
     });
-
-    // Lock outer scroll for contained tabs so the view fills the viewport
     if (main) main.classList.toggle('view-contained', containedTabs.includes(tab));
+    Perf.end('ui.tabSwitch.domToggle');
 
     this._renderTabView(tab);
+
+    Perf.start('ui.tabSwitch.postRender');
     this._maybePrefetchForTab(tab);
     this.applyTabVisibility();
     this.triggerAutoSave();
+    Perf.end('ui.tabSwitch.postRender');
+    Perf._activeOp = null;
+    Perf.end('ui.tabSwitch.' + tab);
+    Perf.end('ui.tabSwitch.total');
+    Perf.increment('ui.tabSwitch.count');
   },
 
   // Render the per-tab view for a tab id. The priorities/work view is handled by renderAll;
   // these are the tabs whose content is built on demand. Used by setTab and after a save
   // import (so the active tab, e.g. the Ideology pills, refreshes without a manual tab switch).
   _renderTabView(tab) {
-    if (tab === 'settings') this.renderSettings();
-    if (tab === 'dash') this.renderDashboard();
-    if (tab === 'sched') this.renderSchedule();
-    if (tab === 'help') this.renderHelp();
-    if (tab === 'blue') this.renderBlueprint();
-    if (tab === 'notes') this.renderJournal();
-    if (tab === 'armoury') this.renderArmoury();
-    if (tab === 'ideo') this.renderIdeology();
-    if (tab === 'relations') this.renderRelations();
-    if (tab === 'records') this.renderRecords();
-    if (tab === 'raid') this.renderRaid();
-    if (tab === 'legal') this.renderLegal();
+    let _ctxMap;
+    const ctxMap = () => _ctxMap ||= this._c7PawnContextMap(
+      this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const r = (name, fn) => Perf.measure('render.tab.' + name, fn);
+    if (tab === 'settings') r('settings', () => this.renderSettings());
+    if (tab === 'dash') r('dash', () => this.renderDashboard(ctxMap()));
+    if (tab === 'sched') r('sched', () => this.renderSchedule(ctxMap()));
+    if (tab === 'help') r('help', () => this.renderHelp());
+    if (tab === 'blue') r('blue', () => this.renderBlueprint());
+    if (tab === 'notes') r('notes', () => this.renderJournal());
+    if (tab === 'armoury') r('armoury', () => this.renderArmoury());
+    if (tab === 'ideo') r('ideo', () => this.renderIdeology());
+    if (tab === 'relations') r('relations', () => this.renderRelations());
+    if (tab === 'records') r('records', () => this.renderRecords());
+    if (tab === 'raid') r('raid', () => this.renderRaid());
+    if (tab === 'legal') r('legal', () => this.renderLegal());
   },
 
   applyTabVisibility() {
@@ -1467,6 +1573,7 @@ const App = {
     this._lastSidebarOrder = null;
     this._colorCache = {};
     this._defLabels = null;
+    if (typeof this._c4InvalidateSnapshot === 'function') this._c4InvalidateSnapshot();
     this._refreshCaches();
     this.renderAll();
     this.toast('Caches cleared, full rebuild done');
@@ -1478,8 +1585,46 @@ const App = {
   getTrait(id) { return this.allTraits.find(t => t.id === id); },
   get allJobs() { return [...JOBS, ...this.state.customJobs]; },
   get allBuildings() { return this._buildingsCache || []; },
-  get allRoles() { return DEFAULT_ROLES; }, 
-  getRole(id) { return this.allRoles.find(r => r.id === id) || DEFAULT_ROLES[0]; },
+  _roleDefinitionIsActive(role) {
+    if (!role || !this.state.importMeta || !Array.isArray(this.state.importMeta.modIds)) return true;
+    const modId = role._provenance && role._provenance.modId;
+    if (!modId) return true;
+    const active = this.state.saveModIdSet instanceof Set
+      ? this.state.saveModIdSet
+      : new Set(this.state.importMeta.modIds.map(id => String(id).toLowerCase()));
+    return active.has(String(modId).toLowerCase());
+  },
+  get allRoles() {
+    const byId = new Map(DEFAULT_ROLES.map(role => [role.id, role]));
+    const scanned = this.state.scannedRoles && typeof this.state.scannedRoles === 'object'
+      ? Object.values(this.state.scannedRoles) : [];
+    const extra = [];
+    for (const role of scanned) {
+      if (!role || !role.id || !this._roleDefinitionIsActive(role)) continue;
+      if (byId.has(role.id)) byId.set(role.id, role);
+      else extra.push(role);
+    }
+    return Array.from(byId.values()).concat(extra.sort((a, b) =>
+      String(a.label || '').localeCompare(String(b.label || ''))));
+  },
+  getRole(id) { return this.allRoles.find(role => role.id === id) || DEFAULT_ROLES[0]; },
+  getRoleByDefName(defName) {
+    if (!defName) return null;
+    return this.allRoles.find(role => role.defName === defName) || null;
+  },
+  _reconcileSaveRoleDefinitions() {
+    let changed = 0;
+    for (const pawn of this.state.pawns || []) {
+      if (!pawn || pawn.roleSource !== 'save' || !pawn.saveRoleDef) continue;
+      const role = this.getRoleByDefName(pawn.saveRoleDef);
+      const nextRole = role ? role.id : 'none';
+      if (pawn.role === nextRole) continue;
+      pawn.role = nextRole;
+      changed++;
+    }
+    if (changed && typeof this._c4InvalidateSnapshot === 'function') this._c4InvalidateSnapshot();
+    return changed;
+  },
 
   // ── MOD AWARENESS HELPERS ─────────────────────────────────────
   _getUniqueModSources() {
@@ -1500,12 +1645,8 @@ const App = {
   _allMemes() {
     const vanilla = typeof IDEO_MEMES !== 'undefined' ? IDEO_MEMES : [];
     const custom = this.state.customMemes || {};
-    const customArr = Object.entries(custom).map(([id, m]) => ({
-      id, label: m.label, category: m.category || 'Modded', color: m.color || '#888888',
-      description: m.description || '', impact: m.impact || 'medium',
-      effects: m.effects || {}, conflicts: m.conflicts || [], specialists: [],
-      modSource: m.modSource || 'Custom'
-    }));
+    const customArr = Object.entries(custom).filter(([, m]) => m && typeof m === 'object' && !Array.isArray(m))
+      .map(([id, m]) => ({ id, ...IdeologyData.sanitiseDefinition(m, id) }));
     return [...vanilla, ...customArr];
   },
 
@@ -1513,10 +1654,8 @@ const App = {
   _allRituals() {
     const vanilla = typeof IDEO_RITUALS !== 'undefined' ? IDEO_RITUALS : [];
     const custom = this.state.customRituals || {};
-    const customArr = Object.entries(custom).map(([id, r]) => ({
-      id, label: r.label, category: r.category || 'Modded', description: r.description || '',
-      quality: r.quality || 'medium', modSource: r.modSource || 'Custom'
-    }));
+    const customArr = Object.entries(custom).filter(([, r]) => r && typeof r === 'object' && !Array.isArray(r))
+      .map(([id, r]) => ({ id, ...IdeologyData.sanitiseDefinition(r, id) }));
     return [...vanilla, ...customArr];
   },
 
@@ -1532,9 +1671,39 @@ const App = {
     if (!o) return false;
     const m = Array.isArray(memes) ? memes : [];
     if (o.blockedByMemes && o.blockedByMemes.some(x => m.includes(x))) return false;
+    const required = this._allMemes().filter(meme => m.includes(meme.id))
+      .map(meme => meme.requiredPrecepts && meme.requiredPrecepts[pDef.id]).filter(Array.isArray);
+    if (required.length) return required.every(options => options.includes(optId));
     if (o.requiredMemes && !o.requiredMemes.some(x => m.includes(x))) return false;
     if (o.enabledByMemes && !o.enabledByMemes.some(x => m.includes(x))) return false;
     return true;
+  },
+
+  // One effective selection map feeds both the controls and engine totals.
+  // Validate catalogue references before locking anything, even if future
+  // definitions contain an unsupported forced option.
+  getIdeoPreceptState() {
+    const ideo = this.state.ideology || {};
+    const memes = Array.isArray(ideo.memes) ? ideo.memes : [];
+    const selected = {}, forcedBy = {};
+    const allMemes = this._allMemes().filter(m => memes.includes(m.id));
+    for (const pDef of IDEO_PRECEPT_DEFS) {
+      const stored = ideo.precepts && ideo.precepts[pDef.id];
+      if (this._ideoOptionValid(pDef, stored, memes)) selected[pDef.id] = stored;
+      const required = allMemes.map(m => m.requiredPrecepts && m.requiredPrecepts[pDef.id]).filter(Array.isArray);
+      if (!selected[pDef.id] && required.length) {
+        const option = pDef.options.find(o => this._ideoOptionValid(pDef, o.id, memes));
+        if (option) selected[pDef.id] = option.id;
+      }
+      for (const meme of allMemes) {
+        const forced = meme.forcedPrecepts && meme.forcedPrecepts[pDef.id];
+        if (pDef.options.some(o => o.id === forced)) {
+          selected[pDef.id] = forced;
+          forcedBy[pDef.id] = meme.label;
+        }
+      }
+    }
+    return { selected, forcedBy };
   },
 
   getIdeoEffects() {
@@ -1555,24 +1724,10 @@ const App = {
         }
       });
     }
-    // Build effective precept map: forced precepts from memes override user selections
-    // User selections must still be valid under the current memes (removing a meme can
-    // orphan a choice it enabled); meme-forced precepts always apply, marked here so
-    // they bypass the validity check below.
-    const effectivePrecepts = { ...(ideo.precepts || {}) };
-    const forcedIds = new Set();
-    if (ideo.memes) {
-      ideo.memes.forEach(mId => {
-        const m = allMemes.find(x => x.id === mId);
-        if (m && m.forcedPrecepts) {
-          Object.entries(m.forcedPrecepts).forEach(([pId, optId]) => { effectivePrecepts[pId] = optId; forcedIds.add(pId); });
-        }
-      });
-    }
+    const effectivePrecepts = this.getIdeoPreceptState().selected;
     Object.entries(effectivePrecepts).forEach(([pId, optId]) => {
       const pDef = (typeof IDEO_PRECEPT_DEFS !== 'undefined' ? IDEO_PRECEPT_DEFS : []).find(x => x.id === pId);
       if (!pDef) return;
-      if (!forcedIds.has(pId) && !this._ideoOptionValid(pDef, optId, ideo.memes || [])) return;
       const opt = pDef.options.find(o => o.id === optId);
       if (!opt) return;
       if (opt.mood) fx.mood += opt.mood;
@@ -1613,6 +1768,55 @@ const App = {
   setAlwaysOnTop(val) {
     this.state.settings.alwaysOnTop = !!val;
     if (window.overlay && window.overlay.setAlwaysOnTop) window.overlay.setAlwaysOnTop(!!val);
+    this.triggerAutoSave();
+  },
+
+  _applyWindowTransparency() {
+    const settings = this.state.settings || {};
+    const parsed = Number(settings.windowOpacity);
+    const opacity = Number.isFinite(parsed) ? Math.max(0.3, Math.min(1, parsed)) : 1;
+    const locked = settings.transparencyLocked === true;
+    settings.windowOpacity = opacity;
+    settings.transparencyLocked = locked;
+
+    const slider = document.querySelector('.overlay-opacity-slider');
+    if (slider) {
+      slider.value = String(Math.round(opacity * 100));
+      slider.disabled = this._opacitySupported === false || locked;
+      slider.setAttribute('aria-disabled', slider.disabled ? 'true' : 'false');
+      const label = slider.closest('label');
+      if (label) {
+        label.title = this._opacitySupported === false
+          ? 'Graphics recovery is active. Window transparency is disabled for reliable software rendering.'
+          : locked
+            ? `Window transparency locked at ${Math.round(opacity * 100)}%`
+            : `Window opacity: ${Math.round(opacity * 100)}%`;
+      }
+    }
+
+    if (this._opacitySupported === false || !window.overlay) return;
+    // Apply the saved level before enabling the native guard. This restores a locked
+    // level on launch while still rejecting later slider or stale-event changes.
+    if (window.overlay.setOpacityLock) window.overlay.setOpacityLock(false);
+    if (window.overlay.setOpacity) window.overlay.setOpacity(opacity);
+    if (window.overlay.setOpacityLock) window.overlay.setOpacityLock(locked);
+  },
+
+  setWindowOpacity(value) {
+    if (this.state.settings.transparencyLocked === true || this._opacitySupported === false) {
+      this._applyWindowTransparency();
+      return;
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    this.state.settings.windowOpacity = Math.max(0.3, Math.min(1, parsed));
+    this._applyWindowTransparency();
+    this.triggerAutoSave();
+  },
+
+  setTransparencyLocked(locked) {
+    this.state.settings.transparencyLocked = locked === true;
+    this._applyWindowTransparency();
     this.triggerAutoSave();
   },
 
@@ -1825,6 +2029,7 @@ window.onerror = (msg, src, line, col, err) => {
     App.toast('Something went wrong. Open Settings > Developer console to inspect.', 5000);
   }
   if (typeof App !== 'undefined' && App._logToConsole) App._logToConsole('error', detail, src ? (src + ':' + line + ':' + col) : '', stack);
+  if (typeof App !== 'undefined' && App._crashProbe) App._crashProbe('renderer.error', { message: detail, line, col, stack });
   return false;
 };
 window.addEventListener('unhandledrejection', (e) => {
@@ -1834,6 +2039,7 @@ window.addEventListener('unhandledrejection', (e) => {
     App.toast('Something went wrong. Open Settings > Developer console to inspect.', 5000);
   }
   if (typeof App !== 'undefined' && App._logToConsole) App._logToConsole('error', detail, '', stack);
+  if (typeof App !== 'undefined' && App._crashProbe) App._crashProbe('renderer.unhandled-rejection', { message: detail, stack });
 });
 
 // Keyboard shortcut: Ctrl+` to toggle in-app console

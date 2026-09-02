@@ -10,7 +10,8 @@ const Charts = {
   renderColonyRadar(pawns, size = 400, radarCtxMap) {
     // Guard inputs so the SVG can never contain NaN coordinates.
     size = (Number.isFinite(Number(size)) && Number(size) > 0) ? Number(size) : 400;
-    const list = Array.isArray(pawns) ? pawns : [];
+    const list = Array.isArray(pawns)
+      ? pawns.filter(p => p && typeof p === 'object' && !Array.isArray(p)) : [];
     const center = size / 2;
     const radius = size * 0.385; // scales with size
     const categories = SKILLS;
@@ -63,21 +64,22 @@ const Charts = {
     // big transparent hit-circle sits over the label so hovering is forgiving.
     const dotStroke = Math.max(1, size * 0.004);
     const hitR = size * 0.06;
+    const evidenceNotices = canonicalUnknownCounts.map(count => count
+      ? `Skill evidence incomplete for ${count} pawn${count === 1 ? '' : 's'}; legacy-compatible values shown.`
+      : '');
     const axes = categories.map((s, i) => {
       const sin = Math.sin(i * angleStep), cos = Math.cos(i * angleStep);
       const ex = center + sin * radius, ey = center - cos * radius;            // spoke end
       const dx = center + sin * radius * averages[i], dy = center - cos * radius * averages[i]; // dot
       const lx = center + sin * (radius + size * 0.085), ly = center - cos * (radius + size * 0.085); // label
       const shown = (averages[i] * 20).toFixed(1);
-      const notice = canonicalUnknownCounts[i]
-        ? ` · Canonical C5 skill evidence incomplete for ${canonicalUnknownCounts[i]} pawn${canonicalUnknownCounts[i] === 1 ? '' : 's'}; legacy-compatible values shown.`
-        : '';
-      return `<g class="radar-axis" title="${s.name}: ${shown} / 20 colony average${notice}">
+      const notice = evidenceNotices[i] ? ` - ${evidenceNotices[i]}` : '';
+      return `<g class="radar-axis" title="${_escapeHtml(`${s.name}: ${shown} / 20 colony average${notice}`)}">
           <!-- title attribute (not an SVG <title> child) so it uses the app-wide styled tooltip -->
           <line class="radar-spoke" x1="${center}" y1="${center}" x2="${ex}" y2="${ey}" stroke="var(--border)" stroke-opacity="0.55" />
           <circle class="radar-dot" cx="${dx}" cy="${dy}" r="${dotR}" fill="var(--accent)" stroke="var(--surface)" stroke-width="${dotStroke}" />
-          <text class="radar-label" x="${lx}" y="${ly}" text-anchor="middle" font-family="Arial, sans-serif">
-            <tspan class="radar-lab-name" x="${lx}" fill="var(--text3)" font-size="${labelSize}" font-weight="700">${s.short}</tspan>
+          <text class="radar-label" x="${lx}" y="${ly}" text-anchor="middle" font-family="var(--app-font-family)">
+            <tspan class="radar-lab-name" x="${lx}" fill="var(--text3)" font-size="${labelSize}" font-weight="700">${_escapeHtml(s.short)}</tspan>
             <tspan class="radar-lab-val" x="${lx}" dy="${Math.round(labelSize * 1.05)}" fill="var(--accent)" font-size="${Math.round(labelSize * 0.9)}" font-weight="800">${shown}</tspan>
           </text>
           <circle class="radar-hit" cx="${lx}" cy="${ly - labelSize * 0.3}" r="${hitR}" fill="transparent" />
@@ -87,8 +89,22 @@ const Charts = {
     // Padded viewBox + overflow:visible so the two-line labels never clip.
     const vb = `${-pad} ${-pad} ${size + pad * 2} ${size + pad * 2}`;
     const dotHover = Math.max(dotR * 1.9, size * 0.022);
+    // Native disclosure is keyboard/touch accessible and shares the exact chart
+    // values, without another round of C5 projections or hover-only evidence.
+    const details = `<details class="radar-details">
+      <summary>Skill details and evidence</summary>
+      ${list.length ? `<table>
+        <caption>Colony averages (0-20)</caption>
+        <thead><tr><th scope="col">Skill</th><th scope="col">Average</th></tr></thead>
+        <tbody>${categories.map((s, i) => `<tr>
+          <th scope="row">${_escapeHtml(s.name)}${evidenceNotices[i]
+            ? `<span class="radar-evidence">${_escapeHtml(evidenceNotices[i])}</span>` : ''}</th>
+          <td>${(averages[i] * 20).toFixed(1)}</td>
+        </tr>`).join('')}</tbody>
+      </table>` : '<p>No pawns loaded. Add or import pawns to see skill averages.</p>'}
+    </details>`;
     return `
-      <svg viewBox="${vb}" style="display:block; margin:0 auto; width:100%; height:auto; min-width:170px; max-width:${Math.max(size, 200)}px; overflow:visible">
+      <svg role="img" aria-label="Colony average skill radar. Full names, values and evidence notes are in Skill details below." viewBox="${vb}" style="display:block; margin:0 auto; width:100%; height:auto; min-width:170px; max-width:${Math.max(size, 200)}px; overflow:visible">
         <style>
           .radar-axis { cursor: pointer; }
           .radar-dot { transition: r .12s ease, fill .12s ease, stroke .12s ease; }
@@ -118,7 +134,7 @@ const Charts = {
         <polygon points="${points}" fill="url(#radarFill)" stroke="var(--accent)" stroke-width="${Math.max(2, size * 0.007)}" stroke-linejoin="round" filter="url(#radarGlow)" pointer-events="none" />
         ${axes}
       </svg>
+      ${details}
     `;
   }
 };
-

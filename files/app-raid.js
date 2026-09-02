@@ -197,7 +197,7 @@ Object.assign(App, {
     }
     el.style.display = '';
     const est = this.getRaidEstimateText();
-    const colors = { low: '#7de85a', mid: '#e8c55a', high: '#f0857a' };
+    const colors = { low: 'var(--ok-txt)', mid: 'var(--accent)', high: 'var(--p4-txt)' };
     // Build tooltip with detailed info
     const r = this.state.raid;
     const calc = this.calculateRaidPoints();

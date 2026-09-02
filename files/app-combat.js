@@ -49,6 +49,31 @@ Object.assign(App, {
   _armourySort: 'manual',     // manual, name, type, damage, paper, touch, short, medium, long, ap, range, mod
   _armourrySortDir: 'asc',    // asc or desc
   _armouryFilter: 'all',      // all, ranged, melee
+  _armouryPage: 0,
+  _apparelPage: 0,
+  _gearPageSize: 100,
+
+  // Use the space available to the Armoury rather than the whole window. An
+  // expanded sidebar can make this pane narrow while the viewport remains wide.
+  _armouryCompactBreakpoint: 820,
+  _armouryLayoutWidth(container) {
+    const candidates = [container, document.getElementById('view-armoury'), document.querySelector?.('.main')];
+    for (const element of candidates) {
+      const width = Number(element?.clientWidth);
+      if (Number.isFinite(width) && width > 0) return width;
+    }
+    return Number(window.innerWidth) || 0;
+  },
+  _isCompactArmouryLayout(container) {
+    return window.innerWidth <= 550 || this._armouryLayoutWidth(container) <= this._armouryCompactBreakpoint;
+  },
+  refreshArmouryResponsiveLayout() {
+    const compact = this._isCompactArmouryLayout(document.getElementById('view-armoury'));
+    if (compact === this._armouryCompactLayout) return false;
+    this._armouryCompactLayout = compact;
+    if (this.state.activeTab === 'armoury') this.renderArmoury();
+    return true;
+  },
 
   // Sort/filter state for apparel list
   _apparelSort: 'manual',
@@ -62,11 +87,18 @@ Object.assign(App, {
       this._armourySort = field;
       this._armourrySortDir = (field === 'manual' || field === 'name' || field === 'type' || field === 'mod') ? 'asc' : 'desc';
     }
+    this._armouryPage = 0;
     this.renderArmouryList();
   },
 
   setArmouryFilter(filter) {
     this._armouryFilter = filter;
+    this._armouryPage = 0;
+    this.renderArmouryList();
+  },
+
+  setArmouryPage(page) {
+    this._armouryPage = Math.max(0, Math.floor(Number(page) || 0));
     this.renderArmouryList();
   },
 
@@ -77,11 +109,18 @@ Object.assign(App, {
       this._apparelSort = field;
       this._apparelSortDir = (field === 'manual' || field === 'name' || field === 'type' || field === 'layer' || field === 'mod') ? 'asc' : 'desc';
     }
+    this._apparelPage = 0;
     this.renderApparelList();
   },
 
   setApparelFilter(filter) {
     this._apparelFilter = filter;
+    this._apparelPage = 0;
+    this.renderApparelList();
+  },
+
+  setApparelPage(page) {
+    this._apparelPage = Math.max(0, Math.floor(Number(page) || 0));
     this.renderApparelList();
   },
 
@@ -90,10 +129,10 @@ Object.assign(App, {
     if (field === 'manual') return [...items];
     const d = dir === 'asc' ? 1 : -1;
     return [...items].sort((a, b) => {
-      if (field === 'name') return d * a.name.localeCompare(b.name);
-      if (field === 'type') return d * (a.type || '').localeCompare(b.type || '');
-      if (field === 'mod') return d * (a.modSource || '').toLowerCase().localeCompare((b.modSource || '').toLowerCase());
-      if (field === 'layer') return d * (a.layer || '').localeCompare(b.layer || '');
+      if (field === 'name') return d * String(a.name || '').localeCompare(String(b.name || ''));
+      if (field === 'type') return d * String(a.type || '').localeCompare(String(b.type || ''));
+      if (field === 'mod') return d * String(a.modSource || '').toLowerCase().localeCompare(String(b.modSource || '').toLowerCase());
+      if (field === 'layer') return d * String(a.layer || '').localeCompare(String(b.layer || ''));
       if (field === 'damage') return d * ((a.damage || 0) - (b.damage || 0));
       if (field === 'range') return d * ((a.range || 0) - (b.range || 0));
       if (field === 'mass') return d * ((a.mass || 0) - (b.mass || 0));
@@ -216,7 +255,11 @@ Object.assign(App, {
 
   // Build a short summary of utility-specific stats for display in apparel list/widget.
   _utilityStatsSummary(item) {
-    if (item.type !== 'utility') return null;
+    if (!item || item.type !== 'utility') return null;
+    const number = value => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
     const parts = [];
     const cat = item.utilityCategory || 'passive';
     const catLabels = { shield: 'Shield', active: 'Active', lance: 'Lance', passive: 'Passive' };
@@ -230,19 +273,20 @@ Object.assign(App, {
         if (shield.blocksRangedOut) parts.push('Blocks ranged');
       }
     }
-    if (item.charges) parts.push(item.charges + ' charge' + (item.charges > 1 ? 's' : ''));
-    if (item.range) parts.push('Range ' + item.range.toFixed(0));
-    if (item.radius) parts.push('Radius ' + item.radius.toFixed(1));
+    if (number(item.charges)) parts.push(number(item.charges) + ' charge' + (number(item.charges) > 1 ? 's' : ''));
+    if (number(item.range)) parts.push('Range ' + number(item.range).toFixed(0));
+    if (number(item.radius)) parts.push('Radius ' + number(item.radius).toFixed(1));
     if (item.singleUse) parts.push('Single-use');
     if (item.statOffsets) {
       const so = item.statOffsets;
-      if (so.rangedCooldownFactor) parts.push('Ranged CD ' + (so.rangedCooldownFactor > 0 ? '+' : '') + (so.rangedCooldownFactor * 100).toFixed(0) + '%');
-      if (so.meleeCooldownFactor) parts.push('Melee CD ' + (so.meleeCooldownFactor > 0 ? '+' : '') + (so.meleeCooldownFactor * 100).toFixed(0) + '%');
-      if (so.shootingAccuracy) parts.push('Accuracy ' + (so.shootingAccuracy > 0 ? '+' : '') + (so.shootingAccuracy * 100).toFixed(0) + '%');
-      if (so.aimingDelayFactor) parts.push('Aim ' + (so.aimingDelayFactor > 0 ? '+' : '') + (so.aimingDelayFactor * 100).toFixed(0) + '%');
-      if (so.moveSpeed) parts.push('Move ' + (so.moveSpeed > 0 ? '+' : '') + so.moveSpeed.toFixed(1));
-      if (so.mechBandwidth) parts.push('+' + so.mechBandwidth + ' bandwidth');
-      if (so.mechControlGroups) parts.push('+' + so.mechControlGroups + ' control');
+      const offset = key => number(so[key]);
+      if (offset('rangedCooldownFactor')) parts.push('Ranged CD ' + (offset('rangedCooldownFactor') > 0 ? '+' : '') + (offset('rangedCooldownFactor') * 100).toFixed(0) + '%');
+      if (offset('meleeCooldownFactor')) parts.push('Melee CD ' + (offset('meleeCooldownFactor') > 0 ? '+' : '') + (offset('meleeCooldownFactor') * 100).toFixed(0) + '%');
+      if (offset('shootingAccuracy')) parts.push('Accuracy ' + (offset('shootingAccuracy') > 0 ? '+' : '') + (offset('shootingAccuracy') * 100).toFixed(0) + '%');
+      if (offset('aimingDelayFactor')) parts.push('Aim ' + (offset('aimingDelayFactor') > 0 ? '+' : '') + (offset('aimingDelayFactor') * 100).toFixed(0) + '%');
+      if (offset('moveSpeed')) parts.push('Move ' + (offset('moveSpeed') > 0 ? '+' : '') + offset('moveSpeed').toFixed(1));
+      if (offset('mechBandwidth')) parts.push('+' + offset('mechBandwidth') + ' bandwidth');
+      if (offset('mechControlGroups')) parts.push('+' + offset('mechControlGroups') + ' control');
     }
     return parts;
   },
@@ -311,7 +355,8 @@ Object.assign(App, {
     //   1<num<2: (2 - num) / 4     (no full hits; deflect num/2, half 1-num/2)
     //   num>=2 : 0                 (always deflects)
     // targetSharp is passed as percentage (0-200), ap is decimal (0-1).
-    const num = Math.max(0, (targetSharp - ap * 100) / 100);
+    const targetArmour = isMelee && w.meleeDamageType === 'blunt' ? targetBlunt : targetSharp;
+    const num = Math.max(0, (n(targetArmour) - ap * 100) / 100);
     const armorMult = num <= 1 ? (1 - 0.75 * num) : (num < 2 ? (2 - num) / 4 : 0);
     const effDmg = dmg * armorMult;
 
@@ -365,9 +410,14 @@ Object.assign(App, {
   // Calculate effective shield HP and recharge rate for a utility item.
   _calcShieldStats(util) {
     if (!util || util.utilityCategory !== 'shield') return null;
-    const maxEnergy = util.shieldMax || 0;
-    const lossPerDmg = util.shieldLossPerDmg || 0.033;
-    const rechargeRate = util.shieldRecharge || 0;
+    const finite = (value, fallback = 0) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const maxEnergy = finite(util.shieldMax);
+    const parsedLoss = finite(util.shieldLossPerDmg, 0.033);
+    const lossPerDmg = parsedLoss > 0 ? parsedLoss : 0.033;
+    const rechargeRate = finite(util.shieldRecharge);
     return {
       effectiveHP: maxEnergy / lossPerDmg,
       rechargePerSec: (rechargeRate / lossPerDmg),
@@ -402,6 +452,57 @@ Object.assign(App, {
     else data[field] = parseFloat(value) || 0;
     // Only re-render analysis, NOT the forms, replacing form innerHTML mid-event kills dropdowns
     this.analyzeComparison();
+  },
+
+  setThreatPreset(id) {
+    const preset = THREAT_PRESETS.find(p => p.id === id) || THREAT_PRESETS[0];
+    this.state.comparisonData.targetPreset = preset.id;
+    this.state.comparisonData.targetSharp = preset.sharp * 100;
+    this.state.comparisonData.targetBlunt = preset.blunt * 100;
+    this.renderThreatControls();
+    this.analyzeComparison();
+  },
+
+  updateThreatArmour(field, value) {
+    if (field !== 'targetSharp' && field !== 'targetBlunt') return;
+    const parsed = Number(value);
+    this.state.comparisonData[field] = Number.isFinite(parsed)
+      ? Math.max(0, Math.min(200, parsed)) : 0;
+    this.state.comparisonData.targetPreset = 'custom';
+    this.renderThreatControls();
+    this.analyzeComparison();
+  },
+
+  _activeThreatPreset() {
+    const data = this.state.comparisonData || {};
+    const sharp = Number(data.targetSharp) || 0;
+    const blunt = Number(data.targetBlunt) || 0;
+    return THREAT_PRESETS.find(p => Math.abs(p.sharp * 100 - sharp) < 0.001
+      && Math.abs(p.blunt * 100 - blunt) < 0.001) || null;
+  },
+
+  renderThreatControls() {
+    const el = document.getElementById('weaponThreatControls');
+    if (!el) return;
+    const data = this.state.comparisonData || {};
+    const active = this._activeThreatPreset();
+    const sharp = Math.max(0, Math.min(200, Number(data.targetSharp) || 0));
+    const blunt = Math.max(0, Math.min(200, Number(data.targetBlunt) || 0));
+    el.innerHTML = `
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px">
+        <span class="section-title section-title--sm" style="margin:0 6px 0 0">Target armour</span>
+        ${THREAT_PRESETS.map(p => `<button class="btn btn-sm ${active && active.id === p.id ? 'btn-accent' : ''}"
+          onclick="App.setThreatPreset('${p.id}')" aria-pressed="${active && active.id === p.id}">${_escapeHtml(p.label)}</button>`).join('')}
+        <label style="margin-left:auto; display:flex; align-items:center; gap:5px; font-size:var(--f-xs); color:var(--text3)">
+          Sharp % <input type="number" min="0" max="200" step="1" class="skill-input" style="width:64px" value="${sharp}"
+            onchange="App.updateThreatArmour('targetSharp', this.value)">
+        </label>
+        <label style="display:flex; align-items:center; gap:5px; font-size:var(--f-xs); color:var(--text3)">
+          Blunt % <input type="number" min="0" max="200" step="1" class="skill-input" style="width:64px" value="${blunt}"
+            onchange="App.updateThreatArmour('targetBlunt', this.value)">
+        </label>
+      </div>
+      <div style="margin-top:6px; font-size:var(--f-xs); color:var(--text3)">Effective DPS below includes the selected target's armour after each weapon's penetration. Blunt melee uses the blunt value.</div>`;
   },
 
   // Sub-tab dispatcher for the unified Armoury tab (Weapons / Apparel / Loadouts).
@@ -469,14 +570,16 @@ Object.assign(App, {
   renderArmouryList() {
     const c = document.getElementById('armouryContent');
     const allWeapons = this.state.weapons || [];
-    const isWidget = window.innerWidth <= 550;
+    const isCompact = this._isCompactArmouryLayout(c);
+    this._armouryCompactLayout = isCompact;
+    c.classList.toggle('gear-compact', isCompact);
 
     if (allWeapons.length === 0) {
       c.innerHTML = `
-        <div class="widget-gear-empty" style="grid-column: 1 / -1; text-align:center; padding:${isWidget ? '24px 12px' : '60px 20px'}; border:2px dashed var(--border-med); border-radius:12px; color:var(--text3)">
-          <div style="font-size:${isWidget ? '18px' : 'calc(var(--f-base) * 2.4)'}; margin-bottom:16px; color:var(--text3)">ARMOURY</div>
-          <h3 style="color:var(--text2); margin-bottom:8px; font-size:${isWidget ? '12px' : 'inherit'}">No weapons in the armoury</h3>
-          <p style="font-size:${isWidget ? '11px' : 'inherit'}">Add weapons to begin tactical comparisons.</p>
+        <div class="widget-gear-empty" style="grid-column: 1 / -1; text-align:center; padding:${isCompact ? '24px 12px' : '60px 20px'}; border:2px dashed var(--border-med); border-radius:12px; color:var(--text3)">
+          <div style="font-size:${isCompact ? '18px' : 'calc(var(--f-base) * 2.4)'}; margin-bottom:16px; color:var(--text3)">ARMOURY</div>
+          <h3 style="color:var(--text2); margin-bottom:8px; font-size:${isCompact ? '12px' : 'inherit'}">No weapons in the armoury</h3>
+          <p style="font-size:${isCompact ? '11px' : 'inherit'}">Add weapons to begin tactical comparisons.</p>
           <button class="btn" onclick="App.openWeaponEditor()" style="margin-top:12px">+ Add Weapon</button>
         </div>`;
       return;
@@ -495,6 +598,15 @@ Object.assign(App, {
     const _dpsCache = new Map();
     const dpsOf = (w) => { let d = _dpsCache.get(w.id); if (d === undefined) { d = this._calcWeaponDPS(w); _dpsCache.set(w.id, d); } return d; };
     const weapons = this._applyFavouriteSort(filtered, sortField, sortDir, dpsOf);
+    const pageSize = this._gearPageSize;
+    const pageCount = Math.max(1, Math.ceil(weapons.length / pageSize));
+    const page = Math.min(Math.max(0, this._armouryPage || 0), pageCount - 1);
+    this._armouryPage = page;
+    const visibleWeapons = weapons.slice(page * pageSize, (page + 1) * pageSize);
+    const rangeStart = weapons.length ? page * pageSize + 1 : 0;
+    const rangeEnd = Math.min((page + 1) * pageSize, weapons.length);
+    const pageOptions = Array.from({ length: pageCount }, (_, index) =>
+      `<option value="${index}" ${index === page ? 'selected' : ''}>Page ${index + 1} of ${pageCount}</option>`).join('');
 
     const getQual = (id) => WEAPON_QUALITIES.find(q => q.id === (id || 'normal')) || WEAPON_QUALITIES[2];
     const modCount = allWeapons.filter(w => w.modSource).length;
@@ -504,7 +616,7 @@ Object.assign(App, {
     // Star icon helper
     const star = (w) => {
       const on = w.favourite;
-      return `<span class="gear-fav" style="cursor:pointer; font-size:14px; color:${on ? 'var(--accent)' : 'var(--text3)'}; opacity:${on ? '1' : '0.4'}; margin-right:6px" onclick="event.stopPropagation(); App.toggleWeaponFavourite('${w.id}')" title="${on ? 'Unfavourite' : 'Favourite'}">${on ? '★' : '☆'}</span>`;
+      return `<span class="gear-fav" data-gear-id="${_escapeHtml(w.id)}" style="cursor:pointer; font-size:14px; color:${on ? 'var(--accent)' : 'var(--text3)'}; opacity:${on ? '1' : '0.4'}; margin-right:6px" onclick="event.stopPropagation(); App.toggleWeaponFavourite(this.dataset.gearId)" title="${on ? 'Unfavourite' : 'Favourite'}">${on ? '★' : '☆'}</span>`;
     };
 
     // Drag handle (only in manual mode)
@@ -537,7 +649,12 @@ Object.assign(App, {
         ${hasModItems ? '<option value="mod" ' + (sortField === 'mod' ? 'selected' : '') + '>Mod Source</option>' : ''}
       </select>
       ${sortField !== 'manual' ? `<button class="btn btn-sm" style="font-size:10px; padding:2px 8px" onclick="App._armourrySortDir = App._armourrySortDir === 'asc' ? 'desc' : 'asc'; App.renderArmouryList()">${sortDir === 'asc' ? '&#9650; Asc' : '&#9660; Desc'}</button>` : ''}
-      <span style="margin-left:auto; color:var(--text3)">${filtered.length} weapon${filtered.length !== 1 ? 's' : ''}</span>
+      <span style="margin-left:auto; color:var(--text3)">${rangeStart}-${rangeEnd} of ${weapons.length} weapon${weapons.length !== 1 ? 's' : ''}</span>
+      ${pageCount > 1 ? `<div class="gear-pagination">
+        <button class="btn btn-sm" onclick="App.setArmouryPage(${page - 1})" ${page === 0 ? 'disabled' : ''} aria-label="Previous weapon page">&lt;</button>
+        <select class="skill-input" onchange="App.setArmouryPage(this.value)" aria-label="Weapon page">${pageOptions}</select>
+        <button class="btn btn-sm" onclick="App.setArmouryPage(${page + 1})" ${page === pageCount - 1 ? 'disabled' : ''} aria-label="Next weapon page">&gt;</button>
+      </div>` : ''}
     </div>`;
 
     if (modCount > 0) {
@@ -547,18 +664,18 @@ Object.assign(App, {
       </div>`;
     }
 
-    if (isWidget) {
-      // Card layout for widget mode
+    if (isCompact) {
+      // Card layout for widget mode or a narrow Armoury pane
       html += `<div style="display:flex; flex-direction:column; gap:8px">`;
-      weapons.forEach(w => {
+      visibleWeapons.forEach(w => {
         const dps = dpsOf(w);
         const q = getQual(w.quality);
         html += `
-          <div class="widget-gear-card" ${isManual ? `draggable="true" ondragstart="App.handleWeaponDragStart(event,'${w.id}')" ondragover="App.handleWeaponDragOver(event)" ondragleave="App.handleWeaponDragLeave(event)" ondrop="App.handleWeaponDrop(event,'${w.id}')" ondragend="App.handleWeaponDragEnd(event)"` : ''} style="${w.favourite ? 'border-left:3px solid var(--accent)' : ''}">
+          <div class="widget-gear-card" ${isManual ? `data-gear-id="${_escapeHtml(w.id)}" draggable="true" ondragstart="App.handleWeaponDragStart(event,this.dataset.gearId)" ondragover="App.handleWeaponDragOver(event)" ondragleave="App.handleWeaponDragLeave(event)" ondrop="App.handleWeaponDrop(event,this.dataset.gearId)" ondragend="App.handleWeaponDragEnd(event)"` : ''} style="${w.favourite ? 'border-left:3px solid var(--accent)' : ''}">
             <div style="display:flex; justify-content:space-between; align-items:center">
               <div>
                 <div class="widget-gear-name">${star(w)}${grip}${_escapeHtml(w.name)}${_modBadge(w)}</div>
-                <div class="widget-gear-sub">${w.range || 'Melee'} · ${w.type} · <span style="color:${q.color}; font-weight:700">${q.label}</span>${w.stuff ? ' · ' + ((findMaterial(w.stuff, this.state.materials) || {}).label || w.stuff) : ''}</div>
+                <div class="widget-gear-sub">${w.range || 'Melee'} · ${w.type} · <span style="color:${q.color}; font-weight:700">${q.label}</span>${w.stuff ? ' · ' + _escapeHtml(((findMaterial(w.stuff, this.state.materials) || {}).label || w.stuff)) : ''}</div>
               </div>
             </div>
             <div class="widget-gear-stats">
@@ -569,8 +686,8 @@ Object.assign(App, {
               <div class="widget-gear-stat"><span class="widget-gear-stat-label"${jtip('ap')}>AP</span> <span class="widget-gear-stat-val" style="color:var(--p2-txt)">${((dps.ap||0)*100).toFixed(0)}%</span></div>
             </div>
             <div class="widget-gear-actions">
-              <button class="btn btn-sm" onclick="App.openWeaponEditor('${w.id}')">Edit</button>
-              <button class="btn btn-sm btn-danger" onclick="App.deleteWeapon('${w.id}')">Del</button>
+              <button class="btn btn-sm" data-gear-id="${_escapeHtml(w.id)}" onclick="App.openWeaponEditor(this.dataset.gearId)">Edit</button>
+              <button class="btn btn-sm btn-danger" data-gear-id="${_escapeHtml(w.id)}" onclick="App.deleteWeapon(this.dataset.gearId)">Del</button>
             </div>
           </div>`;
       });
@@ -584,8 +701,8 @@ Object.assign(App, {
         return `<th style="padding:12px; font-size:var(--f-xs); ${align ? 'text-align:' + align : ''}; cursor:pointer; ${col}"${jtip(field)} onclick="App.setArmourySort('${field}')">${label}${arrow}</th>`;
       };
       html += `
-        <div style="overflow-x:auto">
-          <table class="armoury-table" style="width:100%; border-collapse:collapse; background:var(--surface2); border:1px solid var(--border-med); border-radius:var(--radius-lg); overflow:hidden">
+        <div class="gear-table-scroll">
+          <table class="armoury-table armoury-table--weapons" style="width:100%; border-collapse:collapse; background:var(--surface2); border:1px solid var(--border-med); border-radius:var(--radius-lg); overflow:hidden">
             <thead>
               <tr style="background:var(--surface3); text-align:left">
                 ${thSort('name', 'WEAPON', '')}
@@ -601,14 +718,14 @@ Object.assign(App, {
             </thead>
             <tbody>`;
 
-      weapons.forEach(w => {
+      visibleWeapons.forEach(w => {
         const dps = dpsOf(w);
         const q   = getQual(w.quality);
         html += `
-          <tr style="border-bottom:1px solid var(--border); ${w.favourite ? 'background:rgba(232,168,56,0.04)' : ''}" ${isManual ? `draggable="true" ondragstart="App.handleWeaponDragStart(event,'${w.id}')" ondragover="App.handleWeaponDragOver(event)" ondragleave="App.handleWeaponDragLeave(event)" ondrop="App.handleWeaponDrop(event,'${w.id}')" ondragend="App.handleWeaponDragEnd(event)"` : ''}>
+          <tr style="border-bottom:1px solid var(--border); ${w.favourite ? 'background:rgba(232,168,56,0.04)' : ''}" ${isManual ? `data-gear-id="${_escapeHtml(w.id)}" draggable="true" ondragstart="App.handleWeaponDragStart(event,this.dataset.gearId)" ondragover="App.handleWeaponDragOver(event)" ondragleave="App.handleWeaponDragLeave(event)" ondrop="App.handleWeaponDrop(event,this.dataset.gearId)" ondragend="App.handleWeaponDragEnd(event)"` : ''}>
             <td style="padding:12px">
               <div style="font-weight:700; color:var(--text); display:flex; align-items:center">${star(w)}${grip}${_escapeHtml(w.name)}${_modBadge(w)}</div>
-              <div style="font-size:var(--f-xs); color:var(--text3); ${isManual ? 'padding-left:20px' : ''}">${w.range ? 'Range: ' + w.range : 'Melee'} | ${w.type}${w.stuff ? ' | ' + ((findMaterial(w.stuff, this.state.materials) || {}).label || w.stuff) : ''}</div>
+              <div style="font-size:var(--f-xs); color:var(--text3); ${isManual ? 'padding-left:20px' : ''}">${w.range ? 'Range: ' + w.range : 'Melee'} | ${w.type}${w.stuff ? ' | ' + _escapeHtml(((findMaterial(w.stuff, this.state.materials) || {}).label || w.stuff)) : ''}</div>
             </td>
             <td style="padding:12px">
               <span style="font-size:var(--f-xs); font-weight:700; color:${q.color}; text-transform:uppercase; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px">${q.label}</span>
@@ -620,8 +737,8 @@ Object.assign(App, {
             <td style="padding:12px; text-align:center">${w.type === 'ranged' ? dps.long.toFixed(2) : '-'}</td>
             <td style="padding:12px; text-align:center; color:var(--p2-txt)">${((dps.ap || 0) * 100).toFixed(0)}%</td>
             <td style="padding:12px; text-align:right">
-              <button class="btn btn-sm" onclick="App.openWeaponEditor('${w.id}')">Edit</button>
-              <button class="btn btn-sm btn-danger" onclick="App.deleteWeapon('${w.id}')">Delete</button>
+              <button class="btn btn-sm" data-gear-id="${_escapeHtml(w.id)}" onclick="App.openWeaponEditor(this.dataset.gearId)">Edit</button>
+              <button class="btn btn-sm btn-danger" data-gear-id="${_escapeHtml(w.id)}" onclick="App.deleteWeapon(this.dataset.gearId)">Delete</button>
             </td>
           </tr>`;
       });
@@ -630,7 +747,7 @@ Object.assign(App, {
     }
 
     // Quality modifier reference
-    if (isWidget) {
+    if (isCompact) {
       html += `
         <div class="settings-card" style="background:var(--surface2); margin-top:8px; padding:8px">
           <div class="section-title section-title--sm">Quality Modifiers</div>
@@ -699,7 +816,7 @@ Object.assign(App, {
             <label class="settings-label" style="font-size:var(--f-xs); color:var(--accent)">Pre-fill from Armoury</label>
             <select class="skill-input" style="width:100%; margin-top:2px" onchange="App.prefillComparison('${side}', this.value)">
               <option value="">-- Select Weapon --</option>
-              ${weapons.map(x => `<option value="${x.id}" ${x.name === w.name ? 'selected' : ''}>${_escapeHtml(x.name)}</option>`).join('')}
+              ${weapons.map(x => `<option value="${_escapeHtml(x.id)}" ${x.id === w.id ? 'selected' : ''}>${_escapeHtml(x.name)}</option>`).join('')}
             </select>
           </div>
           <div>
@@ -731,6 +848,7 @@ Object.assign(App, {
     document.getElementById('comp-form-a').innerHTML = renderForm('a');
     document.getElementById('comp-form-b').innerHTML = renderForm('b');
 
+    this.renderThreatControls();
     this.analyzeComparison();
   },
 
@@ -739,8 +857,11 @@ Object.assign(App, {
     const b = this.state.comparisonData.b;
 
     // Use the shared DPS engine - same formula and quality multipliers as the list view
-    const resA = this._calcWeaponDPS(a);
-    const resB = this._calcWeaponDPS(b);
+    const targetSharp = Math.max(0, Math.min(200, Number(this.state.comparisonData.targetSharp) || 0));
+    const targetBlunt = Math.max(0, Math.min(200, Number(this.state.comparisonData.targetBlunt) || 0));
+    const resA = this._calcWeaponDPS(a, targetSharp, targetBlunt);
+    const resB = this._calcWeaponDPS(b, targetSharp, targetBlunt);
+    const threat = this._activeThreatPreset();
 
     const getAnalysis = (main, mainRes, other, otherRes) => {
       const pros = [], cons = [];
@@ -810,6 +931,7 @@ Object.assign(App, {
 
     const analysisEl = document.getElementById('comparisonAnalysis');
     analysisEl.innerHTML = `
+      <div style="font-size:var(--f-xs); color:var(--text3); text-align:center; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:12px">Effective DPS vs ${_escapeHtml(threat ? threat.label : 'Custom armour')} - ${targetSharp}% sharp / ${targetBlunt}% blunt</div>
       <div style="display:grid; grid-template-columns: 1fr 1fr; gap:32px">
         <!-- Weapon A Analysis -->
         <div style="background:rgba(56,140,232,0.05); padding:16px; border-radius:12px; border:1px solid rgba(56,140,232,0.1)">
@@ -891,7 +1013,7 @@ Object.assign(App, {
     const title = document.getElementById('weaponModalTitle');
     if (!modal || !body) return;
 
-    const w = id ? this.state.weapons.find(x => x.id === id) : {
+    const blank = {
       id: 'w_' + Date.now(),
       name: '',
       type: 'ranged',
@@ -908,9 +1030,15 @@ Object.assign(App, {
       ap: 0.15,
       stoppingPower: 1.0
     };
+    const currentDraft = this.state.weaponEditing;
+    const stored = id ? this.state.weapons.find(x => x.id === id) : null;
+    const w = currentDraft && id && currentDraft.id === id
+      ? currentDraft
+      : { ...(stored || blank), stuffCategories: [...((stored || blank).stuffCategories || [])] };
+    const isExisting = !!stored;
 
     this.state.weaponEditing = w;
-    title.textContent = id ? 'Edit Weapon' : 'Add New Weapon';
+    title.textContent = isExisting ? 'Edit Weapon' : 'Add New Weapon';
     
     body.innerHTML = `
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
@@ -924,7 +1052,7 @@ Object.assign(App, {
         </div>
         <div>
           <label style="display:block; font-size:var(--f-xs); color:var(--text3); text-transform:uppercase; font-weight:700; margin-bottom:4px">Type</label>
-          <select id="edit-w-type" class="skill-input" style="width:100%" onchange="App.state.weaponEditing.type=this.value; App.openWeaponEditor('${id || ''}')">
+          <select id="edit-w-type" class="skill-input" style="width:100%" onchange="App.state.weaponEditing.type=this.value; App.openWeaponEditor(App.state.weaponEditing.id)">
             <option value="ranged" ${w.type === 'ranged' ? 'selected' : ''}>Ranged</option>
             <option value="melee" ${w.type === 'melee' ? 'selected' : ''}>Melee</option>
           </select>
@@ -947,7 +1075,7 @@ Object.assign(App, {
           <select id="edit-w-stuff" class="skill-input" style="width:100%">
             <option value="">None (base stats)</option>
             ${(w.stuffBased ? getAvailableMaterials(w, this.state.materials) : (this.state.materials || DEFAULT_MATERIALS)).map(m =>
-              '<option value="' + m.id + '"' + (w.stuff === m.id ? ' selected' : '') + '>' + _escapeHtml(m.label) + (m.modSource ? ' (' + _escapeHtml(m.modSource) + ')' : '') + '</option>'
+              '<option value="' + _escapeHtml(m.id) + '"' + (w.stuff === m.id ? ' selected' : '') + '>' + _escapeHtml(m.label) + (m.modSource ? ' (' + _escapeHtml(m.modSource) + ')' : '') + '</option>'
             ).join('')}
           </select>
           <div style="display:flex; align-items:center; gap:6px; margin-top:4px">
@@ -1213,8 +1341,8 @@ Object.assign(App, {
     const lo = this.state[key] || (this.state[key] = {});
     if (slotKey === 'weapon') { lo.weapon = id || null; this.renderApparelLoadout(); return; }
     if (!id) { lo[slotKey] = null; this.renderApparelLoadout(); return; }
-    // Belt slots are independent (a pawn can wear two belt-layer items): set just this one.
-    if (slotKey === 'belt' || slotKey === 'belt2') { lo[slotKey] = id; this.renderApparelLoadout(); return; }
+    // RimWorld has one Waist/Belt utility slot. Setting it replaces the current utility.
+    if (slotKey === 'belt') { lo[slotKey] = id; this.renderApparelLoadout(); return; }
     // Place the item in EVERY slot it covers, so a multi-coverage piece (duster, power armour)
     // fills all its slots at once, and clear whatever it displaces there.
     const item = (this.state.apparel || []).find(a => a.id === id);
@@ -1314,7 +1442,7 @@ Object.assign(App, {
       if (pawn) {
         const skill = this.effectiveSkill(pawn, 'shoot');
         const eff = (dps, dist) => dps == null ? '-' : (dps * this._pawnHitFactor(skill, dist)).toFixed(1);
-        lines.push(`In ${pawn.nickname || pawn.name}'s hands (Shooting ${skill}):`);
+        lines.push(`In ${_pawnDisplayName(pawn)}'s hands (Shooting ${skill}):`);
         lines.push(`Effective DPS T/S/M/L: ${eff(r.touch, 3)} / ${eff(r.short, 12)} / ${eff(r.medium, 25)} / ${eff(r.long, 40)}`);
       }
     } else {
@@ -1357,19 +1485,37 @@ Object.assign(App, {
     { key: 'hands',      label: 'Hands' },
     { key: 'feet',       label: 'Feet' },
     { key: 'belt',       label: 'Belt',   belt: true },
-    { key: 'belt2',      label: 'Belt 2', belt: true }, // a pawn can wear 2 belt-layer items
   ],
+
+  _apparelCoversRegion(item, region) {
+    if (!item || item.type === 'utility') return false;
+    const cov = Array.isArray(item.coverage)
+      ? item.coverage.map(c => String(c).toLowerCase()) : [];
+    if (!cov.length) return region === 'torso';
+    const has = (...keys) => keys.some(k => cov.some(c => c.includes(k)));
+    if (region === 'head') return has('head', 'skull', 'eye', 'ear', 'mouth', 'jaw', 'teeth', 'tongue');
+    if (region === 'arms') return has('arm', 'shoulder');
+    if (region === 'hands') return has('hand');
+    if (region === 'legs') return has('leg', 'thigh');
+    if (region === 'feet') return has('foot', 'feet');
+    return has('torso', 'chest', 'neck', 'waist');
+  },
 
   // Which loadout slot(s) an apparel item occupies, from its layer + coverage (body-part
   // groups). Multi-coverage items (a duster, power armour) span several slots.
   _apparelSlotsFor(item) {
     if (!item) return [];
     const layer = String(item.layer || 'outer').toLowerCase();
-    const cov = (item.coverage || []).map(c => String(c).toLowerCase());
+    const cov = (Array.isArray(item.coverage) ? item.coverage : []).map(c => String(c).toLowerCase());
     const has = (...keys) => keys.some(k => cov.some(c => c.includes(k)));
     if (layer === 'belt') return ['belt'];
     if (layer === 'eyes') return ['eyes'];
-    if (layer === 'head') return has('eye') ? ['eyes'] : ['head'];
+    if (layer === 'head') {
+      const headSlots = [];
+      if (has('full head', 'upper head', 'skull', 'head', 'ear', 'mouth', 'teeth', 'tongue', 'jaw')) headSlots.push('head');
+      if (has('eye')) headSlots.push('eyes');
+      return headSlots.length ? headSlots : ['head'];
+    }
     // Body layers (OnSkin / Middle / Shell) combine with the region from coverage.
     const L = layer === 'skin' ? 'Skin' : layer === 'middle' ? 'Mid' : 'Shell';
     const slots = [];
@@ -1416,7 +1562,7 @@ Object.assign(App, {
       <label style="width:60px; font-weight:700; font-size:var(--f-xs); color:var(--accent); text-transform:uppercase">Weapon</label>
       <select class="skill-input" style="flex:1; font-size:var(--f-xs)" onchange="App.updateLoadout('${side}', 'weapon', this.value)">
         <option value="">None</option>
-        ${weapons.map(w => `<option value="${w.id}" ${selWeapon === w.id ? 'selected' : ''}>${_escapeHtml(w.name)}</option>`).join('')}
+        ${weapons.map(w => `<option value="${_escapeHtml(w.id)}" ${selWeapon === w.id ? 'selected' : ''}>${_escapeHtml(w.name)}</option>`).join('')}
       </select>
     </div>`;
 
@@ -1434,7 +1580,7 @@ Object.assign(App, {
         <label style="width:92px; flex-shrink:0; font-weight:700; font-size:calc(var(--f-xs) * 0.92); color:var(--text3); text-transform:uppercase; letter-spacing:0.02em">${slot.label}</label>
         <select class="skill-input" style="flex:1; min-width:0; font-size:var(--f-xs)" onchange="App.updateLoadout('${side}', '${slot.key}', this.value)">
           <option value="">None</option>
-          ${items.map(item => `<option value="${item.id}" ${selectedId === item.id ? 'selected' : ''}>${_escapeHtml(item.name)}</option>`).join('')}
+          ${items.map(item => `<option value="${_escapeHtml(item.id)}" ${selectedId === item.id ? 'selected' : ''}>${_escapeHtml(item.name)}</option>`).join('')}
         </select>
       </div>`;
     });
@@ -1460,6 +1606,14 @@ Object.assign(App, {
     const hasA = itemsA.length > 0 || !!wA;
     const hasB = itemsB.length > 0 || !!wB;
     const hasBoth = hasA && hasB;
+    const coverageRegions = [
+      { id: 'torso', label: 'Torso' }, { id: 'head', label: 'Head' },
+      { id: 'arms', label: 'Arms' }, { id: 'hands', label: 'Hands' },
+      { id: 'legs', label: 'Legs' }, { id: 'feet', label: 'Feet' },
+    ];
+    const coverageRegion = coverageRegions.some(r => r.id === this.state.loadoutCoverageRegion)
+      ? this.state.loadoutCoverageRegion : 'torso';
+    const coverageLabel = coverageRegions.find(r => r.id === coverageRegion).label;
 
     let comparison = '';
     if (hasA || hasB) {
@@ -1468,8 +1622,9 @@ Object.assign(App, {
       const fmtMass = (v) => v.toFixed(2) + ' kg';
 
       const calcSide = (items, wpn) => {
-        const prot0 = Engine.calculateLoadoutProtection(items, 0);
-        const prot20 = Engine.calculateLoadoutProtection(items, 20);
+        const coveringItems = items.filter(item => this._apparelCoversRegion(item, coverageRegion));
+        const prot0 = Engine.calculateLoadoutProtection(coveringItems, 0);
+        const prot20 = Engine.calculateLoadoutProtection(coveringItems, 20);
         // Find the utility (belt) item and compute shield stats + stat offsets
         const utilItem = items.find(i => i.type === 'utility');
         const shield = utilItem ? this._calcShieldStats(utilItem) : null;
@@ -1483,7 +1638,7 @@ Object.assign(App, {
           moveSpeed: items.reduce((s, i) => s + (i.moveSpeed || 0) + ((i.statOffsets && i.statOffsets.moveSpeed) || 0), 0),
           weapon: wpn || null,
           weaponName: wpn ? wpn.name : '-',
-          weaponDps: wpn ? (this._calcWeaponDPS(wpn).paper || 0) : 0,
+          weaponDps: wpn ? (this._calcWeaponDPS(wpn, 0, 0, utilItem).paper || 0) : 0,
           shield: shield,
           statOffsets: statOffsets,
           utilItem: utilItem || null,
@@ -1533,7 +1688,15 @@ Object.assign(App, {
       };
 
       comparison = `<div class="settings-card" style="background:var(--surface2)">
-        <h3 class="section-title section-title--sm" style="text-align:center; margin-bottom:12px">${hasBoth ? 'A vs B Comparison' : 'Protection Analysis'}</h3>
+        <div style="display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:8px; margin-bottom:12px">
+          <h3 class="section-title section-title--sm" style="margin:0">${hasBoth ? 'A vs B Comparison' : 'Protection Analysis'}</h3>
+          <label style="font-size:var(--f-xs); color:var(--text3)">Body region
+            <select class="skill-input" style="width:auto; margin-left:4px" onchange="App.state.loadoutCoverageRegion=this.value; App.renderApparelLoadout()">
+              ${coverageRegions.map(r => `<option value="${r.id}" ${r.id === coverageRegion ? 'selected' : ''}>${r.label}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <div style="font-size:var(--f-xs); color:var(--text3); text-align:center; margin-bottom:10px">Only apparel covering the selected ${coverageLabel.toLowerCase()} region is included.</div>
         <div style="font-size:var(--f-xs); color:var(--text3); text-align:center; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px">Vs. 0 AP (Unarmoured)</div>
         ${row('Deflection', s => s.prot0.zero, format)}
         ${row('Partial', s => s.prot0.sharp50blunt + s.prot0.blunt50 + s.prot0.blunt25, format)}
@@ -1598,7 +1761,7 @@ Object.assign(App, {
     const gearedPawns = (this.state.pawns || []).filter(p => p.equippedWeapon || (p.wornApparel && p.wornApparel.length));
     // Keep each side's dropdown showing the pawn it was seeded from (marked selected).
     const seedSel = this.state.loadoutSeedPawn || {};
-    const seedOptsFor = (side) => gearedPawns.map(p => `<option value="${p.id}" ${p.id === seedSel[side] ? 'selected' : ''}>${_escapeHtml(p.nickname || p.name || '?')}</option>`).join('');
+    const seedOptsFor = (side) => gearedPawns.map(p => `<option value="${_escapeHtml(p.id)}" ${p.id === seedSel[side] ? 'selected' : ''}>${_escapeHtml(_pawnDisplayName(p, '?'))}</option>`).join('');
     const seedBar = gearedPawns.length ? `
       <div class="settings-card" style="margin-bottom:var(--gap-md); display:flex; flex-wrap:wrap; align-items:center; gap:10px">
         <span style="font-weight:700; font-size:var(--f-xs); color:var(--text3)">Seed from a pawn's imported gear:</span>
@@ -1664,8 +1827,11 @@ Object.assign(App, {
       if (item) {
         const sl = this._apparelSlotsFor(item);
         if (sl[0] === 'belt') {
-          // Drop into the first free belt slot so a second belt isn't overwritten.
-          lo[!lo.belt ? 'belt' : (!lo.belt2 ? 'belt2' : 'belt')] = item.id;
+          if (lo.belt) {
+            unmatched.push(this._defLabelOrHumanize(a.def) + ' (extra utility slot)');
+            return;
+          }
+          lo.belt = item.id;
         } else {
           for (const k of sl) lo[k] = item.id;
         }
@@ -1677,7 +1843,7 @@ Object.assign(App, {
     if (!this.state.loadoutSeedPawn) this.state.loadoutSeedPawn = {};
     this.state.loadoutSeedPawn[side] = pawnId; // so the dropdown shows this pawn, not "Pawn…"
     this.renderApparelLoadout();
-    const who = p.nickname || p.name || 'pawn';
+    const who = _pawnDisplayName(p, 'pawn');
     if (matched < total) {
       const names = unmatched.slice(0, 5).join(', ') + (unmatched.length > 5 ? `, +${unmatched.length - 5} more` : '');
       this.toast(`Loadout ${side.toUpperCase()} seeded from ${who}: ${matched}/${total} matched. Not in your lists yet: ${names}. The mod scan does not catch every item; add them in the Armoury/Apparel tab.`, 8000);
@@ -1730,14 +1896,16 @@ Object.assign(App, {
     const c = document.getElementById('apparelContent');
     if (!c) return;
     const allItems = this.state.apparel || [];
-    const isWidget = window.innerWidth <= 550;
+    const isCompact = this._isCompactArmouryLayout(c);
+    this._armouryCompactLayout = isCompact;
+    c.classList.toggle('gear-compact', isCompact);
 
     if (allItems.length === 0) {
       c.innerHTML = `
-        <div class="widget-gear-empty" style="grid-column:1/-1; text-align:center; padding:${isWidget ? '24px 12px' : '60px 20px'}; border:2px dashed var(--border-med); border-radius:12px; color:var(--text3)">
-          <div style="font-size:${isWidget ? '18px' : 'calc(var(--f-base) * 2.4)'}; margin-bottom:16px; color:var(--text3)">APPAREL</div>
-          <h3 style="color:var(--text2); margin-bottom:8px; font-size:${isWidget ? '12px' : 'inherit'}">No apparel items defined</h3>
-          <p style="font-size:${isWidget ? '11px' : 'inherit'}">Add armour, clothing, or utility items.</p>
+        <div class="widget-gear-empty" style="grid-column:1/-1; text-align:center; padding:${isCompact ? '24px 12px' : '60px 20px'}; border:2px dashed var(--border-med); border-radius:12px; color:var(--text3)">
+          <div style="font-size:${isCompact ? '18px' : 'calc(var(--f-base) * 2.4)'}; margin-bottom:16px; color:var(--text3)">APPAREL</div>
+          <h3 style="color:var(--text2); margin-bottom:8px; font-size:${isCompact ? '12px' : 'inherit'}">No apparel items defined</h3>
+          <p style="font-size:${isCompact ? '11px' : 'inherit'}">Add armour, clothing, or utility items.</p>
           <button class="btn" onclick="App.openApparelEditor()" style="margin-top:12px">+ Add Item</button>
         </div>`;
       return;
@@ -1753,6 +1921,15 @@ Object.assign(App, {
     const sortDir = this._apparelSortDir;
     const calcStats = (item) => this._calcApparelStats(item);
     const items = this._applyFavouriteSort(filtered, sortField, sortDir, calcStats);
+    const pageSize = this._gearPageSize;
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const page = Math.min(Math.max(0, this._apparelPage || 0), pageCount - 1);
+    this._apparelPage = page;
+    const visibleItems = items.slice(page * pageSize, (page + 1) * pageSize);
+    const rangeStart = items.length ? page * pageSize + 1 : 0;
+    const rangeEnd = Math.min((page + 1) * pageSize, items.length);
+    const pageOptions = Array.from({ length: pageCount }, (_, index) =>
+      `<option value="${index}" ${index === page ? 'selected' : ''}>Page ${index + 1} of ${pageCount}</option>`).join('');
 
     const modCount = allItems.filter(a => a.modSource).length;
     const hasModItems = modCount > 0;
@@ -1761,7 +1938,7 @@ Object.assign(App, {
     // Star icon helper
     const star = (item) => {
       const on = item.favourite;
-      return `<span class="gear-fav" style="cursor:pointer; font-size:14px; color:${on ? 'var(--accent)' : 'var(--text3)'}; opacity:${on ? '1' : '0.4'}; margin-right:6px" onclick="event.stopPropagation(); App.toggleApparelFavourite('${item.id}')" title="${on ? 'Unfavourite' : 'Favourite'}">${on ? '★' : '☆'}</span>`;
+      return `<span class="gear-fav" data-gear-id="${_escapeHtml(item.id)}" style="cursor:pointer; font-size:14px; color:${on ? 'var(--accent)' : 'var(--text3)'}; opacity:${on ? '1' : '0.4'}; margin-right:6px" onclick="event.stopPropagation(); App.toggleApparelFavourite(this.dataset.gearId)" title="${on ? 'Unfavourite' : 'Favourite'}">${on ? '★' : '☆'}</span>`;
     };
     const grip = isManual ? '<span style="cursor:grab; color:var(--text3); opacity:0.5; margin-right:6px; font-size:12px" title="Drag to reorder">☰</span>' : '';
 
@@ -1792,7 +1969,12 @@ Object.assign(App, {
         ${hasModItems ? '<option value="mod" ' + (sortField === 'mod' ? 'selected' : '') + '>Mod Source</option>' : ''}
       </select>
       ${sortField !== 'manual' ? `<button class="btn btn-sm" style="font-size:10px; padding:2px 8px" onclick="App._apparelSortDir = App._apparelSortDir === 'asc' ? 'desc' : 'asc'; App.renderApparelList()">${sortDir === 'asc' ? '&#9650; Asc' : '&#9660; Desc'}</button>` : ''}
-      <span style="margin-left:auto; color:var(--text3)">${filtered.length} item${filtered.length !== 1 ? 's' : ''}</span>
+      <span style="margin-left:auto; color:var(--text3)">${rangeStart}-${rangeEnd} of ${items.length} item${items.length !== 1 ? 's' : ''}</span>
+      ${pageCount > 1 ? `<div class="gear-pagination">
+        <button class="btn btn-sm" onclick="App.setApparelPage(${page - 1})" ${page === 0 ? 'disabled' : ''} aria-label="Previous apparel page">&lt;</button>
+        <select class="skill-input" onchange="App.setApparelPage(this.value)" aria-label="Apparel page">${pageOptions}</select>
+        <button class="btn btn-sm" onclick="App.setApparelPage(${page + 1})" ${page === pageCount - 1 ? 'disabled' : ''} aria-label="Next apparel page">&gt;</button>
+      </div>` : ''}
     </div>`;
 
     if (modCount > 0) {
@@ -1802,11 +1984,11 @@ Object.assign(App, {
       </div>`;
     }
 
-    const dragAttrs = (id) => isManual ? `draggable="true" ondragstart="App.handleApparelDragStart(event,'${id}')" ondragover="App.handleApparelDragOver(event)" ondragleave="App.handleApparelDragLeave(event)" ondrop="App.handleApparelDrop(event,'${id}')" ondragend="App.handleApparelDragEnd(event)"` : '';
+    const dragAttrs = (id) => isManual ? `data-gear-id="${_escapeHtml(id)}" draggable="true" ondragstart="App.handleApparelDragStart(event,this.dataset.gearId)" ondragover="App.handleApparelDragOver(event)" ondragleave="App.handleApparelDragLeave(event)" ondrop="App.handleApparelDrop(event,this.dataset.gearId)" ondragend="App.handleApparelDragEnd(event)"` : '';
 
-    if (isWidget) {
+    if (isCompact) {
       html += `<div style="display:flex; flex-direction:column; gap:8px">`;
-      items.forEach(item => {
+      visibleItems.forEach(item => {
         const s = this._calcApparelStats(item);
         const q = this._apparelQuality(item.quality);
         const layerDef = APPAREL_LAYERS.find(l => l.id === item.layer) || { label: item.layer };
@@ -1832,13 +2014,13 @@ Object.assign(App, {
             <div style="display:flex; justify-content:space-between; align-items:center">
               <div>
                 <div class="widget-gear-name">${star(item)}${grip}${_escapeHtml(item.name)}${_modBadge(item)}</div>
-                <div class="widget-gear-sub">${layerDef.label} · <span style="color:${q.color}; font-weight:700">${q.label}</span>${item.stuff ? ' · ' + ((findMaterial(item.stuff, this.state.materials) || {}).label || item.stuff) : ''} · ${s.mass}kg</div>
+                <div class="widget-gear-sub">${_escapeHtml(layerDef.label)} · <span style="color:${q.color}; font-weight:700">${q.label}</span>${item.stuff ? ' · ' + _escapeHtml(((findMaterial(item.stuff, this.state.materials) || {}).label || item.stuff)) : ''} · ${s.mass}kg</div>
               </div>
             </div>
             ${statsHtml}
             <div class="widget-gear-actions">
-              <button class="btn btn-sm" onclick="App.openApparelEditor('${item.id}')">Edit</button>
-              <button class="btn btn-sm btn-danger" onclick="App.deleteApparel('${item.id}')">Del</button>
+              <button class="btn btn-sm" data-gear-id="${_escapeHtml(item.id)}" onclick="App.openApparelEditor(this.dataset.gearId)">Edit</button>
+              <button class="btn btn-sm btn-danger" data-gear-id="${_escapeHtml(item.id)}" onclick="App.deleteApparel(this.dataset.gearId)">Del</button>
             </div>
           </div>`;
       });
@@ -1852,8 +2034,8 @@ Object.assign(App, {
       };
 
       html += `
-        <div style="overflow-x:auto">
-          <table class="armoury-table" style="width:100%; border-collapse:collapse; background:var(--surface2); border:1px solid var(--border-med); border-radius:var(--radius-lg); overflow:hidden">
+        <div class="gear-table-scroll">
+          <table class="armoury-table armoury-table--apparel" style="width:100%; border-collapse:collapse; background:var(--surface2); border:1px solid var(--border-med); border-radius:var(--radius-lg); overflow:hidden">
             <thead>
               <tr style="background:var(--surface3); text-align:left">
                 ${thSort('name', 'ITEM', '')}
@@ -1869,11 +2051,11 @@ Object.assign(App, {
             </thead>
             <tbody>`;
 
-      items.forEach(item => {
+      visibleItems.forEach(item => {
         const s = this._calcApparelStats(item);
         const q = this._apparelQuality(item.quality);
         const layerDef = APPAREL_LAYERS.find(l => l.id === item.layer) || { label: item.layer };
-        const coverageLabels = (item.coverage || [])
+        const coverageLabels = (Array.isArray(item.coverage) ? item.coverage : [])
           .map(cid => APPAREL_COVERAGE.find(c => c.id === cid)?.label || cid)
           .join(', ') || '-';
         const utilStats = this._utilityStatsSummary(item);
@@ -1896,7 +2078,7 @@ Object.assign(App, {
           <tr style="border-bottom:1px solid var(--border); ${item.favourite ? 'background:rgba(232,168,56,0.04)' : ''}" ${dragAttrs(item.id)}>
             <td style="padding:12px">
               <div style="font-weight:700; color:var(--text); display:flex; align-items:center">${star(item)}${grip}${_escapeHtml(item.name)}${_modBadge(item)}</div>
-              <div style="font-size:var(--f-xs); color:var(--text3); margin-top:2px">${layerDef.label}${item.stuff ? ' · ' + ((findMaterial(item.stuff, this.state.materials) || {}).label || item.stuff) : ''} · ${coverageLabels}</div>
+              <div style="font-size:var(--f-xs); color:var(--text3); margin-top:2px">${_escapeHtml(layerDef.label)}${item.stuff ? ' · ' + _escapeHtml(((findMaterial(item.stuff, this.state.materials) || {}).label || item.stuff)) : ''} · ${_escapeHtml(coverageLabels)}</div>
             </td>
             <td style="padding:12px">
               <span style="font-size:var(--f-xs); font-weight:700; color:${q.color}; text-transform:uppercase; background:rgba(0,0,0,0.2); padding:2px 6px; border-radius:4px">${q.label}</span>
@@ -1904,8 +2086,8 @@ Object.assign(App, {
             ${statCells}
             <td style="padding:12px; text-align:center; color:var(--text2)">${s.mass}kg</td>
             <td style="padding:12px; text-align:right">
-              <button class="btn btn-sm" onclick="App.openApparelEditor('${item.id}')">Edit</button>
-              <button class="btn btn-sm btn-danger" onclick="App.deleteApparel('${item.id}')">Delete</button>
+              <button class="btn btn-sm" data-gear-id="${_escapeHtml(item.id)}" onclick="App.openApparelEditor(this.dataset.gearId)">Edit</button>
+              <button class="btn btn-sm btn-danger" data-gear-id="${_escapeHtml(item.id)}" onclick="App.deleteApparel(this.dataset.gearId)">Delete</button>
             </td>
           </tr>`;
       });
@@ -1915,7 +2097,7 @@ Object.assign(App, {
 
     // Quality guide
     let qualityGuide;
-    if (isWidget) {
+    if (isCompact) {
       qualityGuide = `
         <div class="settings-card" style="background:var(--surface2); margin-top:8px; padding:8px">
           <div class="section-title section-title--sm">Quality Modifiers</div>
@@ -1955,7 +2137,7 @@ Object.assign(App, {
         </div>`;
     }
 
-    c.innerHTML = `<div style="display:flex; flex-direction:column; gap:${isWidget ? '12px' : '16px'}">${html}${qualityGuide}</div>`;
+    c.innerHTML = `<div style="display:flex; flex-direction:column; gap:${isCompact ? '12px' : '16px'}">${html}${qualityGuide}</div>`;
   },
 
   renderApparelComparisonView() {
@@ -1969,7 +2151,7 @@ Object.assign(App, {
             <label class="settings-label" style="font-size:var(--f-xs); color:var(--accent)">Pre-fill Item</label>
             <select class="skill-input" style="width:100%; margin-top:2px" onchange="App.prefillApparelComparison('${side}', this.value)">
               <option value="">-- Select Item --</option>
-              ${items.map(x => `<option value="${x.id}" ${x.name === w.name ? 'selected' : ''}>${_escapeHtml(x.name)}</option>`).join('')}
+              ${items.map(x => `<option value="${_escapeHtml(x.id)}" ${x.id === w.id ? 'selected' : ''}>${_escapeHtml(x.name)}</option>`).join('')}
             </select>
           </div>
           <div>
@@ -2194,20 +2376,18 @@ Object.assign(App, {
       radius: 0,
     };
 
-    const storedItem = id ? (this.state.apparel.find(x => x.id === id) || blank) : blank;
-    this.state.apparelEditing = { ...storedItem, coverage: [...(storedItem.coverage || [])] };
-    // Preserve type override when user switches type dropdown on an existing item.
-    // The onchange sets apparelEditing.type THEN re-calls openApparelEditor, but the
-    // line above re-reads the stored item (old type). Detect same-id re-render and
-    // apply the type the user just chose.
-    const isTypeSwitch = prevEditing && id && prevEditing.id === storedItem.id && prevEditing.type !== storedItem.type;
-    if (isTypeSwitch) {
-      this.state.apparelEditing.type = prevEditing.type;
-      if (prevEditing.type === 'utility') this.state.apparelEditing.layer = 'belt';
-    }
+    const storedItem = id ? this.state.apparel.find(x => x.id === id) : null;
+    const sourceItem = prevEditing && id && prevEditing.id === id
+      ? prevEditing : (storedItem || blank);
+    this.state.apparelEditing = {
+      ...sourceItem,
+      coverage: [...(sourceItem.coverage || [])],
+      statOffsets: sourceItem.statOffsets ? { ...sourceItem.statOffsets } : undefined,
+    };
+    if (this.state.apparelEditing.type === 'utility') this.state.apparelEditing.layer = 'belt';
     // Use the editing copy for template rendering (reflects type override)
     const item = this.state.apparelEditing;
-    title.textContent = id ? 'Edit Apparel Item' : 'Add Apparel Item';
+    title.textContent = storedItem ? 'Edit Apparel Item' : 'Add Apparel Item';
 
 
     const coverageCheckboxes = APPAREL_COVERAGE.map(c => `
@@ -2236,7 +2416,7 @@ Object.assign(App, {
         <div>
           <label class="editor-label">Type</label>
           <select id="app-type" class="skill-input" style="width:100%"
-            onchange="App.state.apparelEditing.type=this.value; App.openApparelEditor('${id || ''}')">
+            onchange="App.state.apparelEditing.type=this.value; App.openApparelEditor(App.state.apparelEditing.id)">
             ${APPAREL_TYPES.map(t => `<option value="${t.id}" ${item.type===t.id?'selected':''}>${t.label}</option>`).join('')}
           </select>
         </div>
@@ -2260,12 +2440,12 @@ Object.assign(App, {
           <select id="app-stuff" class="skill-input" style="width:100%">
             <option value="">None (base stats)</option>
             ${(item.stuffBased ? getAvailableMaterials(item, this.state.materials) : (this.state.materials || DEFAULT_MATERIALS)).map(m =>
-              '<option value="' + m.id + '"' + (item.stuff === m.id ? ' selected' : '') + '>' + _escapeHtml(m.label) + (m.modSource ? ' (' + _escapeHtml(m.modSource) + ')' : '') + '</option>'
+              '<option value="' + _escapeHtml(m.id) + '"' + (item.stuff === m.id ? ' selected' : '') + '>' + _escapeHtml(m.label) + (m.modSource ? ' (' + _escapeHtml(m.modSource) + ')' : '') + '</option>'
             ).join('')}
           </select>
           <div style="display:flex; align-items:center; gap:6px; margin-top:4px">
             <input type="checkbox" id="app-stuff-based" ${item.stuffBased ? 'checked' : ''}
-              onchange="App.state.apparelEditing.stuffBased=this.checked; App.openApparelEditor('${id || ''}')"
+              onchange="App.state.apparelEditing.stuffBased=this.checked; App.openApparelEditor(App.state.apparelEditing.id)"
               style="width:14px; height:14px; accent-color:var(--accent)">
             <label for="app-stuff-based" style="font-size:var(--f-xs); color:var(--text3); cursor:pointer">Stuff-based (stats from material)</label>
           </div>
@@ -2499,11 +2679,12 @@ Object.assign(App, {
         const mcd = parseFloat(document.getElementById('app-so-mcd')?.value) || 0;
         const acc = parseFloat(document.getElementById('app-so-acc')?.value) || 0;
         const aim = parseFloat(document.getElementById('app-so-aim')?.value) || 0;
-        const offsets = {};
-        if (rcd) offsets.rangedCooldownFactor = rcd;
-        if (mcd) offsets.meleeCooldownFactor = mcd;
-        if (acc) offsets.shootingAccuracy = acc;
-        if (aim) offsets.aimingDelayFactor = aim;
+        const offsets = { ...(item.statOffsets || {}) };
+        const assignOffset = (key, value) => { if (value) offsets[key] = value; else delete offsets[key]; };
+        assignOffset('rangedCooldownFactor', rcd);
+        assignOffset('meleeCooldownFactor', mcd);
+        assignOffset('shootingAccuracy', acc);
+        assignOffset('aimingDelayFactor', aim);
         item.statOffsets = Object.keys(offsets).length > 0 ? offsets : undefined;
       }
       // Auto-set layer to belt for utility items
@@ -2621,7 +2802,7 @@ Object.assign(App, {
     }
 
     try {
-      const result = await window.overlay.scanModEquipment(installPath);
+      const result = await window.overlay.scanModEquipment(installPath, { background: silent });
       if (result.error) {
         closeT('Scan failed: ' + result.error, true);
         return;

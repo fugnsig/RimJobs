@@ -10,7 +10,7 @@ Object.assign(App, {
     if (!p) return;
     p.nickname = val;
     // Display value falls back to name when nickname is empty
-    const display = val || p.name || '';
+    const display = _pawnDisplayName(p, '');
     // Sync header name inputs only (not firstName/lastName fields in the card body)
     const card = document.querySelector(`.pawn-card[data-pawn-id="${id}"]`);
     if (card) {
@@ -42,8 +42,37 @@ Object.assign(App, {
   },
 
   // -- PRIORITY INTERACTIONS --
+  _manualPriorityMax() {
+    const raw = this.state.settings.manualPriorityMax;
+    const max = Math.max(4, Math.min(9, Math.trunc(Number(raw)) || 4));
+    this.state.settings.manualPriorityMax = max;
+    if (typeof PriorityScale.setManualMax === 'function') PriorityScale.setManualMax(max);
+    else PriorityScale.manualMax = max;
+    return max;
+  },
+
+  setManualPriorityMax(value) {
+    const max = Math.max(4, Math.min(9, Math.trunc(Number(value)) || 4));
+    this.state.settings.manualPriorityMax = max;
+    this._manualPriorityMax();
+    this.renderTable();
+    this.triggerAutoSave();
+  },
+
+  _priorityColourStyle(priority) {
+    if (!Number.isInteger(priority) || priority < 1) return '';
+    const max = Math.max(this._manualPriorityMax(), priority);
+    const progress = max <= 1 ? 0 : Math.min(1, (priority - 1) / (max - 1));
+    const hue = Math.round(120 * (1 - progress));
+    const accessibleStart = [0, 114, 178];
+    const accessibleEnd = [230, 159, 0];
+    const accessibleRgb = accessibleStart.map((value, index) =>
+      Math.round(value + ((accessibleEnd[index] - value) * progress))).join(',');
+    return ` style="--priority-hue:${hue};--priority-cb-rgb:${accessibleRgb}"`;
+  },
+
   // Renders one priority cell's inner box, honouring the manual/simple mode.
-  // Simple mode shows an on/off tick (on = priority 3); manual shows 1-4.
+  // Simple mode shows an on/off tick; manual shows numeric priorities.
   _prioCellHTML(pid, jid, prio) {
     const locked = this._prioritiesAreLocked();
     const lockAttrs = locked ? ' aria-disabled="true" title="Priorities are locked - unlock to edit"' : '';
@@ -52,7 +81,9 @@ Object.assign(App, {
       const title = locked ? '' : ` title="${on ? 'Enabled - click to disable' : 'Disabled - click to enable'}"`;
       return `<div class="prio-box prio-check ${on ? 'on' : 'empty'}" tabindex="0" onmousedown="App.handlePriorityClick(event, '${pid}', '${jid}')" onkeydown="App.handlePriorityKey(event, '${pid}', '${jid}')" oncontextmenu="event.preventDefault()"${lockAttrs}${title}>${on ? '✓' : '&nbsp;'}</div>`;
     }
-    return `<div class="prio-box ${prio ? 'p' + prio : 'empty'}" tabindex="0" onmousedown="App.handlePriorityClick(event, '${pid}', '${jid}')" onwheel="App.handlePriorityWheel(event, '${pid}', '${jid}')" onkeydown="App.handlePriorityKey(event, '${pid}', '${jid}')" oncontextmenu="event.preventDefault()"${lockAttrs}>${prio !== null ? prio : '&nbsp;'}</div>`;
+    const hasPriority = Number.isInteger(prio) && prio >= 1;
+    const priorityClass = hasPriority ? `priority-scaled p${prio}` : 'empty';
+    return `<div class="prio-box ${priorityClass}"${this._priorityColourStyle(prio)} tabindex="0" onmousedown="App.handlePriorityClick(event, '${pid}', '${jid}')" onwheel="App.handlePriorityWheel(event, '${pid}', '${jid}')" onkeydown="App.handlePriorityKey(event, '${pid}', '${jid}')" oncontextmenu="event.preventDefault()"${lockAttrs}>${hasPriority ? prio : '&nbsp;'}</div>`;
   },
 
   _prioritiesAreLocked() {
@@ -96,14 +127,41 @@ Object.assign(App, {
   togglePriorityLock() {
     this.state.settings.priorityLocked = !this._prioritiesAreLocked();
     this._syncPriorityLockControls();
-    this.renderTable();
-    const plannerOpen = typeof document !== 'undefined' && document.getElementById('workPlannerBody');
-    if (plannerOpen && typeof this.openWorkPlanner === 'function') this.openWorkPlanner();
-    else if (this._optimizerResult && typeof this.renderOptimizer === 'function') this.renderOptimizer();
+    const locked = this._prioritiesAreLocked();
+    const wrap = document.getElementById('tableWrap');
+    if (wrap) {
+      wrap.classList.toggle('priorities-locked', locked);
+      const cells = wrap.querySelectorAll('.prio-box:not(.incap)');
+      for (let i = 0; i < cells.length; i++) {
+        if (locked) cells[i].setAttribute('aria-disabled', 'true');
+        else cells[i].removeAttribute('aria-disabled');
+      }
+    }
+    const surfaces = [
+      document.getElementById('workPlannerBody'),
+      document.getElementById('optimizerPanel'),
+    ];
+    for (const surface of surfaces) {
+      if (!surface) continue;
+      const btns = surface.querySelectorAll('.btn');
+      for (let i = 0; i < btns.length; i++) {
+        const handler = btns[i].getAttribute('onclick') || '';
+        if (handler.includes('autoAssign') || handler.includes('ptimizerSuggestion')) {
+          btns[i].disabled = locked;
+          if (locked) {
+            btns[i].setAttribute('aria-disabled', 'true');
+            btns[i].title = 'Unlock priorities to make changes.';
+          } else {
+            btns[i].removeAttribute('aria-disabled');
+            btns[i].title = '';
+          }
+        }
+      }
+    }
     this.triggerAutoSave();
   },
 
-  // Toggle the Priorities table between manual (1-4) and simple (on/off) modes.
+  // Toggle the Priorities table between numbered and simple on/off modes.
   toggleManualPriorities() {
     this.state.settings.manualPriorities = !this.state.settings.manualPriorities;
     this.renderTable();
@@ -117,25 +175,20 @@ Object.assign(App, {
     if (!p) return;
     const cur = this.state.priorities[pid]?.[jid];
 
-    // Simple mode: any click just toggles the job on (priority 3) or off.
+    // Simple mode: any click just toggles the job on or off.
     if (!this.state.settings.manualPriorities) {
-      this.state.priorities[pid][jid] = (cur === null || cur === undefined || cur === 0) ? 3 : null;
+      this.state.priorities[pid][jid] = (cur === null || cur === undefined || cur === 0) ? PriorityScale.defaultEnabled() : null;
       this.renderTable();
       this.triggerAutoSave();
       return;
     }
 
-    // Left click:  numbers go down (blank → 4 → 3 → 2 → 1 → blank)
-    // Right click: numbers go up   (blank → 1 → 2 → 3 → 4 → blank)
-    if (e.button === 2) {
-      if (cur === null)   this.state.priorities[pid][jid] = 1;
-      else if (cur >= 4)  this.state.priorities[pid][jid] = null;
-      else                this.state.priorities[pid][jid] = cur + 1;
-    } else {
-      if (cur === null)   this.state.priorities[pid][jid] = 4;
-      else if (cur <= 1)  this.state.priorities[pid][jid] = null;
-      else                this.state.priorities[pid][jid] = cur - 1;
-    }
+    this._manualPriorityMax();
+    const leftRaises = this.state.settings.clickDirection !== 'left-to-low';
+    const towardsHighPriority = e.button === 2 ? !leftRaises : leftRaises;
+    this.state.priorities[pid][jid] = towardsHighPriority
+      ? PriorityScale.next(cur)
+      : PriorityScale.previous(cur);
     this.renderTable();
     this.triggerAutoSave();
   },
@@ -150,19 +203,14 @@ Object.assign(App, {
     // Respect user setting to disable scroll wheel on priorities
     if (this.state.settings.disableScrollWheel) return;
     const cur = this.state.priorities[pid]?.[jid];
+    this._manualPriorityMax();
     const invert = this.state.settings.invertWheel;
     const up = invert ? (e.deltaY > 0) : (e.deltaY < 0);
 
     if (up) {
-      // Scroll up = right click: blank→4→3→2→1→blank
-      if (cur === null)   this.state.priorities[pid][jid] = 4;
-      else if (cur <= 1)  this.state.priorities[pid][jid] = null;
-      else                this.state.priorities[pid][jid] = cur - 1;
+      this.state.priorities[pid][jid] = PriorityScale.next(cur);
     } else {
-      // Scroll down = left click: blank→1→2→3→4→blank
-      if (cur === null)   this.state.priorities[pid][jid] = 1;
-      else if (cur >= 4)  this.state.priorities[pid][jid] = null;
-      else                this.state.priorities[pid][jid] = cur + 1;
+      this.state.priorities[pid][jid] = PriorityScale.previous(cur);
     }
     this.renderTable();
     this.triggerAutoSave();
@@ -170,9 +218,10 @@ Object.assign(App, {
   handlePriorityKey(e, pid, jid) {
     if (!this._guardPriorityEdit('edit priorities')) return;
     const simple = !this.state.settings.manualPriorities;
-    if (e.key >= '1' && e.key <= '4') {
-      // In simple mode any number key just enables (priority 3).
-      this.state.priorities[pid][jid] = simple ? 3 : parseInt(e.key);
+    this._manualPriorityMax();
+    const digit = parseInt(e.key);
+    if (Number.isFinite(digit) && digit >= PriorityScale.highest && digit <= PriorityScale.lowestManual()) {
+      this.state.priorities[pid][jid] = simple ? PriorityScale.defaultEnabled() : digit;
       this.renderTable();
       this.triggerAutoSave();
     } else if (e.key === '0' || e.key === 'Delete' || e.key === 'Backspace') {
@@ -240,16 +289,109 @@ Object.assign(App, {
   },
 
   // -- AUTO ASSIGN --
+  _strategicFocusOptions() {
+    const visible = this._visibleJobs();
+    const visibleIds = new Set(visible.map(job => job.id));
+    const groups = typeof WORK_FOCUS_GROUPS !== 'undefined' ? WORK_FOCUS_GROUPS : [];
+    const options = [];
+    const covered = new Set();
+    groups.forEach(group => {
+      const targets = group.jobIds.filter(id => visibleIds.has(id));
+      if (!targets.length) return;
+      targets.forEach(id => covered.add(id));
+      options.push({ id: `group:${group.id}`, label: group.label, targetIds: targets, group: true });
+    });
+    visible.filter(job => !covered.has(job.id)).forEach(job => {
+      options.push({ id: `job:${job.id}`, label: job.name || job.id, targetIds: [job.id], group: false });
+    });
+    return options;
+  },
+
+  _strategicFocusConfig() {
+    const options = this._strategicFocusOptions();
+    const id = typeof this.state.settings.strategicFocusId === 'string'
+      ? this.state.settings.strategicFocusId : '';
+    const selected = options.find(option => option.id === id);
+    if (!selected) {
+      this.state.settings.strategicFocusId = '';
+      return { id: '', strength: 'normal', label: 'Balanced' };
+    }
+    const strength = this.state.settings.strategicFocusStrength === 'strong' ? 'strong' : 'normal';
+    this.state.settings.strategicFocusStrength = strength;
+    return {
+      id: selected.id,
+      strength,
+      label: selected.label,
+      protectionJobs: [...JOBS, ...(this.state.customJobs || [])],
+    };
+  },
+
+  _syncStrategicFocusControls() {
+    const focus = this._strategicFocusConfig();
+    const select = document.getElementById('strategicFocusSelect');
+    const strength = document.getElementById('strategicFocusStrength');
+    if (select) {
+      const options = this._strategicFocusOptions();
+      const signature = options.map(option => `${option.id}:${option.label}`).join('|');
+      if (select.dataset.focusOptions !== signature) {
+        const groups = options.filter(option => option.group);
+        const individual = options.filter(option => !option.group);
+        select.innerHTML = `<option value="">Balanced</option>`
+          + (groups.length ? `<optgroup label="Strategy">${groups.map(option =>
+            `<option value="${_escapeHtml(option.id)}">${_escapeHtml(option.label)}</option>`).join('')}</optgroup>` : '')
+          + (individual.length ? `<optgroup label="Individual work">${individual.map(option =>
+            `<option value="${_escapeHtml(option.id)}">${_escapeHtml(option.label)}</option>`).join('')}</optgroup>` : '');
+        select.dataset.focusOptions = signature;
+      }
+      if (select.value !== focus.id) select.value = focus.id;
+    }
+    if (strength) {
+      strength.value = focus.strength;
+      strength.disabled = !focus.id;
+      strength.setAttribute('aria-disabled', focus.id ? 'false' : 'true');
+    }
+  },
+
+  setStrategicFocus(id) {
+    const valid = this._strategicFocusOptions().some(option => option.id === id);
+    this.state.settings.strategicFocusId = valid ? id : '';
+    if (!valid) this.state.settings.strategicFocusStrength = 'normal';
+    this._syncStrategicFocusControls();
+    this.renderTable();
+    if (document.getElementById('workPlannerBody')) this.openWorkPlanner();
+    else if (this._optimizerResult) this.runOptimizer();
+    this.triggerAutoSave();
+    const focus = this._strategicFocusConfig();
+    this.toast(focus.id ? `Colony Focus: ${focus.label} (${focus.strength})` : 'Colony Focus: Balanced');
+  },
+
+  setStrategicFocusStrength(strength) {
+    this.state.settings.strategicFocusStrength = strength === 'strong' ? 'strong' : 'normal';
+    this._syncStrategicFocusControls();
+    if (document.getElementById('workPlannerBody')) this.openWorkPlanner();
+    else if (this._optimizerResult) this.runOptimizer();
+    this.triggerAutoSave();
+  },
+
   autoAssignAll() {
     if (!this._guardPriorityEdit('use Auto-Assign', true)) return false;
-    // Only assign the columns currently visible in the table.
+    this._manualPriorityMax();
+    Perf.start('autoAssign.total');
+    Perf._activeOp = 'autoAssign';
     const contextMap = this._c7PawnContextMap(
       this.state.pawns, this._c7EvidenceOptionsByPawn);
-    Engine.runMinMaxAssignment(
-      this.state.pawns, this.state.roles, this.state.priorities,
-      this._visibleJobs(), contextMap);
-    this.renderTable();
-    this.toast('Auto-assigned visible columns, weighing skills, passions and xenotype/gene effects.');
+    Perf.measure('autoAssign.execute', () =>
+      Engine.runMinMaxAssignment(
+        this.state.pawns, this.state.roles, this.state.priorities,
+        this._visibleJobs(), contextMap, this._strategicFocusConfig()));
+    this.renderTable(contextMap);
+    Perf._activeOp = null;
+    Perf.end('autoAssign.total');
+    Perf.increment('autoAssign.runs');
+    const focus = this._strategicFocusConfig();
+    this.toast(focus.id
+      ? `Auto-assigned with ${focus.label} as the ${focus.strength} Colony Focus.`
+      : 'Auto-assigned visible columns, weighing skills, passions and xenotype/gene effects.');
     this.triggerAutoSave();
     return true;
   },
@@ -273,10 +415,12 @@ Object.assign(App, {
 
   runOptimizer() {
     // Analyse only the columns currently visible in the table.
+    this._manualPriorityMax();
     const contextMap = this._c7PawnContextMap(
       this.state.pawns, this._c7EvidenceOptionsByPawn);
     this._optimizerResult = Engine.analyzeColony(
-      this.state.pawns, this.state.priorities, this._visibleJobs(), contextMap);
+      this.state.pawns, this.state.priorities, this._visibleJobs(), contextMap,
+      this._strategicFocusConfig());
     this.renderOptimizer();
   },
 
@@ -306,6 +450,12 @@ Object.assign(App, {
   _optimizerHTML(r) {
     let html = '';
     const suggestionDisabled = this._lockedPriorityActionAttrs('apply this suggestion');
+    if (r.strategicFocus) {
+      html += `<div class="settings-card colony-focus-notice" style="margin-bottom:var(--gap-sm); padding:10px 14px">
+        <div style="font-weight:800; color:var(--accent); font-size:var(--f-sm)">Colony Focus: ${_escapeHtml(r.strategicFocus.label)}</div>
+        <div style="font-size:var(--f-xs); color:var(--text3); margin-top:2px">${r.strategicFocus.strength === 'strong' ? 'Strong' : 'Normal'} preference - suitable workers are promoted without bypassing restrictions or sole-worker protection.</div>
+      </div>`;
+    }
 
     // COVERAGE GAPS
     if (r.gaps.length > 0) {
@@ -314,9 +464,9 @@ Object.assign(App, {
         <div style="display:flex; flex-direction:column; gap:6px">`;
       r.gaps.forEach(g => {
         const isCrit = g.severity === 'critical';
-        const borderColor = isCrit ? 'var(--p4-txt)' : '#e8a838';
+        const borderColor = isCrit ? 'var(--p4-txt)' : 'var(--accent)';
         const icon = isCrit ? '!!!' : '!';
-        const iconColor = isCrit ? 'var(--p4-txt)' : '#e8a838';
+        const iconColor = isCrit ? 'var(--p4-txt)' : 'var(--accent)';
         html += `<div style="display:flex; align-items:center; gap:10px; background:var(--surface2); padding:8px 12px; border-radius:8px; border-left:4px solid ${borderColor}">
           <span style="font-weight:700; color:${iconColor}; font-size:var(--f-sm); flex-shrink:0; width:24px; text-align:center">${icon}</span>
           <div style="flex:1; min-width:0">
@@ -333,10 +483,10 @@ Object.assign(App, {
     // SINGLE POINTS OF FAILURE
     if (r.singlePoints.length > 0) {
       html += `<div class="settings-card" style="margin-bottom:var(--gap-sm); padding:12px 16px">
-        <div class="section-title section-title--sm" style="color:#e8a838; margin-bottom:8px">Single Points of Failure</div>
+        <div class="section-title section-title--sm" style="color:var(--accent); margin-bottom:8px">Single Points of Failure</div>
         <div style="display:flex; flex-wrap:wrap; gap:6px">`;
       r.singlePoints.forEach(sp => {
-        html += `<div style="display:inline-flex; align-items:center; gap:6px; background:var(--surface2); padding:6px 10px; border-radius:6px; font-size:var(--f-xs); border:1px solid #e8a83833">
+        html += `<div style="display:inline-flex; align-items:center; gap:6px; background:var(--surface2); padding:6px 10px; border-radius:6px; font-size:var(--f-xs); border:1px solid var(--accent)">
           <span style="font-weight:700">${_escapeHtml(sp.jobName)}</span>
           <span style="color:var(--text3)">only</span>
           <span style="color:var(--accent)">${_escapeHtml(sp.pawnName)}</span>
@@ -377,11 +527,13 @@ Object.assign(App, {
   // Consolidates: visible-task overview, one-click Auto-Assign, add custom task,
   // column management, and the colony analysis with apply buttons.
   openWorkPlanner() {
+    this._manualPriorityMax();
     const visible = this._visibleJobs();
     const contextMap = this._c7PawnContextMap(
       this.state.pawns, this._c7EvidenceOptionsByPawn);
     const r = Engine.analyzeColony(
-      this.state.pawns, this.state.priorities, visible, contextMap);
+      this.state.pawns, this.state.priorities, visible, contextMap,
+      this._strategicFocusConfig());
     this._optimizerResult = r; // so Apply-All uses the same result
     const pawns = this.state.pawns;
     const analysis = pawns.length

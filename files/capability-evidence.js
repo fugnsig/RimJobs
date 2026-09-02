@@ -232,6 +232,10 @@ function _resolveXenoStrict(xenoId) {
 
 function _resolveRoleStrict(roleId) {
   if (!roleId) return null;
+  if (typeof App !== 'undefined' && App.state && App.state.scannedRoles) {
+    const scanned = Object.values(App.state.scannedRoles).find(role => role && role.id === roleId);
+    if (scanned && (!App._roleDefinitionIsActive || App._roleDefinitionIsActive(scanned))) return scanned;
+  }
   if (typeof DEFAULT_ROLES !== 'undefined') {
     const found = DEFAULT_ROLES.find(r => r.id === roleId);
     if (found) return found;
@@ -1918,20 +1922,7 @@ const CapabilityEvidence = {
     const provenance = { sourceKind: 'role', sourceId: roleId, modId };
     const confidence = modId ? 'inferred' : 'verified';
 
-    const rolePermissionSources = Array.isArray(roleDef.disabledWorkTagsExact)
-      ? [{
-          sourceField: 'roleDisabledWorkTags',
-          targetKind: 'workTag',
-          presence: roleDef.disabledWorkTagsExact.length ? 'present' : 'absent',
-          rawValue: roleDef.disabledWorkTagsExact.join(', '),
-          targets: roleDef.disabledWorkTagsExact.map(target => ({
-            rawTarget: target,
-            canonicalTarget: _CANONICAL_WORK_TAGS.has(target) ? target : null,
-          })),
-          completeness: 'complete',
-        }]
-      : [];
-    _emitTypedPermissionSources(rolePermissionSources, effects, unresolved, {
+    _emitTypedPermissionSources(_permissionSourcesForDefinition(roleDef), effects, unresolved, {
       evidencePrefix: 'role:' + roleId,
       provenance,
       confidence,
@@ -1948,14 +1939,31 @@ const CapabilityEvidence = {
           provenance, confidence));
       }
     }
-    // Work speed
-    if (roleDef.workSpeed && roleDef.workSpeed !== 0) {
+    const exactOffsets = Array.isArray(roleDef.statOffsetsExact) ? roleDef.statOffsetsExact : [];
+    const exactFactors = Array.isArray(roleDef.statFactorsExact) ? roleDef.statFactorsExact : [];
+    for (let i = 0; i < exactOffsets.length; i++) {
+      const operation = exactOffsets[i];
+      if (!operation || !operation.statDefId || !Number.isFinite(operation.value)) continue;
+      effects.push(_makeEvidence('role:' + roleId + ':statOffset:' + operation.statDefId + ':' + i,
+        'statOffset', operation.statDefId, operation.value, provenance, confidence));
+    }
+    for (let i = 0; i < exactFactors.length; i++) {
+      const operation = exactFactors[i];
+      if (!operation || !operation.statDefId || !Number.isFinite(operation.value)) continue;
+      effects.push(_makeEvidence('role:' + roleId + ':statFactor:' + operation.statDefId + ':' + i,
+        'statFactor', operation.statDefId, operation.value, provenance, confidence));
+    }
+    // Legacy fallback roles use their curated global work-speed projection. A
+    // definition-driven role already emits the exact WorkSpeedGlobal operation.
+    if (roleDef.workSpeed && roleDef.workSpeed !== 0
+      && !exactOffsets.some(operation => String(operation.statDefId || '').toLowerCase()
+        === String(STAT.WORK_SPEED_GLOBAL).toLowerCase())) {
       const eid = 'role:' + roleId + ':workSpeed';
       effects.push(_makeEvidence(eid, 'statOffset', STAT.WORK_SPEED_GLOBAL,
         roleDef.workSpeed, provenance, confidence));
     }
     // Permission entries via classifier
-    if (roleDef.incap) {
+    if (roleDef.incap && !roleDef.definitionDriven) {
       for (let i = 0; i < roleDef.incap.length; i++) {
         const incapId = roleDef.incap[i];
         const eid = 'role:' + roleId + ':incapable:' + incapId;
