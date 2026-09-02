@@ -141,6 +141,7 @@ RimJobs is free and always will be. If it saved you some hassle and you would li
 
 ## Acknowledgements
 
+- **[RimWorld](https://rimworldgame.com/)** by **[Ludeon Studios](https://ludeon.com/)** - the wonderful game that started it all.
 - Game data is sourced from RimWorld's game files and the **[RimWorld Wiki](https://rimworldwiki.com)**.
 - **[RimSearcher](https://github.com/kearril/RimSearcher)** by kearril (MIT), a tool for fast searching of RimWorld's source code. The game-accurate combat, armour-penetration and raid maths in RimJobs were verified against RimWorld's decompiled source with it.
 - Blueprint sharing is an offline take on the in-game **[Blueprints](https://steamcommunity.com/sharedfiles/filedetails/?id=708455313)** mod by **[Fluffy](https://steamcommunity.com/id/FluffyMods)**, whose work inspired the feature.
