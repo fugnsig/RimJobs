@@ -226,6 +226,7 @@ const App = {
       rowHighlighting: true,
       compactSidebar: false,
       showResizeLabel: false,
+      showWindowResizeDimensions: false,
       sidebarCollapsed: false,
       showBiomePatterns: true,
       showRaidEstimate: false,
@@ -556,6 +557,7 @@ const App = {
     }
 
     this.loadData();
+    this._initWindowResizeDimensions();
     this._refreshCaches();
     
     // Migrate zoom: old range was 0.5-2.0, new window range is 1.0-4.0
@@ -1246,6 +1248,48 @@ const App = {
   _hideResizeReadout() {
     const el = document.getElementById('resizeReadout');
     if (el) el.remove();
+  },
+
+  _initWindowResizeDimensions() {
+    if (this._windowResizeDimensionsInited || !window.overlay
+        || !window.overlay.onWindowResizeDimensions) return;
+    this._windowResizeDimensionsInited = true;
+    window.overlay.onWindowResizeDimensions(dimensions => {
+      if (!this.state.settings.showWindowResizeDimensions) {
+        this._hideWindowResizeDimensions();
+        return;
+      }
+      const width = Math.round(Number(dimensions && dimensions.width));
+      const height = Math.round(Number(dimensions && dimensions.height));
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) return;
+      let tag = document.getElementById('windowResizeDimensions');
+      if (!tag) {
+        tag = document.createElement('div');
+        tag.id = 'windowResizeDimensions';
+        tag.className = 'window-resize-dimensions';
+        tag.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(tag);
+      }
+      tag.textContent = width + ' x ' + height + ' px';
+      tag.classList.add('visible');
+      if (this._windowResizeDimensionsTimer) clearTimeout(this._windowResizeDimensionsTimer);
+      this._windowResizeDimensionsTimer = null;
+      if (dimensions.phase === 'end') {
+        this._windowResizeDimensionsTimer = setTimeout(() => {
+          tag.classList.remove('visible');
+          this._windowResizeDimensionsTimer = null;
+        }, 700);
+      }
+    });
+  },
+
+  _hideWindowResizeDimensions() {
+    if (this._windowResizeDimensionsTimer) {
+      clearTimeout(this._windowResizeDimensionsTimer);
+      this._windowResizeDimensionsTimer = null;
+    }
+    const tag = document.getElementById('windowResizeDimensions');
+    if (tag) tag.classList.remove('visible');
   },
 
   _applyColonyName() {

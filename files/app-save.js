@@ -3286,6 +3286,7 @@ Object.assign(App, {
     this.state.settings.windowOpacity = Number.isFinite(windowOpacity)
       ? Math.max(0.3, Math.min(1, windowOpacity)) : 1;
     this.state.settings.transparencyLocked = this.state.settings.transparencyLocked === true;
+    this.state.settings.showWindowResizeDimensions = this.state.settings.showWindowResizeDimensions === true;
     this.state.settings.strategicFocusId = typeof this.state.settings.strategicFocusId === 'string'
       ? this.state.settings.strategicFocusId : '';
     this.state.settings.strategicFocusStrength = this.state.settings.strategicFocusStrength === 'strong'
