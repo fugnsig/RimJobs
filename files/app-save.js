@@ -1203,25 +1203,31 @@ Object.assign(App, {
     const pawns = [];
     const seenIds = new Set();
 
-    // Build extended block for a pawn that might carry nested pawns.
-    // Carrier pawn's data (skills, age, story) wraps AROUND nested pawn XML,
-    // so we need to look past nested pawn blocks to find the carrier's own data.
+    // Build the exact XML element for each pawn. A nested pawn can be followed by
+    // fields from its owning casket/container or by unrelated map things before the
+    // next pawn begins. Slicing to the next pawn therefore leaks sibling fields such
+    // as a player faction onto factionless quest subjects.
+    //
+    // Carrier pawn data (skills, age, story) wraps AROUND nested pawn XML, so balance
+    // same-name elements rather than stopping at the first nested thing/li close.
     const _fullBlock = (startIdx) => {
-      let end = Math.min(startIdx + 800000, mapsText.length);
-      // Find the next top-level <thing Class="Pawn"> (not nested in a container)
-      let searchPos = startIdx + 50;
-      while (searchPos < end) {
-        const nextTop = mapsText.indexOf('<thing Class="Pawn">', searchPos);
-        if (nextTop < 0 || nextTop >= end) break;
-        // Check if it's nested inside a container (innerList/carryTracker)
-        const before = mapsText.slice(Math.max(startIdx, nextTop - 500), nextTop);
-        if (!/innerList|carryTracker|innerContainer/.test(before)) {
-          end = nextTop;
-          break;
+      const opening = mapsText.slice(startIdx, startIdx + 80).match(/^<(thing|li)\b[^>]*>/);
+      if (!opening) return '';
+      const tag = opening[1];
+      const elementRe = new RegExp(`<${tag}(?:\\s[^>]*?)?\\/?>|<\\/${tag}>`, 'g');
+      elementRe.lastIndex = startIdx;
+      let depth = 0;
+      let match;
+      while ((match = elementRe.exec(mapsText)) !== null) {
+        if (match[0][1] === '/') {
+          depth--;
+          if (depth === 0) return mapsText.slice(startIdx, elementRe.lastIndex);
+        } else if (!/\/>$/.test(match[0])) {
+          depth++;
         }
-        searchPos = nextTop + 20;
       }
-      return mapsText.slice(startIdx, end);
+      // Malformed/truncated saves still degrade gracefully within the old bound.
+      return mapsText.slice(startIdx, Math.min(startIdx + 800000, mapsText.length));
     };
 
     // Shared per-pawn field parser. Used for both colony pawns (from the maps
@@ -1674,8 +1680,13 @@ Object.assign(App, {
     for (let i = 0; i < pawnPositions.length; i++) {
       if (i % 40 === 0 && i > 0) await _yield();
       const blockStart = pawnPositions[i];
-      const shortEnd = (i + 1 < pawnPositions.length) ? pawnPositions[i + 1] : mapsText.length;
-      const shortBlock = mapsText.slice(blockStart, shortEnd);
+      const block = _fullBlock(blockStart);
+      if (!block) continue;
+      const rootOpenEnd = block.indexOf('>') + 1;
+      const nestedPawn = block.slice(rootOpenEnd).search(/<(?:thing|li) Class="Pawn">/);
+      const shortBlock = nestedPawn >= 0
+        ? block.slice(0, rootOpenEnd + nestedPawn)
+        : block;
 
       // Must belong to the player faction (appears early in pawn XML)
       const factionMatch = shortBlock.match(/<faction>(Faction_\d+)<\/faction>/);
@@ -1700,9 +1711,6 @@ Object.assign(App, {
       const loadID = lidMatch ? lidMatch[1] : (idMatch ? 'Thing_' + idMatch[1] : '');
       if (loadID && seenIds.has(loadID)) continue;
       if (loadID) seenIds.add(loadID);
-
-      // Get full block (spans past any nested/carried pawns)
-      const block = _fullBlock(blockStart);
 
       // Must be a humanlike pawn, not an animal or mechanoid. The pawn's OWN trackers come
       // before any nested thing (carried items, fetus, etc.), so check the FIRST <skills>
