@@ -13,13 +13,27 @@
 // The internal RimWorld name stays on pawn.name for matching and save round-trips.
 // Mirror Verse.NameTriple.Nick from RimWorld. An explicit nickname wins. When
 // it is absent, the game deterministically chooses first or last from the two
-// Mono string hashes. NameSingle and hand-made pawns fall back to pawn.name.
+// Unity Mono legacy string hashes. NameSingle and hand-made pawns fall back to
+// pawn.name.
 function _rimworldStringHash(value) {
-  let hash = 0;
-  for (let i = 0; i < value.length; i++) {
-    hash = (Math.imul(hash, 31) + value.charCodeAt(i)) | 0;
+  let hash1 = 5381;
+  let hash2 = 5381;
+  for (let i = 0; i < value.length; i += 2) {
+    hash1 = (Math.imul(hash1, 33) ^ value.charCodeAt(i)) | 0;
+    if (i + 1 < value.length) {
+      hash2 = (Math.imul(hash2, 33) ^ value.charCodeAt(i + 1)) | 0;
+    }
   }
-  return hash;
+  return (hash1 + Math.imul(hash2, 1566083941)) | 0;
+}
+
+// Capitalise each part of a pawn name without lowercasing intentional internal
+// capitals. Handles spaces, hyphens, apostrophes and Unicode letters so the
+// same display rule works for hand-made, imported and modded pawn names.
+function _capitalisePawnName(value) {
+  const name = typeof value === 'string' ? value : '';
+  return name.replace(/(^|[^\p{L}\p{N}])(\p{L})/gu,
+    (match, prefix, letter) => prefix + letter.toUpperCase());
 }
 
 function _pawnDisplayName(pawn, fallback = 'Pawn') {
@@ -28,15 +42,18 @@ function _pawnDisplayName(pawn, fallback = 'Pawn') {
   const nickname = clean(pawn.nickname);
   const first = clean(pawn.firstName);
   const last = clean(pawn.lastName);
-  if (nickname) return nickname;
-  if (!last) return first || clean(pawn.name) || fallback;
-  if (!first) return last;
+  if (nickname) return _capitalisePawnName(nickname);
+  if (!last) {
+    const singleName = first || clean(pawn.name);
+    return singleName ? _capitalisePawnName(singleName) : fallback;
+  }
+  if (!first) return _capitalisePawnName(last);
 
   const firstHash = _rimworldStringHash(first);
   const lastHash = _rimworldStringHash(last);
   const combined = (firstHash ^ ((lastHash - 1640531527
     + (firstHash << 6) + (firstHash >> 2)) | 0)) | 0;
-  return (combined & 1) === 1 ? first : last;
+  return _capitalisePawnName((combined & 1) === 1 ? first : last);
 }
 
 function _pawnGameOrderNumber(value) {
