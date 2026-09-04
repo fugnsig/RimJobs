@@ -265,6 +265,13 @@ Object.assign(App, {
         <div class="settings-desc" style="margin-bottom:10px">Customise the default dimensions for widget and full window modes.</div>
         <div class="settings-row">
           <div>
+            <div class="settings-label">Show dimensions while resizing</div>
+            <div class="settings-desc">Show a compact live width x height tag while manually resizing the RimJobs window. It remains visible until the left mouse button is released.</div>
+          </div>
+          <input type="checkbox" ${s.showWindowResizeDimensions?'checked':''} onchange="App.state.settings.showWindowResizeDimensions=this.checked; if(!this.checked) App._hideWindowResizeDimensions(); App.triggerAutoSave()" aria-label="Show dimensions while resizing">
+        </div>
+        <div class="settings-row">
+          <div>
             <div class="settings-label">Widget mode</div>
             <div class="settings-desc">Compact overlay size. Min 340 x 400.</div>
           </div>
@@ -1257,7 +1264,7 @@ Object.assign(App, {
             A high-level dashboard showing essential work coverage, average skills and labour bottlenecks.
             <div style="margin-top:4px; padding-left:12px; border-left:2px solid var(--accent-glow)">
               • <strong>Colony Skill Radar:</strong> Each spoke shows a colony average from 0-20. Hover an axis to highlight it, or open <strong>Skill details and evidence</strong> with the mouse, touch or keyboard for full skill names, averages and incomplete-evidence notes. Where exact skill evidence is unavailable, legacy-compatible values are shown and labelled.<br>
-              • <strong>Survival Index:</strong> A planning indicator, not a survival prediction. Essential work coverage, specialist roles, trait break thresholds and planned ideology mood affect the score. It cannot exceed the percentage of essential jobs covered, including important custom jobs. The covered-job count and explanation distinguish missing assignments from assignments to blocked or currently unavailable pawns. Incomplete capability evidence remains provisional; unknown is not treated as blocked.<br>
+              • <strong>Survival Index:</strong> A planning indicator, not a survival prediction. Essential work coverage, specialist roles and trait break thresholds affect the score. Situational ideology mood effects are not treated as permanent colony mood. The score cannot exceed the percentage of essential jobs covered, including important custom jobs. The covered-job count and explanation distinguish missing assignments from assignments to blocked or currently unavailable pawns. Incomplete capability evidence remains provisional; unknown is not treated as blocked.<br>
               • <strong>Labour Bottlenecks:</strong> Missing eligible workers are always flagged. In Manual mode, important jobs without a Priority-1 worker and competing high-priority assignments can also trigger warnings. In Simple mode, any enabled job counts as assigned and numeric-priority warnings are omitted. Coverage does not guarantee sufficient labour or round-the-clock staffing.
             </div></div>
 
@@ -1402,7 +1409,7 @@ Object.assign(App, {
                 Cooking: uses a postProcessCurve approximation: (0.4 + raw/20 × 1.2) × WorkSpeedGlobal<br><br>
 
                 <strong style="color:var(--text2)">Survival Index</strong><br>
-                Base 50 − 10 per uncovered critical job + 4 per specialist − avg break threshold × 100 + ideology mood × 2<br>
+                Base 50 − 10 per uncovered critical job + 4 per specialist − avg break threshold × 100<br>
                 Clamped to 0-100
               </div>
             </details></div>

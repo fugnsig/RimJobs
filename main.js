@@ -3,6 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execSync } = require('child_process');
+const {
+  DEFAULT_MOTION,
+  estimateThrowVelocity,
+  angularVelocityForMotion,
+  advanceMotion
+} = require('./logo-motion');
 
 const APP_VERSION = require('./package.json').version;
 
@@ -293,12 +299,16 @@ const COLLAPSED_LOGO_SIZE = 88;
 const COLLAPSED_LOGO_SNAP = 24;
 const collapsedLogoStatePath = path.join(app.getPath('userData'), 'collapsed-logo-position.json');
 let collapsedLogoPlacement = null;
+let collapsedLogoMotion = null;
+let collapsedLogoRotation = 0;
+let collapsedLogoAnchored = false;
 
 try {
   const savedLogoPlacement = JSON.parse(fs.readFileSync(collapsedLogoStatePath, 'utf8'));
   if (savedLogoPlacement && Number.isFinite(savedLogoPlacement.xRatio)
     && Number.isFinite(savedLogoPlacement.yRatio)) {
     collapsedLogoPlacement = savedLogoPlacement;
+    collapsedLogoAnchored = !!savedLogoPlacement.anchored;
   }
 } catch (_) { /* first use or invalid saved placement */ }
 
@@ -368,6 +378,7 @@ function doQuit() {
   appendCrashReport('app.quit-requested');
   quitting = true;
   forceQuit = true;
+  stopCollapsedLogoMotion(false);
   try { keyboardHook.stopCapture && keyboardHook.stopCapture(); } catch (_) {}
   try { keyboardHook.uninstall && keyboardHook.uninstall(); } catch (_) {}
   try { globalShortcut.unregisterAll(); } catch (_) {}
@@ -512,11 +523,31 @@ function createWindow() {
   // for a frameless transparent window during an interactive (mouse-drag) resize on
   // Windows, so we hard-pin the height here: when collapsed, any drag that would
   // change the height is corrected back to the locked height, leaving width free.
+  let interactiveResizeActive = false;
   win.on('will-resize', (event, newBounds) => {
+    interactiveResizeActive = true;
+    const reportedHeight = collapsedLockHeight == null ? newBounds.height : collapsedLockHeight;
+    if (!win.webContents.isDestroyed()) {
+      win.webContents.send('window-resize-dimensions', {
+        width: Math.round(newBounds.width),
+        height: Math.round(reportedHeight),
+        phase: 'resizing'
+      });
+    }
     if (collapsedLockHeight == null) return;             // not collapsed: free resize
     if (newBounds.height === collapsedLockHeight) return; // height unchanged: allow (width drag)
     event.preventDefault();
     win.setBounds({ x: newBounds.x, y: newBounds.y, width: newBounds.width, height: collapsedLockHeight });
+  });
+  win.on('resized', () => {
+    if (!interactiveResizeActive || !win || win.webContents.isDestroyed()) return;
+    interactiveResizeActive = false;
+    const bounds = win.getBounds();
+    win.webContents.send('window-resize-dimensions', {
+      width: Math.round(bounds.width),
+      height: Math.round(bounds.height),
+      phase: 'end'
+    });
   });
 
   win.loadFile(path.join(__dirname, 'files', 'rimjobs.html'));
@@ -663,7 +694,8 @@ function rememberCollapsedLogoPosition(bounds) {
   collapsedLogoPlacement = {
     displayId: String(display.id),
     xRatio: Math.max(0, Math.min(1, (bounds.x - area.x) / maxX)),
-    yRatio: Math.max(0, Math.min(1, (bounds.y - area.y) / maxY))
+    yRatio: Math.max(0, Math.min(1, (bounds.y - area.y) / maxY)),
+    anchored: collapsedLogoAnchored
   };
   try { fs.writeFileSync(collapsedLogoStatePath, JSON.stringify(collapsedLogoPlacement), 'utf8'); } catch (_) {}
 }
@@ -709,6 +741,9 @@ function showCollapsedLogo(details) {
   const show = () => {
     if (!win || !collapsedLogoWin || logoModeState !== 'collapsing') return;
     collapsedLogoWin.setBounds(collapsedLogoBounds(sourcePoint), false);
+    collapsedLogoRotation = 0;
+    collapsedLogoWin.webContents.send('collapsed-logo-motion', { phase: 'idle', rotation: 0 });
+    collapsedLogoWin.webContents.send('collapsed-logo-anchor-changed', collapsedLogoAnchored);
     collapsedLogoWin.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
     collapsedLogoWin.showInactive();
     collapsedLogoWin.webContents.send('collapsed-logo-show');
@@ -725,10 +760,6 @@ let logoRestoreTimer = null;
 function finishLogoRestore() {
   if (!win || logoModeState !== 'restoring') return;
   if (logoRestoreTimer) { clearTimeout(logoRestoreTimer); logoRestoreTimer = null; }
-  win.webContents.send('logo-restore-main');
-  win.showInactive();
-  win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
-  forceTaskbar();
   if (collapsedLogoWin) collapsedLogoWin.hide();
   isVisible = true;
   logoModeState = 'full';
@@ -736,15 +767,38 @@ function finishLogoRestore() {
 
 function restoreFromCollapsedLogo() {
   if (!win || !collapsedLogoWin || logoModeState !== 'logo') return;
+  stopCollapsedLogoMotion(false);
+  settleCollapsedLogoPosition();
   logoModeState = 'restoring';
+  // Cross-fade the two compositor surfaces instead of waiting for the logo to
+  // disappear before starting the client expansion.
+  win.webContents.send('logo-restore-main');
+  win.showInactive();
+  win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
+  forceTaskbar();
   collapsedLogoWin.webContents.send('collapsed-logo-hide');
-  logoRestoreTimer = setTimeout(finishLogoRestore, 180);
+  logoRestoreTimer = setTimeout(finishLogoRestore, 500);
 }
 
 app.whenReady().then(() => {
   appendCrashReport('app.session-start', { platform: process.platform, arch: process.arch });
   createWindow();
   createCollapsedLogoWindow();
+  screen.on('display-metrics-changed', (_event, display, changedMetrics) => {
+    if (!collapsedLogoMotion || String(display.id) !== collapsedLogoMotion.displayId) return;
+    if (changedMetrics.includes('displayFrequency')) {
+      collapsedLogoMotion.frameMs = collapsedLogoFrameDuration(display);
+    }
+    if (changedMetrics.includes('workArea') || changedMetrics.includes('bounds')) {
+      const area = display.workArea;
+      collapsedLogoMotion.perimeter = {
+        minX: area.x,
+        minY: area.y,
+        maxX: area.x + Math.max(0, area.width - COLLAPSED_LOGO_SIZE),
+        maxY: area.y + Math.max(0, area.height - COLLAPSED_LOGO_SIZE)
+      };
+    }
+  });
 
   const iconPath = path.join(__dirname, 'files', 'rimjobs.ico');
   tray = new Tray(iconPath);
@@ -3097,25 +3151,37 @@ ipcMain.on('window-drag-move', (_, screenX, screenY) => {
 });
 ipcMain.on('window-drag-end', () => { dragStart = null; });
 
-let collapsedLogoDragStart = null;
-ipcMain.on('window-logo-drag-start', (_, screenX, screenY) => {
-  if (!collapsedLogoWin || logoModeState !== 'logo') return;
-  const bounds = collapsedLogoWin.getBounds();
-  collapsedLogoDragStart = { x: screenX - bounds.x, y: screenY - bounds.y };
-});
-ipcMain.on('window-logo-drag-move', (_, screenX, screenY) => {
-  if (!collapsedLogoWin || !collapsedLogoDragStart || logoModeState !== 'logo') return;
-  collapsedLogoWin.setPosition(
-    Math.round(screenX - collapsedLogoDragStart.x),
-    Math.round(screenY - collapsedLogoDragStart.y),
-    false
-  );
-});
-ipcMain.on('window-logo-drag-end', () => {
-  if (!collapsedLogoWin || logoModeState !== 'logo') {
-    collapsedLogoDragStart = null;
-    return;
-  }
+function sendCollapsedLogoMotion(phase, rotation, angularVelocity = 0) {
+  if (!collapsedLogoWin || collapsedLogoWin.isDestroyed() || collapsedLogoWin.webContents.isDestroyed()) return;
+  collapsedLogoWin.webContents.send('collapsed-logo-motion', {
+    phase,
+    rotation,
+    angularVelocity,
+    frictionPerSecond: DEFAULT_MOTION.frictionPerSecond
+  });
+}
+
+function collapsedLogoFrameDuration(display) {
+  const reported = Number(display && display.displayFrequency);
+  const refreshRate = Number.isFinite(reported) && reported >= 24 && reported <= 1000 ? reported : 60;
+  return 1000 / refreshRate;
+}
+
+function settleCollapsedLogoRotation() {
+  const target = Math.round(collapsedLogoRotation / 360) * 360;
+  sendCollapsedLogoMotion('settling', target);
+  collapsedLogoRotation = 0;
+}
+
+function stopCollapsedLogoMotion(settleVisual = true) {
+  if (collapsedLogoMotion && collapsedLogoMotion.timer) clearTimeout(collapsedLogoMotion.timer);
+  collapsedLogoMotion = null;
+  if (settleVisual) settleCollapsedLogoRotation();
+  else sendCollapsedLogoMotion('idle', collapsedLogoRotation);
+}
+
+function settleCollapsedLogoPosition() {
+  if (!collapsedLogoWin || collapsedLogoWin.isDestroyed()) return;
   const bounds = collapsedLogoWin.getBounds();
   const centre = { x: bounds.x + Math.round(bounds.width / 2), y: bounds.y + Math.round(bounds.height / 2) };
   const area = screen.getDisplayNearestPoint(centre).workArea;
@@ -3138,7 +3204,126 @@ ipcMain.on('window-logo-drag-end', () => {
   const settled = { x, y, width: COLLAPSED_LOGO_SIZE, height: COLLAPSED_LOGO_SIZE };
   collapsedLogoWin.setBounds(settled, false);
   rememberCollapsedLogoPosition(settled);
+}
+
+function finishCollapsedLogoMotion() {
+  if (collapsedLogoMotion && collapsedLogoMotion.timer) clearTimeout(collapsedLogoMotion.timer);
+  collapsedLogoMotion = null;
+  settleCollapsedLogoPosition();
+  settleCollapsedLogoRotation();
+}
+
+function stepCollapsedLogoMotion(expectedMotion) {
+  if (collapsedLogoMotion !== expectedMotion || !collapsedLogoWin
+    || collapsedLogoWin.isDestroyed() || logoModeState !== 'logo') return;
+  const now = performance.now();
+  const elapsedSeconds = (now - expectedMotion.previousTime) / 1000;
+  const next = advanceMotion(expectedMotion, elapsedSeconds, expectedMotion.perimeter);
+  next.previousTime = now;
+  next.nextFrameAt = Math.max(expectedMotion.nextFrameAt + expectedMotion.frameMs, now);
+  collapsedLogoMotion = next;
+  collapsedLogoRotation = next.rotation;
+  collapsedLogoWin.setPosition(Math.round(next.x), Math.round(next.y), false);
+  if (next.bouncedX || next.bouncedY || now - next.lastVisualSyncAt >= 200) {
+    next.lastVisualSyncAt = now;
+    sendCollapsedLogoMotion('moving', next.rotation, angularVelocityForMotion(next.vx, next.vy));
+  }
+
+  if (next.stopped) {
+    finishCollapsedLogoMotion();
+    return;
+  }
+  const delay = Math.max(0, next.nextFrameAt - performance.now());
+  next.timer = setTimeout(() => stepCollapsedLogoMotion(next), delay);
+}
+
+function startCollapsedLogoMotion(velocity) {
+  if (!collapsedLogoWin || velocity.speed < DEFAULT_MOTION.minimumThrowSpeed) {
+    settleCollapsedLogoPosition();
+    settleCollapsedLogoRotation();
+    return;
+  }
+  const bounds = collapsedLogoWin.getBounds();
+  const centre = { x: bounds.x + Math.round(bounds.width / 2), y: bounds.y + Math.round(bounds.height / 2) };
+  const display = screen.getDisplayNearestPoint(centre);
+  const area = display.workArea;
+  const now = performance.now();
+  const motion = {
+    x: bounds.x,
+    y: bounds.y,
+    vx: velocity.vx,
+    vy: velocity.vy,
+    speed: velocity.speed,
+    rotation: collapsedLogoRotation,
+    ageMs: 0,
+    previousTime: now,
+    nextFrameAt: now,
+    frameMs: collapsedLogoFrameDuration(display),
+    displayId: String(display.id),
+    lastVisualSyncAt: now,
+    timer: null,
+    perimeter: {
+      minX: area.x,
+      minY: area.y,
+      maxX: area.x + Math.max(0, area.width - COLLAPSED_LOGO_SIZE),
+      maxY: area.y + Math.max(0, area.height - COLLAPSED_LOGO_SIZE)
+    }
+  };
+  collapsedLogoMotion = motion;
+  sendCollapsedLogoMotion('moving', collapsedLogoRotation, angularVelocityForMotion(velocity.vx, velocity.vy));
+  motion.timer = setTimeout(() => stepCollapsedLogoMotion(motion), 0);
+}
+
+let collapsedLogoDragStart = null;
+ipcMain.on('window-logo-drag-start', (_, screenX, screenY) => {
+  if (!collapsedLogoWin || logoModeState !== 'logo' || collapsedLogoAnchored) return;
+  stopCollapsedLogoMotion(false);
+  const bounds = collapsedLogoWin.getBounds();
+  collapsedLogoDragStart = {
+    x: screenX - bounds.x,
+    y: screenY - bounds.y,
+    lastX: bounds.x,
+    lastY: bounds.y,
+    samples: [{ x: bounds.x, y: bounds.y, t: performance.now() }]
+  };
+});
+ipcMain.on('window-logo-drag-move', (_, screenX, screenY) => {
+  if (!collapsedLogoWin || !collapsedLogoDragStart || logoModeState !== 'logo') return;
+  const x = screenX - collapsedLogoDragStart.x;
+  const y = screenY - collapsedLogoDragStart.y;
+  const dx = x - collapsedLogoDragStart.lastX;
+  const dy = y - collapsedLogoDragStart.lastY;
+  const dominantDelta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+  collapsedLogoRotation += (Math.hypot(dx, dy) / DEFAULT_MOTION.rollRadius)
+    * (180 / Math.PI) * (Math.sign(dominantDelta) || 1);
+  collapsedLogoDragStart.lastX = x;
+  collapsedLogoDragStart.lastY = y;
+  const now = performance.now();
+  collapsedLogoDragStart.samples.push({ x, y, t: now });
+  collapsedLogoDragStart.samples = collapsedLogoDragStart.samples
+    .filter(sample => sample.t >= now - DEFAULT_MOTION.lookbackMs);
+  collapsedLogoWin.setPosition(Math.round(x), Math.round(y), false);
+  sendCollapsedLogoMotion('dragging', collapsedLogoRotation);
+});
+ipcMain.on('window-logo-drag-end', () => {
+  if (!collapsedLogoWin || logoModeState !== 'logo' || !collapsedLogoDragStart) {
+    collapsedLogoDragStart = null;
+    return;
+  }
+  const bounds = collapsedLogoWin.getBounds();
+  const releasePoint = { x: bounds.x, y: bounds.y, t: performance.now() };
+  const velocity = estimateThrowVelocity(collapsedLogoDragStart.samples, releasePoint);
   collapsedLogoDragStart = null;
+  startCollapsedLogoMotion(velocity);
+});
+
+ipcMain.on('window-logo-toggle-anchor', () => {
+  if (!collapsedLogoWin || logoModeState !== 'logo') return;
+  stopCollapsedLogoMotion(true);
+  collapsedLogoDragStart = null;
+  collapsedLogoAnchored = !collapsedLogoAnchored;
+  settleCollapsedLogoPosition();
+  collapsedLogoWin.webContents.send('collapsed-logo-anchor-changed', collapsedLogoAnchored);
 });
 
 // Custom WIDTH-only resize for the collapsed bar. Native resize is disabled while

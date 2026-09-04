@@ -120,11 +120,11 @@ const Engine = {
     const avgBreakMod = totalBreakModifier / pawns.length;
     score -= (avgBreakMod * 100);
 
-    // Ideology mood impact on viability (positive mood = fewer breaks = higher viability)
-    const ideoFx = App.getIdeoEffects();
-    if (ideoFx.mood) score += (ideoFx.mood * 2); // Each mood point is roughly 2 viability pts
+    // Ideology mood values describe conditional thoughts such as eating human
+    // meat or executing a prisoner. They are not permanent colony mood and must
+    // not pin the planning score when those events are not happening.
 
-    // Role and mood bonuses cannot hide missing essential workers.
+    // Role bonuses cannot hide missing essential workers.
     const coverageCeiling = coverage.total ? Math.floor(coverage.covered / coverage.total * 100) : 0;
     return Math.max(0, Math.min(coverageCeiling, Math.round(score)));
   },

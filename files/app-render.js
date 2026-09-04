@@ -773,7 +773,7 @@ Object.assign(App, {
         : Math.max(400, Math.min(Math.round(availW * 0.95), Math.round(availH * 0.95), 640));
 
     const viabilityColour = viability > 70 ? 'var(--p1-txt)' : viability > 40 ? 'var(--p3-txt)' : 'var(--p4-txt)';
-    const viabilityTip = 'A planning indicator based on essential work coverage, specialist roles, trait break thresholds and planned ideology mood. The score cannot exceed the percentage of essential jobs covered. Blocked or unavailable pawns do not provide coverage; incomplete capability evidence remains provisional. This is not a survival prediction.';
+    const viabilityTip = 'A planning indicator based on essential work coverage, specialist roles and trait break thresholds. The score cannot exceed the percentage of essential jobs covered. Blocked or unavailable pawns do not provide coverage; incomplete capability evidence remains provisional. Situational ideology mood is not treated as permanent. This is not a survival prediction.';
     const viabilityHint = !this.state.pawns.length
       ? 'Add or import pawns to assess work coverage.'
       : !coverage.hasAssignments
@@ -783,7 +783,7 @@ Object.assign(App, {
           : coverage.covered < coverage.total
             ? 'Some essential jobs lack an eligible assigned worker. Review Labour Bottlenecks and the Priorities tab.'
             : viability === 0
-              ? 'Essential jobs are covered, but trait and ideology modifiers reduce the planning score to zero.'
+              ? 'Essential jobs are covered, but trait break-threshold modifiers reduce the planning score to zero.'
               : 'Essential jobs are covered. This planning score does not predict survival or guarantee enough labour.';
     const viabilityCard = `
       <div class="dash-card">

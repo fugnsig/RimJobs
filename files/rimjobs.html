@@ -111,6 +111,21 @@
   if (window.overlay) {
     document.getElementById('overlay-titlebar').style.display = '';
     document.body.classList.add('has-overlay-titlebar');
+    function afterBodyAnimation(animationName, callback, fallbackMs) {
+      var body = document.body;
+      var finished = false;
+      var fallback = 0;
+      function finish(event) {
+        if (event && (event.target !== body || event.animationName !== animationName)) return;
+        if (finished) return;
+        finished = true;
+        body.removeEventListener('animationend', finish);
+        if (fallback) clearTimeout(fallback);
+        callback();
+      }
+      body.addEventListener('animationend', finish);
+      fallback = setTimeout(finish, fallbackMs);
+    }
     if (window.overlay.onLogoCollapseRequested) {
       window.overlay.onLogoCollapseRequested(function () {
         if (document.body.classList.contains('logo-collapsing')) return;
@@ -121,24 +136,26 @@
         document.body.style.setProperty('--logo-collapse-x', centreX + 'px');
         document.body.style.setProperty('--logo-collapse-y', centreY + 'px');
         document.body.classList.remove('logo-restoring');
-        void document.body.offsetWidth;
-        document.body.classList.add('logo-collapsing');
         var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        setTimeout(function () {
+        afterBodyAnimation(reduced ? 'rimjobsLogoFadeOut' : 'rimjobsCollapseIntoLogo', function () {
           window.overlay.logoCollapseReady({
             screenX: window.screenX + centreX,
             screenY: window.screenY + centreY
           });
-        }, reduced ? 90 : 330);
+        }, reduced ? 220 : 600);
+        void document.body.offsetWidth;
+        document.body.classList.add('logo-collapsing');
       });
     }
     if (window.overlay.onLogoRestoreMain) {
       window.overlay.onLogoRestoreMain(function () {
         document.body.classList.remove('logo-collapsing');
+        var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        afterBodyAnimation(reduced ? 'rimjobsLogoFadeIn' : 'rimjobsRestoreFromLogo', function () {
+          document.body.classList.remove('logo-restoring');
+        }, reduced ? 220 : 650);
         void document.body.offsetWidth;
         document.body.classList.add('logo-restoring');
-        var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        setTimeout(function () { document.body.classList.remove('logo-restoring'); }, reduced ? 90 : 330);
       });
     }
     // Update widget toggle button icon on mode switch
@@ -336,28 +353,32 @@
     <!-- VIEW: WORK -->
     <div id="view-work" class="view-container">
       <div id="summaryBar" class="summary-bar"></div>
-      <div class="filter-tabs" id="filterTabs" style="margin-bottom:var(--gap-md); display:flex; flex-wrap:wrap; gap:var(--gap-sm); align-items:center; justify-content:flex-end">
-        <button class="btn btn-sm" id="manualPrioBtn" onclick="App.toggleManualPriorities()" title="Switch the table between numbered priorities and Simple on/off mode." style="font-size:var(--f-xs); padding:5px 12px">Manual</button>
-        <label class="priority-range-pill" id="priorityRangePill" title="Select the 1-X range used by manual editing, Auto-Assign, and Work Planner suggestions.">
-          <span>Range</span>
-          <select id="priorityRangeSelect" aria-label="Maximum priority" onchange="App.setManualPriorityMax(this.value)">
-            <option value="4">1-4</option><option value="5">1-5</option><option value="6">1-6</option>
-            <option value="7">1-7</option><option value="8">1-8</option><option value="9">1-9</option>
-          </select>
-        </label>
-        <label class="colony-focus-pill" id="colonyFocusPill" title="Bias Auto-Assign and Work Planner towards suitable workers for one strategic goal. Restrictions and essential sole-worker coverage still win.">
-          <span>Focus</span>
-          <select id="strategicFocusSelect" aria-label="Colony Focus" onchange="App.setStrategicFocus(this.value)">
-            <option value="">Balanced</option>
-          </select>
-          <select id="strategicFocusStrength" aria-label="Colony Focus strength" onchange="App.setStrategicFocusStrength(this.value)" disabled>
-            <option value="normal">Normal</option><option value="strong">Strong</option>
-          </select>
-        </label>
-        <button class="btn btn-sm" onclick="App.openJobColumnManager()" title="Choose which job columns show (vanilla/DLC by default; add modded or custom jobs). Drag column headers to reorder." style="font-size:var(--f-xs); padding:5px 12px; margin-right:auto">Columns</button>
-        <button class="btn btn-sm btn-accent" id="autoAssignBtn" onclick="App.autoAssignAll()" title="Automatically assign visible jobs across the selected 1-X range from pawn capability, skill, passion, work speed, role, and available xenotype or mod evidence." style="font-size:var(--f-xs); padding:5px 12px">Auto-Assign</button>
-        <button class="btn btn-sm priority-lock-pill" id="priorityLockBtn" onclick="App.togglePriorityLock()" aria-pressed="false" title="Lock priority editing while keeping the table scrollable." style="font-size:var(--f-xs); padding:5px 12px">&#128275; Unlocked</button>
-        <button class="btn btn-sm" id="optimizerToggle" onclick="App.openWorkPlanner()" style="font-size:var(--f-xs); padding:5px 12px">Work Planner</button>
+      <div class="filter-tabs" id="filterTabs">
+        <div class="priority-toolbar-group priority-toolbar-options">
+          <button class="btn btn-sm" id="manualPrioBtn" onclick="App.toggleManualPriorities()" title="Switch the table between numbered priorities and Simple on/off mode.">Manual</button>
+          <label class="priority-range-pill" id="priorityRangePill" title="Select the 1-X range used by manual editing, Auto-Assign, and Work Planner suggestions.">
+            <span>Range</span>
+            <select id="priorityRangeSelect" aria-label="Maximum priority" onchange="App.setManualPriorityMax(this.value)">
+              <option value="4">1-4</option><option value="5">1-5</option><option value="6">1-6</option>
+              <option value="7">1-7</option><option value="8">1-8</option><option value="9">1-9</option>
+            </select>
+          </label>
+          <label class="colony-focus-pill" id="colonyFocusPill" title="Bias Auto-Assign and Work Planner towards suitable workers for one strategic goal. Restrictions and essential sole-worker coverage still win.">
+            <span>Focus</span>
+            <select id="strategicFocusSelect" aria-label="Colony Focus" onchange="App.setStrategicFocus(this.value)">
+              <option value="">Balanced</option>
+            </select>
+            <select id="strategicFocusStrength" aria-label="Colony Focus strength" onchange="App.setStrategicFocusStrength(this.value)" disabled>
+              <option value="normal">Normal</option><option value="strong">Strong</option>
+            </select>
+          </label>
+          <button class="btn btn-sm" id="jobColumnsBtn" onclick="App.openJobColumnManager()" title="Choose which job columns show (vanilla/DLC by default; add modded or custom jobs). Drag column headers to reorder.">Columns</button>
+        </div>
+        <div class="priority-toolbar-group priority-toolbar-actions">
+          <button class="btn btn-sm btn-accent" id="autoAssignBtn" onclick="App.autoAssignAll()" title="Automatically assign visible jobs across the selected 1-X range from pawn capability, skill, passion, work speed, role, and available xenotype or mod evidence.">Auto-Assign</button>
+          <button class="btn btn-sm priority-lock-pill" id="priorityLockBtn" onclick="App.togglePriorityLock()" aria-pressed="false" title="Lock priority editing while keeping the table scrollable.">&#128275; Unlocked</button>
+          <button class="btn btn-sm" id="optimizerToggle" onclick="App.openWorkPlanner()">Work Planner</button>
+        </div>
       </div>
       <div id="optimizerPanel" style="display:none; margin-bottom:var(--gap-md); max-height:35vh; overflow-y:auto; flex-shrink:0"></div>
       <div class="table-wrap" id="tableWrap"></div>
