@@ -1398,8 +1398,8 @@ Object.assign(App, {
             <div style="flex:1;min-width:0">
               <input class="pawn-name" value="${_escapeHtml(_pawnDisplayName(p, ''))}" oninput="App.renameNickname('${p.id}', this.value)" style="font-size:var(--f-base);font-weight:800;width:100%" placeholder="Nickname">
               <div style="display:flex;align-items:center;gap:4px;margin-top:4px;flex-wrap:wrap">
-                <input class="skill-input" value="${_escapeHtml(p.firstName || '')}" oninput="App.setPawnField('${p.id}','firstName',this.value)" placeholder="First" style="font-size:var(--f-xs);width:60px;padding:2px 4px">
-                <input class="skill-input" value="${_escapeHtml(p.lastName || '')}" oninput="App.setPawnField('${p.id}','lastName',this.value)" placeholder="Last" style="font-size:var(--f-xs);width:60px;padding:2px 4px">
+                <input class="skill-input" value="${_escapeHtml(_capitalisePawnName(p.firstName))}" oninput="App.setPawnField('${p.id}','firstName',this.value)" placeholder="First" style="font-size:var(--f-xs);width:60px;padding:2px 4px">
+                <input class="skill-input" value="${_escapeHtml(_capitalisePawnName(p.lastName))}" oninput="App.setPawnField('${p.id}','lastName',this.value)" placeholder="Last" style="font-size:var(--f-xs);width:60px;padding:2px 4px">
                 <input class="skill-input" type="number" min="0" max="9999" value="${p.bioAge != null ? p.bioAge : ''}" oninput="App.setPawnField('${p.id}','bioAge',this.value?parseInt(this.value):null); App.renderPawnManager()" placeholder="Bio Age" style="font-size:var(--f-xs);width:55px;padding:2px 4px;text-align:center" title="Biological Age">
                 <input class="skill-input" type="number" min="0" max="99999" value="${p.chronoAge != null ? p.chronoAge : ''}" oninput="App.setPawnField('${p.id}','chronoAge',this.value?parseInt(this.value):null)" placeholder="Chrono" style="font-size:var(--f-xs);width:55px;padding:2px 4px;text-align:center" title="Chronological Age">
               </div>
@@ -1707,7 +1707,8 @@ Object.assign(App, {
     const avatarBg = _safeColor(p.avatarBg || av.bg);
     const avatarColor = _safeColor(p.avatarColor || av.color, '#ffffff');
     const displayName = _escapeHtml(_pawnDisplayName(p, '?'));
-    const fullName = [p.firstName, p.lastName].filter(Boolean).join(' ');
+    const fullName = [p.firstName, p.lastName]
+      .map(value => _capitalisePawnName(value).trim()).filter(Boolean).join(' ');
     const wsProjection = this._c5WorkSpeedDisplay(p, pawnCtx);
     const wsMod = wsProjection.value;
     const wsColor = wsMod > 1.05 ? 'var(--accent)' : wsMod < 0.95 ? 'var(--p4-txt)' : 'var(--text3)';
@@ -2777,7 +2778,24 @@ Object.assign(App, {
   setPawnField(pid, field, value) {
     const p = this.state.pawns.find(p => p.id === pid);
     if (!p) return;
-    p[field] = value;
+    if (field === 'nickname') {
+      this.renameNickname(pid, value);
+      return;
+    }
+    const isNameField = field === 'name' || field === 'firstName' || field === 'lastName';
+    p[field] = isNameField ? _capitalisePawnName(value) : value;
+    if (isNameField) {
+      const active = document.activeElement;
+      if (active && active.value === value) {
+        const start = active.selectionStart;
+        const end = active.selectionEnd;
+        const lengthChange = p[field].length - value.length;
+        active.value = p[field];
+        if (Number.isInteger(start) && Number.isInteger(end) && active.setSelectionRange) {
+          active.setSelectionRange(start + lengthChange, end + lengthChange);
+        }
+      }
+    }
     this.triggerAutoSave();
   },
 

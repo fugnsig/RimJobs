@@ -96,7 +96,9 @@ Object.assign(App, {
     const avatarIcon = _escapeHtml((displayName || '?')[0].toUpperCase());
     const pawnName = _escapeHtml(displayName);
     const hasFullName = p.firstName || p.lastName;
-    const fullNameStr = hasFullName ? _escapeHtml([p.firstName, p.lastName].filter(Boolean).join(' ')) : '';
+    const fullNameStr = hasFullName
+      ? _escapeHtml([p.firstName, p.lastName]
+          .map(value => _capitalisePawnName(value).trim()).filter(Boolean).join(' ')) : '';
     const xenoColor = _safeColor(xeno.color);
 
     const wsProjection = this._c5WorkSpeedDisplay(p, pawnCtx);
@@ -191,9 +193,9 @@ Object.assign(App, {
           <div class="trait-section" style="border-top:none; padding-top:0; margin-bottom:8px">
             ${fullNameStr ? `<div style="font-size:var(--f-xs); color:var(--text3); margin-bottom:6px; opacity:0.7" title="Full name">${fullNameStr}</div>` : ''}
             <div style="display:flex; gap:4px; margin-bottom:8px">
-              <div style="flex:1"><div class="trait-title">Nickname</div><input class="pawn-name" value="${_escapeHtml(p.nickname||'')}" oninput="App.setPawnField('${p.id}','nickname',this.value)" placeholder="None" style="font-size:var(--f-xs);width:100%"></div>
-              <div style="flex:1"><div class="trait-title">First Name</div><input class="pawn-name" value="${_escapeHtml(p.firstName||'')}" oninput="App.setPawnField('${p.id}','firstName',this.value)" placeholder="None" style="font-size:var(--f-xs);width:100%"></div>
-              <div style="flex:1"><div class="trait-title">Last Name</div><input class="pawn-name" value="${_escapeHtml(p.lastName||'')}" oninput="App.setPawnField('${p.id}','lastName',this.value)" placeholder="None" style="font-size:var(--f-xs);width:100%"></div>
+              <div style="flex:1"><div class="trait-title">Nickname</div><input class="pawn-name" value="${_escapeHtml(_capitalisePawnName(p.nickname))}" oninput="App.setPawnField('${p.id}','nickname',this.value)" placeholder="None" style="font-size:var(--f-xs);width:100%"></div>
+              <div style="flex:1"><div class="trait-title">First Name</div><input class="pawn-name" value="${_escapeHtml(_capitalisePawnName(p.firstName))}" oninput="App.setPawnField('${p.id}','firstName',this.value)" placeholder="None" style="font-size:var(--f-xs);width:100%"></div>
+              <div style="flex:1"><div class="trait-title">Last Name</div><input class="pawn-name" value="${_escapeHtml(_capitalisePawnName(p.lastName))}" oninput="App.setPawnField('${p.id}','lastName',this.value)" placeholder="None" style="font-size:var(--f-xs);width:100%"></div>
             </div>
             <div style="display:flex; gap:4px; margin-bottom:8px">
               <div style="flex:1"><div class="trait-title">Bio Age</div><input class="skill-input" type="number" min="0" max="9999" value="${p.bioAge != null ? p.bioAge : ''}" oninput="App.setPawnField('${p.id}','bioAge',this.value?parseInt(this.value):null)" placeholder="-" style="font-size:var(--f-xs);width:100%;text-align:center"></div>

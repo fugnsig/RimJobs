@@ -8,7 +8,20 @@ Object.assign(App, {
   renameNickname(id, val) {
     const p = this.state.pawns.find(p => p.id === id);
     if (!p) return;
-    p.nickname = val;
+    p.nickname = _capitalisePawnName(val);
+    // The active field is deliberately excluded from the synchronisation below,
+    // so apply capitalisation in place while preserving its caret and any trailing
+    // space the user has just typed for a multi-part name.
+    const active = document.activeElement;
+    if (active && active.value === val) {
+      const start = active.selectionStart;
+      const end = active.selectionEnd;
+      const lengthChange = p.nickname.length - val.length;
+      active.value = p.nickname;
+      if (Number.isInteger(start) && Number.isInteger(end) && active.setSelectionRange) {
+        active.setSelectionRange(start + lengthChange, end + lengthChange);
+      }
+    }
     // Display value falls back to name when nickname is empty
     const display = _pawnDisplayName(p, '');
     // Sync header name inputs only (not firstName/lastName fields in the card body)
