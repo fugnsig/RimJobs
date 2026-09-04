@@ -699,8 +699,14 @@ body.resizing-active { user-select: none; cursor: col-resize; }
   flex-shrink: 0;
   position: relative;
   display: inline-block;
+  cursor: pointer;
   -webkit-user-drag: none;
   user-select: none;
+}
+.logo-img-wrap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
 }
 .logo-img-wrap img {
   -webkit-user-drag: none;
@@ -3368,7 +3374,60 @@ body.colour-blind-mode .sched-strip-cell { font-size: calc(8px * var(--font-scal
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
 }
 
-/* ── MINIMIZED (collapsed toolbar) ──────────────────────────── */
+/* ── FLOATING LOGO COLLAPSE ─────────────────────────────────── */
+body.logo-collapsing {
+  pointer-events: none;
+  animation: rimjobsBackdropOut 330ms cubic-bezier(.22, .85, .28, 1) both;
+}
+body.logo-restoring {
+  animation: rimjobsBackdropIn 330ms cubic-bezier(.22, .85, .28, 1) both;
+}
+body.logo-collapsing #overlay-titlebar,
+body.logo-collapsing .app {
+  transform-origin: var(--logo-collapse-x, 50%) var(--logo-collapse-y, 50%);
+  animation: rimjobsCollapseIntoLogo 330ms cubic-bezier(.22, .85, .28, 1) both;
+  will-change: transform, opacity, filter;
+}
+body.logo-restoring #overlay-titlebar,
+body.logo-restoring .app {
+  transform-origin: var(--logo-collapse-x, 50%) var(--logo-collapse-y, 50%);
+  animation: rimjobsRestoreFromLogo 330ms cubic-bezier(.22, .85, .28, 1) both;
+  will-change: transform, opacity, filter;
+}
+@keyframes rimjobsCollapseIntoLogo {
+  0% { opacity: 1; transform: scale(1); filter: blur(0); }
+  62% { opacity: 0.72; transform: scale(0.38); filter: blur(0.4px); }
+  100% { opacity: 0; transform: scale(0.06); filter: blur(2px); }
+}
+@keyframes rimjobsRestoreFromLogo {
+  0% { opacity: 0; transform: scale(0.06); filter: blur(2px); }
+  58% { opacity: 0.86; transform: scale(1.015); filter: blur(0); }
+  100% { opacity: 1; transform: scale(1); filter: blur(0); }
+}
+@keyframes rimjobsBackdropOut {
+  from { background-color: var(--bg); }
+  to { background-color: transparent; }
+}
+@keyframes rimjobsBackdropIn {
+  from { background-color: transparent; }
+  to { background-color: var(--bg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.logo-collapsing { animation: rimjobsBackdropOut 90ms linear both; }
+  body.logo-restoring { animation: rimjobsBackdropIn 90ms linear both; }
+  body.logo-collapsing #overlay-titlebar,
+  body.logo-collapsing .app {
+    animation: rimjobsLogoFadeOut 90ms linear both;
+  }
+  body.logo-restoring #overlay-titlebar,
+  body.logo-restoring .app {
+    animation: rimjobsLogoFadeIn 90ms linear both;
+  }
+  @keyframes rimjobsLogoFadeOut { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes rimjobsLogoFadeIn { from { opacity: 0; } to { opacity: 1; } }
+}
+
+/* ── LEGACY MINIMIZED TOOLBAR ───────────────────────────────── */
 body.is-minimized .overlay-title { font-size: calc(16px * var(--font-scale)); letter-spacing: 0.14em; text-shadow: 0 0 10px rgba(var(--accent-rgb), 0.6), 0 0 20px rgba(var(--accent-rgb), 0.3); }
 body.is-minimized .overlay-drag-region { min-width: 0; overflow: hidden; }
 body.is-minimized .overlay-controls { flex-shrink: 0; }

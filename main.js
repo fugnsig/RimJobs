@@ -60,6 +60,10 @@ if (!gotTheLock) {
     // and bring it back on top). The window is focusable:false, so we use
     // showInactive() and re-assert always-on-top rather than focus().
     if (!win) return;
+    if (logoModeState === 'logo') {
+      restoreFromCollapsedLogo();
+      return;
+    }
     if (win.isMinimized()) win.restore();
     win.showInactive();
     win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
@@ -279,8 +283,24 @@ app.on('child-process-gone', (_event, details) => {
 Menu.setApplicationMenu(null);
 
 let win = null;
+let collapsedLogoWin = null;
 let tray = null;
 let isVisible = true;
+let logoModeState = 'full';
+let collapsedLogoReady = false;
+let logoCollapseTimer = null;
+const COLLAPSED_LOGO_SIZE = 88;
+const COLLAPSED_LOGO_SNAP = 24;
+const collapsedLogoStatePath = path.join(app.getPath('userData'), 'collapsed-logo-position.json');
+let collapsedLogoPlacement = null;
+
+try {
+  const savedLogoPlacement = JSON.parse(fs.readFileSync(collapsedLogoStatePath, 'utf8'));
+  if (savedLogoPlacement && Number.isFinite(savedLogoPlacement.xRatio)
+    && Number.isFinite(savedLogoPlacement.yRatio)) {
+    collapsedLogoPlacement = savedLogoPlacement;
+  }
+} catch (_) { /* first use or invalid saved placement */ }
 
 // A focusable:false overlay is hidden from the Windows taskbar; a plain
 // setSkipTaskbar(false) often won't re-add the button. Toggling true->false
@@ -352,6 +372,13 @@ function doQuit() {
   try { keyboardHook.uninstall && keyboardHook.uninstall(); } catch (_) {}
   try { globalShortcut.unregisterAll(); } catch (_) {}
   try { if (tray) { tray.destroy(); tray = null; } } catch (_) {}
+  try {
+    if (collapsedLogoWin) {
+      collapsedLogoWin.removeAllListeners('close');
+      collapsedLogoWin.destroy();
+      collapsedLogoWin = null;
+    }
+  } catch (_) {}
   try { if (win) { win.removeAllListeners('close'); win.setSkipTaskbar(true); win.destroy(); win = null; } } catch (_) {}
   app.exit(0);
 }
@@ -601,9 +628,123 @@ function createWindow() {
   win.on('closed', () => { win = null; });
 }
 
+function collapsedLogoBounds(fallbackPoint) {
+  let display = null;
+  if (collapsedLogoPlacement) {
+    display = screen.getAllDisplays().find(item => String(item.id) === String(collapsedLogoPlacement.displayId));
+  }
+  if (!display && fallbackPoint) display = screen.getDisplayNearestPoint(fallbackPoint);
+  if (!display) display = screen.getPrimaryDisplay();
+  const area = display.workArea;
+  const maxX = Math.max(0, area.width - COLLAPSED_LOGO_SIZE);
+  const maxY = Math.max(0, area.height - COLLAPSED_LOGO_SIZE);
+  const fallbackX = fallbackPoint ? fallbackPoint.x - COLLAPSED_LOGO_SIZE / 2 : area.x + maxX;
+  const fallbackY = fallbackPoint ? fallbackPoint.y - COLLAPSED_LOGO_SIZE / 2 : area.y + Math.round(maxY / 2);
+  const x = collapsedLogoPlacement
+    ? area.x + Math.round(Math.max(0, Math.min(1, collapsedLogoPlacement.xRatio)) * maxX)
+    : Math.round(fallbackX);
+  const y = collapsedLogoPlacement
+    ? area.y + Math.round(Math.max(0, Math.min(1, collapsedLogoPlacement.yRatio)) * maxY)
+    : Math.round(fallbackY);
+  return {
+    x: Math.max(area.x, Math.min(area.x + maxX, x)),
+    y: Math.max(area.y, Math.min(area.y + maxY, y)),
+    width: COLLAPSED_LOGO_SIZE,
+    height: COLLAPSED_LOGO_SIZE
+  };
+}
+
+function rememberCollapsedLogoPosition(bounds) {
+  const centre = { x: bounds.x + Math.round(bounds.width / 2), y: bounds.y + Math.round(bounds.height / 2) };
+  const display = screen.getDisplayNearestPoint(centre);
+  const area = display.workArea;
+  const maxX = Math.max(1, area.width - COLLAPSED_LOGO_SIZE);
+  const maxY = Math.max(1, area.height - COLLAPSED_LOGO_SIZE);
+  collapsedLogoPlacement = {
+    displayId: String(display.id),
+    xRatio: Math.max(0, Math.min(1, (bounds.x - area.x) / maxX)),
+    yRatio: Math.max(0, Math.min(1, (bounds.y - area.y) / maxY))
+  };
+  try { fs.writeFileSync(collapsedLogoStatePath, JSON.stringify(collapsedLogoPlacement), 'utf8'); } catch (_) {}
+}
+
+function createCollapsedLogoWindow() {
+  collapsedLogoWin = new BrowserWindow({
+    width: COLLAPSED_LOGO_SIZE,
+    height: COLLAPSED_LOGO_SIZE,
+    frame: false,
+    // This surface is only the floating logo. Keep it transparent even when
+    // the main overlay is using its opaque graphics recovery mode.
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    focusable: false,
+    show: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    icon: path.join(__dirname, 'files', 'rimjobs.ico'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  collapsedLogoWin.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
+  collapsedLogoWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  collapsedLogoWin.loadFile(path.join(__dirname, 'files', 'collapsed-logo.html'));
+  collapsedLogoWin.webContents.on('did-finish-load', () => { collapsedLogoReady = true; });
+  collapsedLogoWin.on('show', () => collapsedLogoWin?.setFocusable(false));
+  collapsedLogoWin.on('closed', () => {
+    collapsedLogoWin = null;
+    collapsedLogoReady = false;
+  });
+}
+
+function showCollapsedLogo(details) {
+  if (!win || !collapsedLogoWin || logoModeState !== 'collapsing') return;
+  if (logoCollapseTimer) { clearTimeout(logoCollapseTimer); logoCollapseTimer = null; }
+  const sourcePoint = details && Number.isFinite(details.screenX) && Number.isFinite(details.screenY)
+    ? { x: Math.round(details.screenX), y: Math.round(details.screenY) }
+    : null;
+  const show = () => {
+    if (!win || !collapsedLogoWin || logoModeState !== 'collapsing') return;
+    collapsedLogoWin.setBounds(collapsedLogoBounds(sourcePoint), false);
+    collapsedLogoWin.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
+    collapsedLogoWin.showInactive();
+    collapsedLogoWin.webContents.send('collapsed-logo-show');
+    try { win.setSkipTaskbar(true); } catch (_) {}
+    win.hide();
+    isVisible = false;
+    logoModeState = 'logo';
+  };
+  if (collapsedLogoReady) show();
+  else collapsedLogoWin.webContents.once('did-finish-load', show);
+}
+
+let logoRestoreTimer = null;
+function finishLogoRestore() {
+  if (!win || logoModeState !== 'restoring') return;
+  if (logoRestoreTimer) { clearTimeout(logoRestoreTimer); logoRestoreTimer = null; }
+  win.webContents.send('logo-restore-main');
+  win.showInactive();
+  win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
+  forceTaskbar();
+  if (collapsedLogoWin) collapsedLogoWin.hide();
+  isVisible = true;
+  logoModeState = 'full';
+}
+
+function restoreFromCollapsedLogo() {
+  if (!win || !collapsedLogoWin || logoModeState !== 'logo') return;
+  logoModeState = 'restoring';
+  collapsedLogoWin.webContents.send('collapsed-logo-hide');
+  logoRestoreTimer = setTimeout(finishLogoRestore, 180);
+}
+
 app.whenReady().then(() => {
   appendCrashReport('app.session-start', { platform: process.platform, arch: process.arch });
   createWindow();
+  createCollapsedLogoWindow();
 
   const iconPath = path.join(__dirname, 'files', 'rimjobs.ico');
   tray = new Tray(iconPath);
@@ -613,6 +754,10 @@ app.whenReady().then(() => {
       label: 'Open',
       click: () => {
         if (win) {
+          if (logoModeState === 'logo') {
+            restoreFromCollapsedLogo();
+            return;
+          }
           win.showInactive();
           win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
           forceTaskbar();
@@ -633,6 +778,10 @@ app.whenReady().then(() => {
   tray.setContextMenu(trayMenu);
   tray.on('click', () => {
     if (win) {
+      if (logoModeState === 'logo') {
+        restoreFromCollapsedLogo();
+        return;
+      }
       if (isVisible) {
         try { win.setSkipTaskbar(true); } catch (_) {}
         win.hide();
@@ -648,6 +797,10 @@ app.whenReady().then(() => {
 
   globalShortcut.register('F12', () => {
     if (!win) return;
+    if (logoModeState === 'logo') {
+      restoreFromCollapsedLogo();
+      return;
+    }
     if (isVisible) {
       try { win.setSkipTaskbar(true); } catch (_) {}
       win.hide();
@@ -2840,46 +2993,27 @@ const TOOLBAR_HEIGHT = 36;
 const SIZE_UNLIMITED = 32767;
 
 ipcMain.on('window-minimize', () => {
-  if (!win) return;
-  if (!isMinimized) {
-    savedBounds = win.getBounds();
-    // Collapsed bar stays resizable, but only horizontally: pin the height to the
-    // toolbar height (min == max height) while leaving width free, so the user can
-    // widen/narrow the bar with the height locked.
-    win.setMinimumSize(200, TOOLBAR_HEIGHT);
-    win.setMaximumSize(SIZE_UNLIMITED, TOOLBAR_HEIGHT);
-    // Native resize OFF while collapsed, so NO edge or corner resize cursors appear
-    // at all (the title-bar rule the user wants). Width is instead adjusted through
-    // the custom left/right grips in the bar, which drive setBounds via IPC below.
-    win.setResizable(false);
-    collapsedLockHeight = TOOLBAR_HEIGHT;
-    // Collapse to the remembered bar width; first time, seed it from the window width.
-    if (collapsedWidth == null) collapsedWidth = savedBounds.width;
-    win.setBounds({ x: savedBounds.x, y: savedBounds.y, width: collapsedWidth, height: TOOLBAR_HEIGHT }, false);
-    isMinimized = true;
-    // Keep the taskbar button present even while collapsed, so the user can
-    // click it to restore. Re-assert it (collapsing can drop the app-window style).
-    forceTaskbar();
-    win.webContents.send('minimized-state', true);
-  } else {
-    win.setResizable(true);
-    collapsedLockHeight = null; // expanded: free vertical resize again
-    win.setMaximumSize(SIZE_UNLIMITED, SIZE_UNLIMITED); // release the height pin
-    if (savedBounds) {
-      const currentBounds = win.getBounds();
-      // Remember the (possibly resized) collapsed width for the next collapse.
-      collapsedWidth = currentBounds.width;
-      // Expand: retain the bar's width, but the WIDGET_SIZE minimum clamps it up when
-      // the bar is narrower than the widget. Restore the saved height.
-      win.setMinimumSize(WIDGET_SIZE.width, WIDGET_SIZE.height);
-      win.setBounds({ x: currentBounds.x, y: currentBounds.y, width: currentBounds.width, height: savedBounds.height }, false);
-    }
-    isMinimized = false;
-    // Re-assert the taskbar icon while the full window is open.
-    forceTaskbar();
-    win.webContents.send('minimized-state', false);
-  }
+  if (!win || logoModeState !== 'full') return;
+  logoModeState = 'collapsing';
+  // The renderer owns the visual handoff point so the client always folds
+  // into its top-left RimJobs logo, regardless of the floating logo's saved
+  // desktop position.
+  win.webContents.send('logo-collapse-request');
+  logoCollapseTimer = setTimeout(() => showCollapsedLogo(null), 700);
 });
+
+ipcMain.on('window-logo-collapse-ready', (_, details) => {
+  if (!win || logoModeState !== 'collapsing') return;
+  if (inputCaptureActive) {
+    inputCaptureActive = false;
+    keyboardHook.stopCapture();
+    win.webContents.send('native-input-stop');
+  }
+  showCollapsedLogo(details || null);
+});
+
+ipcMain.on('window-logo-restore', () => restoreFromCollapsedLogo());
+ipcMain.on('window-logo-restore-ready', () => finishLogoRestore());
 ipcMain.on('window-close', () => win?.close());
 ipcMain.on('window-set-opacity', (_, value) => {
   if (!win || GPU_SAFE_MODE_ACTIVE || opacityLocked || !Number.isFinite(value)) return;
@@ -2894,11 +3028,13 @@ ipcMain.on('window-toggle-top', () => {
   if (!win) return;
   alwaysOnTop = !win.isAlwaysOnTop();
   win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
+  if (collapsedLogoWin) collapsedLogoWin.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
 });
 // Explicit set from the Settings toggle (persisted in the renderer).
 ipcMain.on('window-set-always-on-top', (_, val) => {
   alwaysOnTop = !!val;
   if (win) win.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
+  if (collapsedLogoWin) collapsedLogoWin.setAlwaysOnTop(alwaysOnTop, 'screen-saver');
 });
 
 ipcMain.on('window-confirm-quit', () => {
@@ -2960,6 +3096,50 @@ ipcMain.on('window-drag-move', (_, screenX, screenY) => {
   win.setPosition(screenX - dragStart.x, screenY - dragStart.y);
 });
 ipcMain.on('window-drag-end', () => { dragStart = null; });
+
+let collapsedLogoDragStart = null;
+ipcMain.on('window-logo-drag-start', (_, screenX, screenY) => {
+  if (!collapsedLogoWin || logoModeState !== 'logo') return;
+  const bounds = collapsedLogoWin.getBounds();
+  collapsedLogoDragStart = { x: screenX - bounds.x, y: screenY - bounds.y };
+});
+ipcMain.on('window-logo-drag-move', (_, screenX, screenY) => {
+  if (!collapsedLogoWin || !collapsedLogoDragStart || logoModeState !== 'logo') return;
+  collapsedLogoWin.setPosition(
+    Math.round(screenX - collapsedLogoDragStart.x),
+    Math.round(screenY - collapsedLogoDragStart.y),
+    false
+  );
+});
+ipcMain.on('window-logo-drag-end', () => {
+  if (!collapsedLogoWin || logoModeState !== 'logo') {
+    collapsedLogoDragStart = null;
+    return;
+  }
+  const bounds = collapsedLogoWin.getBounds();
+  const centre = { x: bounds.x + Math.round(bounds.width / 2), y: bounds.y + Math.round(bounds.height / 2) };
+  const area = screen.getDisplayNearestPoint(centre).workArea;
+  const minX = area.x;
+  const minY = area.y;
+  const maxX = area.x + Math.max(0, area.width - COLLAPSED_LOGO_SIZE);
+  const maxY = area.y + Math.max(0, area.height - COLLAPSED_LOGO_SIZE);
+  let x = Math.max(minX, Math.min(maxX, bounds.x));
+  let y = Math.max(minY, Math.min(maxY, bounds.y));
+  const edges = [
+    { distance: Math.abs(x - minX), axis: 'x', value: minX },
+    { distance: Math.abs(maxX - x), axis: 'x', value: maxX },
+    { distance: Math.abs(y - minY), axis: 'y', value: minY },
+    { distance: Math.abs(maxY - y), axis: 'y', value: maxY }
+  ].sort((a, b) => a.distance - b.distance);
+  if (edges[0].distance <= COLLAPSED_LOGO_SNAP) {
+    if (edges[0].axis === 'x') x = edges[0].value;
+    else y = edges[0].value;
+  }
+  const settled = { x, y, width: COLLAPSED_LOGO_SIZE, height: COLLAPSED_LOGO_SIZE };
+  collapsedLogoWin.setBounds(settled, false);
+  rememberCollapsedLogoPosition(settled);
+  collapsedLogoDragStart = null;
+});
 
 // Custom WIDTH-only resize for the collapsed bar. Native resize is disabled while
 // collapsed (no vertical/corner cursors), so the bar's left/right grips drive this

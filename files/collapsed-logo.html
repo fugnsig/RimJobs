@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+    }
+    body {
+      display: grid;
+      place-items: center;
+      padding: 4px;
+    }
+    #collapsedLogo {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      cursor: grab;
+      -webkit-user-drag: none;
+      opacity: 0.88;
+      filter: drop-shadow(0 0 0 transparent);
+      transform: translateY(0);
+      transition: opacity 0.5s ease, filter 0.5s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    #collapsedLogo:hover {
+      opacity: 1;
+      transform: translateY(-2px);
+      filter: drop-shadow(0 0 14px rgba(232, 168, 56, 0.5)) drop-shadow(0 0 5px rgba(232, 168, 56, 0.25));
+    }
+    #collapsedLogo.dragging {
+      cursor: grabbing;
+      transform: translateY(0);
+    }
+    body.logo-enter #collapsedLogo {
+      animation: collapsedLogoEnter 260ms cubic-bezier(.22, .85, .28, 1) both;
+    }
+    body.logo-exit #collapsedLogo {
+      animation: collapsedLogoExit 140ms ease-in both;
+    }
+    @keyframes collapsedLogoEnter {
+      0% { opacity: 0; transform: scale(0.82); }
+      70% { opacity: 1; transform: scale(1.045); }
+      100% { opacity: 0.88; transform: scale(1); }
+    }
+    @keyframes collapsedLogoExit {
+      from { opacity: 1; transform: scale(1); }
+      to { opacity: 0; transform: scale(0.88); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #collapsedLogo { transition: none; }
+      #collapsedLogo:hover { transform: none; }
+      body.logo-enter #collapsedLogo { animation: collapsedLogoFadeIn 80ms linear both; }
+      body.logo-exit #collapsedLogo { animation: collapsedLogoFadeOut 80ms linear both; }
+      @keyframes collapsedLogoFadeIn { from { opacity: 0; } to { opacity: 0.88; } }
+      @keyframes collapsedLogoFadeOut { from { opacity: 1; } to { opacity: 0; } }
+    }
+  </style>
+</head>
+<body>
+  <img id="collapsedLogo" src="rimjobs_logo.png" alt="" aria-label="RimJobs" draggable="false">
+  <script>
+    (function () {
+      var logo = document.getElementById('collapsedLogo');
+      var press = null;
+      var dragging = false;
+      var pendingMove = null;
+      var moveFrame = 0;
+
+      logo.addEventListener('animationend', function (event) {
+        if (event.animationName === 'collapsedLogoEnter' || event.animationName === 'collapsedLogoFadeIn') {
+          document.body.classList.remove('logo-enter');
+        }
+      });
+
+      function sendPendingMove() {
+        moveFrame = 0;
+        if (!pendingMove || !window.overlay) return;
+        window.overlay.logoDragMove(pendingMove.x, pendingMove.y);
+        pendingMove = null;
+      }
+
+      logo.addEventListener('pointerdown', function (event) {
+        if (event.button !== 0 || !window.overlay) return;
+        press = { x: event.screenX, y: event.screenY };
+        dragging = false;
+        logo.setPointerCapture(event.pointerId);
+        window.overlay.logoDragStart(event.screenX, event.screenY);
+        event.preventDefault();
+      });
+
+      logo.addEventListener('pointermove', function (event) {
+        if (!press || !window.overlay) return;
+        if (!dragging && Math.hypot(event.screenX - press.x, event.screenY - press.y) >= 5) {
+          dragging = true;
+          logo.classList.add('dragging');
+        }
+        if (!dragging) return;
+        pendingMove = { x: event.screenX, y: event.screenY };
+        if (!moveFrame) moveFrame = requestAnimationFrame(sendPendingMove);
+      });
+
+      function finishPointer(event) {
+        if (!press || !window.overlay) return;
+        var wasDragging = dragging;
+        press = null;
+        dragging = false;
+        logo.classList.remove('dragging');
+        if (moveFrame) {
+          cancelAnimationFrame(moveFrame);
+          moveFrame = 0;
+          sendPendingMove();
+        }
+        window.overlay.logoDragEnd();
+        if (!wasDragging) window.overlay.restoreFromLogo();
+        if (event) event.preventDefault();
+      }
+
+      logo.addEventListener('pointerup', finishPointer);
+      logo.addEventListener('pointercancel', finishPointer);
+      document.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+
+      if (window.overlay) {
+        window.overlay.onCollapsedLogoShow(function () {
+          document.body.classList.remove('logo-exit');
+          void logo.offsetWidth;
+          document.body.classList.add('logo-enter');
+        });
+        window.overlay.onCollapsedLogoHide(function () {
+          document.body.classList.remove('logo-enter');
+          void logo.offsetWidth;
+          document.body.classList.add('logo-exit');
+          var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          setTimeout(function () { window.overlay.logoRestoreReady(); }, reduced ? 85 : 145);
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

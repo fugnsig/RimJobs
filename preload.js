@@ -2,6 +2,16 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('overlay', {
   minimize: () => ipcRenderer.send('window-minimize'),
+  logoCollapseReady: (details) => ipcRenderer.send('window-logo-collapse-ready', details),
+  restoreFromLogo: () => ipcRenderer.send('window-logo-restore'),
+  logoRestoreReady: () => ipcRenderer.send('window-logo-restore-ready'),
+  logoDragStart: (x, y) => ipcRenderer.send('window-logo-drag-start', x, y),
+  logoDragMove: (x, y) => ipcRenderer.send('window-logo-drag-move', x, y),
+  logoDragEnd: () => ipcRenderer.send('window-logo-drag-end'),
+  onLogoCollapseRequested: (callback) => ipcRenderer.on('logo-collapse-request', (_, target) => callback(target)),
+  onLogoRestoreMain: (callback) => ipcRenderer.on('logo-restore-main', () => callback()),
+  onCollapsedLogoShow: (callback) => ipcRenderer.on('collapsed-logo-show', () => callback()),
+  onCollapsedLogoHide: (callback) => ipcRenderer.on('collapsed-logo-hide', () => callback()),
   close: () => ipcRenderer.send('window-close'),
   setOpacity: (val) => ipcRenderer.send('window-set-opacity', val),
   setOpacityLock: (locked) => ipcRenderer.send('window-set-opacity-lock', locked),
