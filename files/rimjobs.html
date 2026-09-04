@@ -95,7 +95,7 @@
     <button class="overlay-btn" onclick="window.overlay.snapLeft()" title="Snap to left half">&#9699;</button>
     <button class="overlay-btn" onclick="window.overlay.snapRight()" title="Snap to right half">&#9698;</button>
     <button class="overlay-btn" id="pinBtn" onclick="App.togglePin()" title="Lock window position">&#128204;</button>
-    <button class="overlay-btn" id="collapseBtn" onclick="window.overlay.minimize()" title="Collapse">&#9660;</button>
+    <button class="overlay-btn" id="collapseBtn" onclick="window.overlay.minimize()" title="Collapse to floating logo">&#9660;</button>
     <button class="overlay-btn" id="expandBtn" onclick="window.overlay.minimize()" title="Expand" style="display:none">&#9650;</button>
     <button class="overlay-btn" onclick="(App.state.settings.minimizeToTray===false)?window.overlay.minimizeNormal():window.overlay.minimizeToTaskbar()" title="Minimise (to tray by default - change in Settings)">&#8722;</button>
     <button class="overlay-btn" id="fullscreenBtn" onclick="window.overlay.toggleFullscreen()" title="Fullscreen">&#9974;</button>
@@ -111,6 +111,36 @@
   if (window.overlay) {
     document.getElementById('overlay-titlebar').style.display = '';
     document.body.classList.add('has-overlay-titlebar');
+    if (window.overlay.onLogoCollapseRequested) {
+      window.overlay.onLogoCollapseRequested(function () {
+        if (document.body.classList.contains('logo-collapsing')) return;
+        var logo = document.querySelector('.logo-img-wrap img');
+        var rect = logo ? logo.getBoundingClientRect() : { left: innerWidth / 2 - 40, top: innerHeight / 2 - 40, width: 80, height: 80 };
+        var centreX = rect.left + rect.width / 2;
+        var centreY = rect.top + rect.height / 2;
+        document.body.style.setProperty('--logo-collapse-x', centreX + 'px');
+        document.body.style.setProperty('--logo-collapse-y', centreY + 'px');
+        document.body.classList.remove('logo-restoring');
+        void document.body.offsetWidth;
+        document.body.classList.add('logo-collapsing');
+        var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        setTimeout(function () {
+          window.overlay.logoCollapseReady({
+            screenX: window.screenX + centreX,
+            screenY: window.screenY + centreY
+          });
+        }, reduced ? 90 : 330);
+      });
+    }
+    if (window.overlay.onLogoRestoreMain) {
+      window.overlay.onLogoRestoreMain(function () {
+        document.body.classList.remove('logo-collapsing');
+        void document.body.offsetWidth;
+        document.body.classList.add('logo-restoring');
+        var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        setTimeout(function () { document.body.classList.remove('logo-restoring'); }, reduced ? 90 : 330);
+      });
+    }
     // Update widget toggle button icon on mode switch
     if (window.overlay.onWidgetModeChanged) {
       window.overlay.onWidgetModeChanged(function(isWidget) {
@@ -237,7 +267,7 @@
   <aside class="sidebar">
     <div class="logo-area">
       <div class="logo-title">
-        <div class="logo-img-wrap" onclick="App.toast('Tongue-in-cheek colony management.')" style="cursor:pointer">
+        <div class="logo-img-wrap" role="button" tabindex="0" title="Collapse to floating logo" aria-label="Collapse to floating RimJobs logo" onclick="window.overlay && window.overlay.minimize()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.overlay&&window.overlay.minimize();}">
           <img src="rimjobs_logo.png" alt="RimJobs Logo" draggable="false">
         </div>
         <input id="colonyNameInput" class="colony-name-input" placeholder="Name Your Colony…" oninput="App.setColonyName(this.value)">
