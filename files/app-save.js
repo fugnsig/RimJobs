@@ -2614,8 +2614,12 @@ Object.assign(App, {
     this._renderTabView(this.state.activeTab);
 
     // Proactively warm modded content for the just-imported colony (deferred so it does not
-    // contend with the import's own rendering; force-refreshes even if warmed earlier).
-    if (typeof this._prefetchModData === 'function') setTimeout(() => this._prefetchModData(true), 2000);
+    // contend with the import's own rendering). Runs at most once per session - a reimport
+    // reuses whatever the first scan already populated in customBackstories/traits/genes.
+    if (typeof this._prefetchModData === 'function' && !this._importScanDone) {
+      this._importScanDone = true;
+      setTimeout(() => this._prefetchModData(true), 2000);
+    }
   },
 
   _applyIdeoFromSave(ideoData) {

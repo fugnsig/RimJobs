@@ -293,7 +293,10 @@ Object.assign(App, {
     if (!p) return;
     const xeno = this.getXeno(p.xenotype);
     const role = this.getRole(p.role || 'none');
-    if ((xeno.incapable||[]).includes(incapId) || (role.incap||[]).includes(incapId)) return;
+    const cbs = this._resolveBackstory(p.childhood);
+    const abs = this._resolveBackstory(p.adulthood);
+    const bsIncap = [...(cbs ? cbs.incapable : []), ...(abs ? abs.incapable : [])];
+    if ((xeno.incapable||[]).includes(incapId) || (role.incap||[]).includes(incapId) || bsIncap.includes(incapId)) return;
     const idx = p.incapable.indexOf(incapId);
     if (idx > -1) p.incapable.splice(idx, 1);
     else p.incapable.push(incapId);

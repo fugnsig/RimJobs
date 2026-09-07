@@ -702,14 +702,19 @@ Object.assign(App, {
             this.state.backstoryStories[id] = bs.desc;
             if (bs.title) this.state.backstoryStoriesByTitle[bs.title.toLowerCase()] = bs.desc;
           }
-          if (vanillaBsIds.has(id) || this.state.customBackstories[id]) continue;
-          if (Object.keys(this.state.customBackstories).length >= HARD_CAP * 4) continue;
-          this.state.customBackstories[id] = {
+          if (vanillaBsIds.has(id)) continue;
+          const existing = this.state.customBackstories[id];
+          if (existing && existing.modSource !== 'Imported from save') continue;
+          if (!existing && Object.keys(this.state.customBackstories).length >= HARD_CAP * 4) continue;
+          const scanned = {
             slot: bs.slot, title: bs.title, titleShort: bs.titleShort,
             skills: bs.skills || {}, incapable: bs.incapable || [],
+            disabledWorkTagsExact: Array.isArray(bs.disabledWorkTagsExact) ? bs.disabledWorkTagsExact : [],
             permissionSources: Array.isArray(bs.permissionSources) ? bs.permissionSources : [],
             desc: bs.desc, modSource: bs.modSource || 'Scanned'
           };
+          if (existing) Object.assign(existing, scanned);
+          else this.state.customBackstories[id] = scanned;
           backstoriesAdded++;
         }
         if (this._invalidateBsCache) this._invalidateBsCache();

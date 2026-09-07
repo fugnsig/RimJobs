@@ -1889,12 +1889,14 @@ function parseBackstoriesFromXML(xmlString) {
       }
     }
     const incapable = [];
+    const disabledWorkTagsExact = [];
     const wd = b.querySelector('workDisables');
     if (wd) {
       const lis = Array.from(wd.children).filter(c => c.tagName.toLowerCase() === 'li');
       const tags = lis.length ? lis.map(li => li.textContent.trim())
                               : String(wd.textContent || '').split(',').map(x => x.trim()).filter(Boolean);
       for (const t of tags) {
+        if (t && disabledWorkTagsExact.indexOf(t) < 0) disabledWorkTagsExact.push(t);
         const inc = incapMap[t] || incapMap[t.toLowerCase()];
         if (inc && incapable.indexOf(inc) < 0) incapable.push(inc);
       }
@@ -1907,6 +1909,7 @@ function parseBackstoriesFromXML(xmlString) {
       desc,
       skills,
       incapable,
+      disabledWorkTagsExact,
       permissionSources: [_parsePermissionSource(b, 'workDisables', 'workTag')],
       modSource: 'Scanned',
     };
