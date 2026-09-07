@@ -232,6 +232,7 @@ const App = {
       showRaidEstimate: false,
       showConsole: false,
       hiddenTabs: [],
+      compactTabs: false,
       pawnCardScale: 1.0,
       hideModdedContent: false,
       savePath: '',  // File-based save path (empty = use localStorage)
@@ -1594,6 +1595,17 @@ const App = {
       const tabEl = document.getElementById(`tab-${t}`);
       if (tabEl) tabEl.style.display = hidden.includes(t) ? 'none' : '';
     });
+    const header = document.querySelector('.page-header');
+    const minimised = !!this.state.settings.compactTabs;
+    if (header) header.classList.toggle('tabs-minimised', minimised);
+    const btn = document.getElementById('tabCompactBtn');
+    if (btn) { btn.innerHTML = minimised ? '&#9660;' : '&#9650;'; btn.title = minimised ? 'Show tab bar' : 'Minimise tab bar'; }
+  },
+
+  toggleCompactTabs() {
+    this.state.settings.compactTabs = !this.state.settings.compactTabs;
+    this.applyTabVisibility();
+    this.triggerAutoSave();
   },
 
   toggleTabVisibility(tabId) {

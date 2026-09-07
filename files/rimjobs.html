@@ -348,6 +348,7 @@
         <div id="savePill" onclick="App.state.settings.savePath ? App.showConfirm('Change save location?','Change').then(()=>App.pickSavePath()).catch(()=>{}) : App.pickSavePath()" style="margin-left:auto; padding:3px 10px; font-size:var(--f-xs); color:var(--text3); cursor:pointer; white-space:nowrap; font-weight:600; border-radius:4px; display:flex; align-items:center; gap:4px; transition:all 0.2s" title="Save location"><span style="flex-shrink:0">&#128190;</span><span id="savePillText">Local</span></div>
       </div>
     </div>
+    <button id="tabCompactBtn" onclick="App.toggleCompactTabs()" title="Minimise tab bar">&#9650;</button>
     </div><!-- /page-header -->
 
     <!-- VIEW: WORK -->

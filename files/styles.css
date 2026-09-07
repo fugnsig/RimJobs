@@ -1219,6 +1219,20 @@ select option {
 .main-tab:hover { color: var(--text); background: rgba(255,255,255,0.02); }
 .main-tab.active { color: var(--accent); border-bottom-color: var(--accent); background: rgba(var(--accent-rgb), 0.05); }
 
+/* -- TAB BAR MINIMISE -- */
+.page-header.tabs-minimised .main-tabs { display: none !important; }
+#tabCompactBtn {
+  position: absolute; top: 100%; left: 0; right: 0; margin: 0 auto;
+  z-index: 901; width: 36px; height: 12px; font-size: 8px; padding: 0;
+  border: 1px solid var(--border-med); border-top: none;
+  border-radius: 0 0 6px 6px;
+  background: var(--bg); color: var(--text3); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  opacity: 0.4; transform: none !important;
+}
+#tabCompactBtn:hover { opacity: 1; color: var(--text); border-color: var(--border-bright); }
+
 /* -- FILTER TABS -- */
 .filter-tab { padding: var(--gap-sm) var(--gap-md); font-size: var(--f-sm); border-radius: 20px; border: 1px solid var(--border-med); background: var(--surface2); color: var(--text2); font-weight: 600; cursor: pointer; transition: background 0.15s ease-out, color 0.15s ease-out, border-color 0.15s ease-out, box-shadow 0.15s ease-out, opacity 0.15s ease-out; }
 .filter-tab.on, .filter-tab:hover { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
@@ -2696,6 +2710,22 @@ body.colour-blind-mode .sched-strip-cell { font-size: calc(8px * var(--font-scal
     border-bottom: 1px solid var(--border-med);
     padding-bottom: var(--gap-md);
   }
+
+  /* Priority toolbar - reflow to narrower grid so Focus pill doesn't overlap */
+  #filterTabs { gap: 5px; padding: 6px; }
+  #filterTabs .priority-toolbar-group { gap: 5px; }
+  .priority-toolbar-options { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  #manualPrioBtn,
+  #priorityRangePill { grid-column: span 3; }
+  #colonyFocusPill { grid-column: span 6; }
+  #jobColumnsBtn { grid-column: span 6; }
+  #filterTabs .priority-toolbar-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #filterTabs .btn,
+  #filterTabs .priority-range-pill,
+  #filterTabs .colony-focus-pill { width: 100%; min-width: 0; min-height: 32px; height: 32px; font-size: calc(9px * var(--font-scale)); }
+  #filterTabs .btn { padding: 0 8px; }
+  .summary-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap-xs); margin-bottom: var(--gap-xs); }
+  .summary-bar > .sum-pill { font-size: calc(9px * var(--font-scale)); }
 }
 
 /* Very small mobile */
@@ -3009,7 +3039,7 @@ body.colour-blind-mode .sched-strip-cell { font-size: calc(8px * var(--font-scal
      equal <col class="col-job"> widths); over-long headers clip with an
      ellipsis instead of stretching their column. */
   .h-table { font-size: var(--table-font-size); table-layout: fixed; }
-  .td-pawn-name { padding: var(--gap-sm) var(--gap-md); font-size: var(--table-font-size); }
+  .td-pawn-name { padding: var(--gap-sm) var(--gap-md); font-size: var(--table-font-size); overflow: hidden; text-overflow: ellipsis; max-width: var(--pawn-col-width); }
   .th-job { min-width: auto; padding: 6px 4px; font-size: var(--job-font-size); }
   .th-cat { height: 36px; }
   .job-header-row th { top: 36px; }
