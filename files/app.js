@@ -150,7 +150,8 @@ const App = {
       difficulty: 'strive',
       adaptDays: 0,
       storyteller: 'cassandra',
-      lastRaidDay: 0,
+      lastRaidDay: null,
+      lastRaidSource: null,
       customStorytellers: [] // { id, name, minDays, maxDays, randomFactor (bool) }
     },
     blueprintHistory: [],

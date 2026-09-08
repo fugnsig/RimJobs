@@ -695,22 +695,32 @@ Object.assign(App, {
         this.state.backstoryStories = this.state.backstoryStories || {};
         this.state.backstoryStoriesByTitle = this.state.backstoryStoriesByTitle || {};
         this.state.customBackstories = this.state.customBackstories || {};
-        const vanillaBsIds = new Set((typeof BACKSTORIES !== 'undefined' ? BACKSTORIES : []).map(b => b.id));
-        const parsedBs = parseBackstoriesFromXML(result.backstoriesXml);
+        const parsedBs = parseBackstoriesFromXML(result.backstoriesXml, {
+          sourceMap: c3Sources.BackstoryDef || {},
+          uncertainty: c3Uncertainty,
+          activePackageResolution: this.state.activePackageResolution,
+          runtimeFingerprint: result.runtimeFingerprint || null,
+        });
         for (const [id, bs] of Object.entries(parsedBs)) {
           if (bs.desc) {
             this.state.backstoryStories[id] = bs.desc;
             if (bs.title) this.state.backstoryStoriesByTitle[bs.title.toLowerCase()] = bs.desc;
           }
-          if (vanillaBsIds.has(id)) continue;
           const existing = this.state.customBackstories[id];
-          if (existing && existing.modSource !== 'Imported from save') continue;
-          if (!existing && Object.keys(this.state.customBackstories).length >= HARD_CAP * 4) continue;
+          if (existing && !existing._scannedBackstory
+            && !['Scanned', 'Imported from save'].includes(existing.modSource)) continue;
+          // Every scanned story may be assigned to an imported pawn. Silently
+          // capping this catalogue would drop capability evidence on large modlists.
           const scanned = {
             slot: bs.slot, title: bs.title, titleShort: bs.titleShort,
             skills: bs.skills || {}, incapable: bs.incapable || [],
             disabledWorkTagsExact: Array.isArray(bs.disabledWorkTagsExact) ? bs.disabledWorkTagsExact : [],
             permissionSources: Array.isArray(bs.permissionSources) ? bs.permissionSources : [],
+            _scannedBackstory: true,
+            _completeness: bs._completeness,
+            _completenessReasons: bs._completenessReasons,
+            _provenance: bs._provenance,
+            modId: bs.modId,
             desc: bs.desc, modSource: bs.modSource || 'Scanned'
           };
           if (existing) Object.assign(existing, scanned);

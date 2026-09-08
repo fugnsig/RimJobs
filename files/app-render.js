@@ -568,7 +568,8 @@ Object.assign(App, {
           return code.includes('.job.') || code.includes('.workType.') || code.includes('.workTag.');
         });
         if (!hasPawnUncertainty) {
-          if (this.isIncapable(pawn, job)) return { state: 'blocked', permission };
+          const reasons = [];
+          if (this.isIncapable(pawn, job, reasons)) return { state: 'blocked', permission, reasons };
         } else {
           return { state: 'unknown', permission };
         }
@@ -603,12 +604,69 @@ Object.assign(App, {
     return line;
   },
 
-  _c7Tooltip(cellInfo) {
+  _c7PermissionSourceLabel(source, pawn) {
+    const kind = source.sourceKind || '';
+    const id = source.sourceId || '';
+    let definition;
+    if (kind === 'role') {
+      definition = this.getRole && this.getRole(id);
+      return 'Role: ' + (definition && definition.id !== 'none' && definition.label || id || 'unknown');
+    }
+    if (kind === 'backstory' || kind === 'backstoryDef') {
+      definition = this._resolveBackstory && this._resolveBackstory(id);
+      const slot = pawn && pawn.childhood === id ? 'Childhood backstory' : pawn && pawn.adulthood === id ? 'Adulthood backstory' : 'Backstory';
+      return slot + ': ' + (definition && definition.title || id || 'unknown');
+    }
+    if (kind === 'trait') definition = this.getTrait && this.getTrait(id);
+    if (kind === 'gene') definition = this._resolveGeneDef && this._resolveGeneDef(id);
+    if (kind === 'xenotype') definition = this.getXeno && this.getXeno(id);
+    if (kind === 'hediff' || kind === 'hediffDef') {
+      definition = (this.state.hediffCatalog || []).find(entry => entry.def === id)
+        || (pawn && pawn.health || []).find(entry => entry.def === id);
+    }
+    const labels = { trait: 'Trait', gene: 'Gene', xenotype: 'Xenotype', hediff: 'Health condition', hediffDef: 'Health condition', ideology: 'Ideology' };
+    if (labels[kind]) return labels[kind] + ': ' + (definition && definition.label || id || 'unknown');
+    return 'Pawn work restriction';
+  },
+
+  _c7BlockedTooltipLines(permission, pawn) {
+    const lines = [];
+    for (const item of permission.blockers || []) {
+      if (item.kind === 'age') {
+        lines.push('Too young: requires age ' + (item.expected && item.expected.threshold)
+          + ' (currently ' + (item.observed && item.observed.value) + ').');
+      } else if (item.kind === 'executionPath') {
+        const failures = (permission.evaluations || []).filter(entry => entry.kind === 'capacity'
+          && entry.result === 'failed' && !(entry.aggregation && entry.aggregation.masked));
+        for (const failure of failures) {
+          const expected = failure.expected || {};
+          const value = failure.observed && failure.observed.value;
+          const capacity = expected.target || 'Required capacity';
+          lines.push(Number.isFinite(value) && Number.isFinite(expected.threshold)
+            ? capacity + ' is too low: ' + Math.round(value * 100) + '% (requires more than '
+              + Math.round(expected.threshold * 100) + '%).'
+            : capacity + ' is unavailable for this work.');
+        }
+        if (!failures.length) lines.push('Cannot perform any of the tasks required for this job.');
+      } else if (item.kind === 'disableWorkTag' || item.kind === 'disableJob') {
+        const provenance = item.requirementProvenance || {};
+        const sources = provenance.sourceKind ? [provenance]
+          : (item.evidence || []).filter(source => source.sourceKind);
+        if (!sources.length) lines.push('A pawn work restriction prevents this job.');
+        for (const source of sources) lines.push(this._c7PermissionSourceLabel(source, pawn) + ' prevents this work.');
+      } else {
+        lines.push('A work requirement prevents this job.');
+      }
+    }
+    return Array.from(new Set(lines));
+  },
+
+  _c7Tooltip(cellInfo, pawn, job) {
     const lines = [];
     if (cellInfo.state === 'blocked' && cellInfo.permission) {
-      (cellInfo.permission.blockers || []).forEach(item => lines.push(
-        this._c7EvaluationTooltipLine(item, 'Incapable of this job type')));
+      lines.push(...this._c7BlockedTooltipLines(cellInfo.permission, pawn), ...(cellInfo.reasons || []));
       if (!lines.length) lines.push('Incapable of this job type');
+      if (job) lines.unshift('Cannot do ' + (job.name || job.id));
     } else if (cellInfo.state === 'unknown' && cellInfo.permission) {
       (cellInfo.permission.unknowns || []).forEach(item => lines.push(
         this._c7EvaluationTooltipLine(item, 'Eligibility could not be verified')));
@@ -618,7 +676,7 @@ Object.assign(App, {
         this._c7EvaluationTooltipLine(item, 'Temporarily unavailable')));
       if (!lines.length) lines.push('Temporarily unavailable');
     }
-    return _escapeHtml(lines.join('\n'));
+    return _escapeHtml(Array.from(new Set(lines)).join('\n'));
   },
 
   _c7EditablePriorityCellHTML(pid, jid, priority, state, title) {
@@ -632,10 +690,10 @@ Object.assign(App, {
 
   _c7GridCellHTML(pawnId, job, priority, pawnContext, pawn) {
     const cellInfo = this._c7CellState(pawnContext, job, pawn);
-    const title = this._c7Tooltip(cellInfo);
+    const title = this._c7Tooltip(cellInfo, pawn, job);
     if (cellInfo.state === 'blocked') {
       return '<td class="td-job"><div class="prio-box incap" title="'
-        + title + '">×</div></td>';
+        + title + '" aria-label="' + title + '">×</div></td>';
     }
     const cell = cellInfo.state === 'normal'
       ? this._prioCellHTML(pawnId, job.id, priority)

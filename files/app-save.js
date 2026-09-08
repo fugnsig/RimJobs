@@ -360,6 +360,23 @@ Object.assign(App, {
     return null;
   },
 
+  _parsePawnRecords(pawnXml) {
+    if (typeof RECORD_DEFS === 'undefined') return null;
+    // The carry tracker is saved before the owner's records. Follow direct
+    // children at each level so carried pawns and corpses cannot supply them.
+    const tracker = this._directChildText(pawnXml.replace(/<!--[\s\S]*?-->/g, ''), 'records');
+    const map = tracker === null ? null : this._directChildText('<records>' + tracker + '</records>', 'records');
+    const values = map === null ? null : this._directChildText('<records>' + map + '</records>', 'vals');
+    if (values === null) return null;
+    const entries = this._topLevelLis(values);
+    // A present zero-valued (or empty) DefMap is still a valid record snapshot.
+    return Object.fromEntries(RECORD_DEFS.map((definition, index) => {
+      const entry = entries[index] || '';
+      const raw = entry.replace(/^<li\b[^>]*>/, '').replace(/<\/li>$/, '').trim();
+      return [definition.def, _recordValue(raw)];
+    }));
+  },
+
   // Set skill levels + passions inside a pawn block. We DIFF against each skill's own
   // values in the file and only change what actually differs, leaving everything else
   // byte-for-byte. This is what keeps modded content safe: a passion the app doesn't
@@ -982,6 +999,7 @@ Object.assign(App, {
       || meta.storyteller;
     // Extract difficulty defName from <storyteller> block (e.g. Rough, Hard, Extreme)
     meta.difficultyDef = storytellerBlock ? _tag(storytellerBlock[0], 'difficulty') : '';
+    Object.assign(meta, this._parseRaidSaveMetadata(xmlString, storytellerBlock ? storytellerBlock[0] : ''));
     // Extract days passed from ticks for raid calc auto-population
     meta.daysPassed = totalDays;
     // Founding offset so the raid tab can show the real calendar date from a survival-day count
@@ -1037,6 +1055,7 @@ Object.assign(App, {
       }
     }
     meta.colonyName = colonyName;
+    meta.raidColonyKey = JSON.stringify([meta.worldSeed, meta.worldName, playerFactionRef, startAbs]);
 
     await _yield();
 
@@ -1403,22 +1422,7 @@ Object.assign(App, {
         }
       }
 
-      // Parse lifetime records (DefMap -> flat <vals>). Map the validated vanilla
-      // range (indices 0-42, RECORD_DEFS) to a defName->value object. Take the
-      // FIRST records block (the pawn's own; carried pawns appear later).
-      let records = null;
-      const recM = block.match(/<records>\s*<records>\s*<vals>([\s\S]*?)<\/vals>/);
-      if (recM && typeof RECORD_DEFS !== 'undefined') {
-        const vals = (recM[1].match(/<li>([^<]*)<\/li>/g) || []).map(x => parseFloat(x.replace(/<\/?li>/g, '')) || 0);
-        const obj = {};
-        let any = false;
-        RECORD_DEFS.forEach((rd, i) => {
-          const v = vals[i] || 0;
-          obj[rd.def] = v;
-          if (v) any = true;
-        });
-        if (any) records = obj;
-      }
+      const records = this._parsePawnRecords(block);
 
       // Parse genes (endogenes + xenogenes) -these define the xenotype's actual effects
       const geneDefIds = [];
@@ -1858,6 +1862,7 @@ Object.assign(App, {
       }
     }
 
+    meta.raidPopulation = this._raidPopulationFromPawns(pawns);
     return { meta, pawns, ghostPawns };
   },
 
@@ -2321,7 +2326,7 @@ Object.assign(App, {
       if (p.royalTitle) pawn.royalTitle = p.royalTitle;
       if (p.equippedWeapon) pawn.equippedWeapon = p.equippedWeapon;
       if (Array.isArray(p.wornApparel) && p.wornApparel.length) pawn.wornApparel = p.wornApparel;
-      if (p.records) pawn.records = p.records;
+      pawn.records = p.records || null;
 
       // Store colonist bar order for "Game Order" sort
       pawn.displayOrder = p.displayOrder ?? 999999;
@@ -2589,7 +2594,7 @@ Object.assign(App, {
     this.triggerAutoSave();
 
     // Auto-populate raid calculator from save metadata
-    this._applyRaidFromSave(meta, imported);
+    this._applyRaidFromSave(meta);
 
     // Match the Priorities table mode to the save's Work tab setting.
     if (typeof meta.useWorkPriorities === 'boolean') {
@@ -2674,7 +2679,46 @@ Object.assign(App, {
     this._ideoFxKey = '';
   },
 
-  _applyRaidFromSave(meta, pawnCount) {
+  _parseRaidSaveMetadata(xml, storyteller) {
+    const block = (text, name) => {
+      const match = text.match(new RegExp('<' + name + '\\b[^>]*(?:/>|>[\\s\\S]*?</' + name + '>)'));
+      return match && !/IsNull="True"/i.test(match[0]) ? match[0] : null;
+    };
+    const number = (text, name, fallback = 0) => {
+      const match = text.match(new RegExp('<' + name + '>([^<]*)</' + name + '>'));
+      if (!match) return fallback; // Scribe omits values equal to their load default.
+      const value = Number(match[1]);
+      return match[1].trim() && Number.isFinite(value) ? value : null;
+    };
+    const boolean = (text, name) => {
+      const match = text.match(new RegExp('<' + name + '>([^<]*)</' + name + '>'));
+      return !match ? false : /^true$/i.test(match[1].trim()) ? true : /^false$/i.test(match[1].trim()) ? false : null;
+    };
+    const adaptation = block(xml, 'watcherAdaptation');
+    const custom = block(storyteller, 'customDifficulty');
+    return {
+      adaptDays: adaptation === null ? null : number(adaptation, 'adaptDays'),
+      customDifficulty: custom === null ? null : {
+        threatScale: number(custom, 'threatScale'),
+        adaptationEffectFactor: number(custom, 'adaptationEffectFactor'),
+        allowBigThreats: boolean(custom, 'allowBigThreats'),
+        fixedWealthMode: boolean(custom, 'fixedWealthMode'),
+      },
+    };
+  },
+
+  _raidPopulationFromPawns(pawns) {
+    const counts = { colonists: 0, slaves: 0, children: 0 };
+    for (const pawn of Array.isArray(pawns) ? pawns : []) {
+      if (!pawn || pawn.dead || pawn.ghost || pawn.guestStatus === 'Prisoner') continue;
+      if (pawn.guestStatus === 'Slave' || pawn.kindDef === 'Slave' || pawn.slaveStatusFact?.value === true) counts.slaves++;
+      else if (Number.isFinite(pawn.bioAge) && pawn.bioAge < 13) counts.children++;
+      else counts.colonists++;
+    }
+    return counts;
+  },
+
+  _applyRaidFromSave(meta) {
     const r = this.state.raid;
     // Map storyteller defName to app key, or auto-add as custom storyteller
     const stKey = this._STORYTELLER_DEF_MAP[meta.storyteller];
@@ -2728,17 +2772,21 @@ Object.assign(App, {
       r.storyteller = stId;
     }
     // Map difficulty defName to app key
-    if (meta.difficultyDef && this._DIFFICULTY_DEF_MAP[meta.difficultyDef]) {
-      r.difficulty = this._DIFFICULTY_DEF_MAP[meta.difficultyDef];
-    }
+    r.difficulty = this._DIFFICULTY_DEF_MAP[meta.difficultyDef] || 'custom';
+    r.customDifficulty = meta.customDifficulty || null;
+    r.adaptDays = Number.isFinite(meta.adaptDays) ? meta.adaptDays : null;
     // Set days passed and colonist count from save
-    if (meta.daysPassed > 0) r.daysPassed = meta.daysPassed;
+    if (Number.isFinite(meta.daysPassed) && meta.daysPassed >= 0) r.daysPassed = meta.daysPassed;
     if (Number.isFinite(meta.dateOffset)) r.dateOffset = meta.dateOffset; // real calendar offset for date display
 
-    if (pawnCount > 0) r.colonists = pawnCount;
-    // Reset raid tracking to current day so the tracker does not claim you are
-    // hundreds of days overdue.  The app cannot know your actual last raid date.
-    if (meta.daysPassed > 0) r.lastRaidDay = meta.daysPassed;
+    Object.assign(r, meta.raidPopulation || this._raidPopulationFromPawns(this.state.pawns));
+    // Only a user-recorded raid is known. Legacy imports fabricated this date.
+    const sameColony = !!meta.raidColonyKey && r.raidColonyKey === meta.raidColonyKey;
+    if (!sameColony || r.lastRaidSource !== 'manual' || r.lastRaidDay > r.daysPassed) {
+      r.lastRaidDay = null;
+      r.lastRaidSource = null;
+    }
+    r.raidColonyKey = meta.raidColonyKey || null;
 
     // Import the colony's real wealth from the save's History wealth recorders (decoded in
     // main). Use the split fields + split mode so the storyteller wealth (items + creatures +
@@ -2751,6 +2799,8 @@ Object.assign(App, {
       r.wealthTotal = Math.round(w.items + w.creatures + w.buildings * 0.5);
       r.useWealthTotal = false;
     }
+    this.updateRaidToolbar();
+    this.renderRaid();
   },
 
   _copyErrorToClipboard() {
@@ -2885,7 +2935,7 @@ Object.assign(App, {
           match.roleSource = 'save';
         }
         match.royalTitle = incoming.royalTitle || match.royalTitle;
-        if (incoming.records) match.records = incoming.records;
+        match.records = incoming.records || null;
         if (incoming.equippedWeapon) match.equippedWeapon = incoming.equippedWeapon;
         if (incoming.wornApparel && incoming.wornApparel.length) match.wornApparel = incoming.wornApparel;
         // Refresh skills - track history
@@ -3027,7 +3077,7 @@ Object.assign(App, {
     }
 
     // Auto-update raid calc from refreshed save metadata
-    this._applyRaidFromSave(parsed.meta, this.state.pawns.length);
+    this._applyRaidFromSave(parsed.meta);
 
     // Update ghost pawns from refresh
     this.state.ghostPawns = parsed.ghostPawns || [];
@@ -3449,7 +3499,8 @@ Object.assign(App, {
     p.royalTitle = typeof p.royalTitle === 'string' ? p.royalTitle : '';
     p.equippedWeapon = isRecord(p.equippedWeapon) ? p.equippedWeapon : null;
     p.wornApparel = recordList(p.wornApparel);
-    p.records = isRecord(p.records) ? p.records : null;
+    p.records = isRecord(p.records)
+      ? Object.fromEntries(Object.entries(p.records).map(([key, value]) => [key, _recordValue(value)])) : null;
     p.bio = typeof p.bio === 'string' ? p.bio : '';
     p.health = recordList(p.health);
     p.relations = recordList(p.relations);

@@ -1588,14 +1588,15 @@ Object.assign(App, {
   renderRecords() {
     const c = document.getElementById('view-records');
     if (!c) return;
-    const pawns = (this.state.pawns || []).filter(p => p.records);
+    const pawns = (this.state.pawns || []).filter(p => p && p.records && typeof p.records === 'object' && !Array.isArray(p.records));
+    const recordValue = (pawn, def) => _recordValue(pawn.records[def]);
     const defMap = {};
     (typeof RECORD_DEFS !== 'undefined' ? RECORD_DEFS : []).forEach(r => { defMap[r.def] = r; });
     const featured = (typeof RECORD_FEATURED !== 'undefined' ? RECORD_FEATURED : []);
     const fmt = (def, v) => {
       const t = defMap[def];
-      if (t && t.type === 'Float') return (v || 0).toFixed(1);
-      return Math.round(v || 0).toLocaleString();
+      if (t && t.type === 'Float') return v.toFixed(1);
+      return Math.round(v).toLocaleString();
     };
 
     if (!pawns.length) {
@@ -1615,7 +1616,7 @@ Object.assign(App, {
     const wasSearchFocused = document.activeElement && document.activeElement.id === 'recordsSearch';
 
     // Columns with data anywhere (keeps it tidy), then category-filtered.
-    const dataCols = featured.filter(def => pawns.some(p => (p.records[def] || 0) !== 0));
+    const dataCols = featured.filter(def => pawns.some(p => recordValue(p, def) !== 0));
     const baseCols = dataCols.length ? dataCols : featured;
     const cat = this._recordsCat || 'all';
     let showCols = cat === 'all' ? baseCols : baseCols.filter(def => (catMap[def] || 'Other') === cat);
@@ -1634,14 +1635,14 @@ Object.assign(App, {
     let pawnsList = search ? pawns.filter(p => _pawnDisplayName(p, '').toLowerCase().includes(search)) : pawns.slice();
 
     // Sorting.
-    const sort = this._recordsSort;
+    const sort = this._recordsSort || (this._recordsSort = { field: 'name', dir: 'asc' });
     if (sort) {
       pawnsList.sort((a, b) => {
         if (sort.field === 'name') {
           const r = _pawnDisplayName(a, '').localeCompare(_pawnDisplayName(b, ''));
           return sort.dir === 'asc' ? r : -r;
         }
-        const av = a.records[sort.field] || 0, bv = b.records[sort.field] || 0;
+        const av = recordValue(a, sort.field), bv = recordValue(b, sort.field);
         return sort.dir === 'asc' ? av - bv : bv - av;
       });
     }
@@ -1666,7 +1667,7 @@ Object.assign(App, {
     const colStats = {};
     if (hl) {
       showCols.forEach(def => {
-        const vals = pawnsList.map(p => p.records[def] || 0);
+        const vals = pawnsList.map(p => recordValue(p, def));
         const nz = vals.filter(v => v !== 0);
         colStats[def] = {
           max: nz.length ? Math.max(...nz) : null,
@@ -1676,7 +1677,7 @@ Object.assign(App, {
     }
     const rows = pawnsList.map(p => {
       const cells = showCols.map(def => {
-        const v = p.records[def] || 0;
+        const v = recordValue(p, def);
         let cls = v ? '' : 'records-zero';
         if (hl && v !== 0) {
           const s = colStats[def];

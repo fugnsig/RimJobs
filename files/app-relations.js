@@ -227,7 +227,7 @@ _assignModule(App, {
   _relSimStep() {
     const nodes = this._relNodes;
     const edges = this._relEdges;
-    if (!nodes.length) return;
+    if (!nodes.length) { this._relSimRunning = false; return; }
 
     const repulsion = 8000;
     const attraction = 0.005;
@@ -290,13 +290,14 @@ _assignModule(App, {
   },
 
   _relStartSim() {
+    if (!this._relNodes.length) { this._relStopSim(); return; }
     if (this._relSimRunning) return;
     this._relSimRunning = true;
     const tick = () => {
       if (!this._relSimRunning) return;
       this._relSimStep();
       this._relCanvasDraw();
-      this._relRAF = requestAnimationFrame(tick);
+      this._relRAF = this._relSimRunning ? requestAnimationFrame(tick) : null;
     };
     this._relRAF = requestAnimationFrame(tick);
   },
@@ -422,7 +423,9 @@ _assignModule(App, {
       // Defer the edge label to a pass after the nodes, so a node sitting over the arc
       // midpoint can't cover the relation title.
       if (!dimmed) {
-        labelDraws.push({ mx, my, label: e.label, colour: edgeColour, connected, isGhostEdge });
+        const label = sel === e.from || sel === e.to
+          ? this._relRelationLabel(e, sel, (sel === e.from ? b : a).pawn) : e.label;
+        labelDraws.push({ mx, my, label, colour: edgeColour, connected, isGhostEdge });
       }
     }
 
@@ -868,6 +871,29 @@ _assignModule(App, {
   },
 
   // -- SOCIAL INTELLIGENCE --
+  // The import converts raw def/degree pairs into app IDs. Normalise those
+  // active trait IDs without falling back to stale original-save snapshots.
+  _relSocialTraits(pawn) {
+    const aliases = {
+      beautiful: ['beauty', 2], pretty: ['beauty', 1],
+      ugly: ['beauty', -1], staggeringly_ugly: ['beauty', -2],
+      annoying_voice: ['annoyingvoice', 0], creepy_breathing: ['creepybreathing', 0],
+    };
+    return (Array.isArray(pawn && pawn.traits) ? pawn.traits : []).filter(Boolean).map(trait => {
+      const id = String(typeof trait === 'string' ? trait : trait.def || trait.id || '').toLowerCase();
+      const alias = aliases[id];
+      const degree = typeof trait === 'object' ? Number(trait.degree) : 0;
+      return { def: alias ? alias[0] : id === 'ag_beauty' ? 'beauty' : id,
+        degree: alias ? alias[1] : Number.isFinite(degree) ? degree : 0 };
+    });
+  },
+
+  _relRomanceEligible(pawn) {
+    // Vanilla SecondaryLovinChanceFactor excludes biological ages below 16.
+    // Unknown ages and deceased pawns cannot be suggested as current partners.
+    return !!pawn && !pawn.dead && Number.isFinite(pawn.bioAge) && pawn.bioAge >= 16;
+  },
+
   // Estimate opinion offset between two pawns based on relations and traits
   _estimateOpinion(fromPawn, toPawn) {
     let opinion = 0;
@@ -886,13 +912,11 @@ _assignModule(App, {
 
     // Trait-based situational opinion (the OTHER pawn's traits affect how the observer feels)
     if (toPawn.traits && toPawn.traits.length) {
-      const fromTraitIds = (fromPawn.traits || []).map(t => typeof t === 'string' ? t : (t.def || t.id || '').toLowerCase());
-      const isFromKind = fromTraitIds.includes('kind');
+      const isFromKind = this._relSocialTraits(fromPawn).some(trait => trait.def === 'kind');
 
-      toPawn.traits.forEach(t => {
-        const tDef = typeof t === 'string' ? t : (t.def || t.id || '');
-        const tDegree = typeof t === 'object' ? (t.degree || 0) : 0;
-        const tLower = tDef.toLowerCase();
+      this._relSocialTraits(toPawn).forEach(t => {
+        const tDegree = t.degree;
+        const tLower = t.def;
 
         TRAIT_OPINION_EFFECTS.forEach(eff => {
           if (eff.traitDef.toLowerCase() === tLower) {
@@ -910,19 +934,25 @@ _assignModule(App, {
 
   // Estimate romance compatibility (simplified SecondaryLovinChanceFactor)
   _estimateRomanceChance(pawnA, pawnB) {
+    if (!this._relRomanceEligible(pawnA) || !this._relRomanceEligible(pawnB)
+      || pawnA === pawnB || (pawnA.id != null && pawnA.id === pawnB.id)) return 0;
     // Gather orientation signals from genes (vanilla Biotech) and traits (fallback)
     const genesA = (pawnA.geneDefIds || []).map(g => g.toLowerCase());
     const genesB = (pawnB.geneDefIds || []).map(g => g.toLowerCase());
-    const traitsA = (pawnA.traits || []).map(t => (typeof t === 'string' ? t : (t.def || t.id || '')).toLowerCase());
-    const traitsB = (pawnB.traits || []).map(t => (typeof t === 'string' ? t : (t.def || t.id || '')).toLowerCase());
+    const socialTraitsA = this._relSocialTraits(pawnA);
+    const socialTraitsB = this._relSocialTraits(pawnB);
+    const traitsA = socialTraitsA.map(t => t.def);
+    const traitsB = socialTraitsB.map(t => t.def);
 
     // Check both genes and traits for orientation (genes are vanilla, traits may come from mods)
     const hasTag = (genes, traits, tag) => genes.includes(tag) || traits.includes(tag);
 
     if (hasTag(genesA, traitsA, 'asexual') || hasTag(genesB, traitsB, 'asexual')) return 0;
 
+    // The game's age factor ramps from zero at 16 to full weight at 18.
+    let factor = Math.min(1, (pawnA.bioAge - 16) / 2) * Math.min(1, (pawnB.bioAge - 16) / 2);
     const gA = pawnA.gender, gB = pawnB.gender;
-    if (!gA || !gB) return 0.5; // Unknown gender, can't assess
+    if (!gA || !gB) return 0.5 * factor; // Unknown gender, can't fully assess
 
     const sameGender = gA === gB;
     // Check orientation compatibility
@@ -933,8 +963,6 @@ _assignModule(App, {
     if (!biB && !gayB && sameGender) return 0;
     if (!biB && gayB && !sameGender) return 0;
 
-    let factor = 1;
-
     // Age factor (simplified)
     if (pawnA.bioAge && pawnB.bioAge) {
       const diff = Math.abs(pawnA.bioAge - pawnB.bioAge);
@@ -943,8 +971,8 @@ _assignModule(App, {
     }
 
     // Beauty factor
-    const beautyB = traitsB.find(t => t === 'beautiful' || t === 'pretty');
-    const uglyB = traitsB.find(t => t === 'ugly' || t === 'staggeringly_ugly');
+    const beautyB = socialTraitsB.some(t => t.def === 'beauty' && t.degree > 0);
+    const uglyB = socialTraitsB.some(t => t.def === 'beauty' && t.degree < 0);
     if (beautyB) factor *= 2.3;
     if (uglyB) factor *= 0.3;
 
@@ -976,7 +1004,7 @@ _assignModule(App, {
     }
 
     // Trait multipliers
-    const traitsA = (pawnA.traits || []).map(t => (typeof t === 'string' ? t : (t.def || t.id || '')));
+    const traitsA = this._relSocialTraits(pawnA).map(t => t.def);
     traitsA.forEach(tId => {
       const key = Object.keys(TRAIT_FIGHT_FACTORS).find(k => k.toLowerCase() === tId.toLowerCase());
       if (key) base *= TRAIT_FIGHT_FACTORS[key];
@@ -1127,6 +1155,16 @@ _assignModule(App, {
     return html;
   },
 
+  _relRelationLabel(edge, observerId, otherPawn) {
+    const inverse = { Parent: 'Child', Child: 'Parent', Grandparent: 'Grandchild',
+      Grandchild: 'Grandparent', UncleOrAunt: 'NephewOrNiece', NephewOrNiece: 'UncleOrAunt' };
+    const defName = edge.to === observerId ? inverse[edge.def] || edge.def : edge.def;
+    const definition = RELATION_DEFS.find(entry => entry.def === defName);
+    if (!definition) return edge.label || edge.def;
+    return otherPawn && otherPawn.gender === 'Female' && definition.labelFemale
+      ? definition.labelFemale : definition.label;
+  },
+
   _relBuildPawnDetails(pawn) {
     const connections = this._relEdges.filter(e => e.from === pawn.id || e.to === pawn.id);
     const name = _pawnDisplayName(pawn, 'Unknown');
@@ -1160,7 +1198,7 @@ _assignModule(App, {
         html += `<div style="display:flex; align-items:center; gap:6px; padding:5px 8px; background:var(--surface2); border-radius:5px; margin-bottom:3px; border-left:3px solid ${e.colour}; font-size:var(--f-xs)">
           <span style="font-weight:700; color:${isGhost ? 'var(--text2)' : 'var(--text)'}">${_escapeHtml(otherName)}</span>
           ${status ? `<span style="color:var(--text3); font-size:calc(var(--f-xs) * 0.9)">(${status})</span>` : ''}
-          <span style="color:${e.colour}; font-weight:600">${_escapeHtml(e.label)}</span>
+          <span style="color:${e.colour}; font-weight:600">${_escapeHtml(this._relRelationLabel(e, pawn.id, other))}</span>
           ${e.opinion !== 0 ? `<span style="color:${e.opinion > 0 ? 'var(--ok-txt)' : 'var(--p4-txt)'}; margin-left:auto">${e.opinion > 0 ? '+' : ''}${e.opinion}</span>` : ''}
         </div>`;
       });
@@ -1188,6 +1226,7 @@ _assignModule(App, {
   },
 
   _relBuildRomanceSection(pawns) {
+    pawns = pawns.filter(pawn => this._relRomanceEligible(pawn));
     const romancePairs = [];
     for (let i = 0; i < pawns.length; i++) {
       for (let j = i + 1; j < pawns.length; j++) {
@@ -1200,7 +1239,7 @@ _assignModule(App, {
     romancePairs.sort((a, b) => b.chance - a.chance);
 
     let html = '<div style="padding:6px 12px">';
-    html += '<div style="font-size:10px; color:var(--text3); line-height:1.5; margin-bottom:8px; padding:5px 8px; background:var(--surface2); border-radius:5px; border-left:2px solid #e85d8a">Based on sexuality genes (Biotech), age gap preference, beauty, and family relation blocking. Mirrors RimWorld\'s SecondaryLovinChanceFactor.</div>';
+    html += '<div style="font-size:10px; color:var(--text3); line-height:1.5; margin-bottom:8px; padding:5px 8px; background:var(--surface2); border-radius:5px; border-left:2px solid #e85d8a">Approximate compatibility for living pawns with known biological ages of 16 or older, based on orientation, age, beauty and known family relationships. This score is not an in-game probability.</div>';
 
     if (romancePairs.length === 0) {
       html += '<div style="font-size:var(--f-xs); color:var(--text3); text-align:center; padding:6px">No compatible pairs detected.</div></div>';

@@ -1871,6 +1871,13 @@ const CapabilityEvidence = {
       const modId = _modIdOf(resolved);
       const provenance = { sourceKind: 'backstory', sourceId: bsId, modId };
       const confidence = modId ? 'inferred' : 'verified';
+      if (resolved._completeness && resolved._completeness !== 'complete') {
+        unresolved.push(_makeUnresolved('backstory', bsId,
+          'Backstory definition is incomplete', {
+            rawTarget: bsId, modId,
+            rawData: { reasons: resolved._completenessReasons || [], provenance: resolved._provenance },
+          }));
+      }
 
       _emitTypedPermissionSources(_permissionSourcesForDefinition(resolved), effects, unresolved, {
         evidencePrefix: 'backstory:' + bsId + ':' + slot,
@@ -1890,7 +1897,7 @@ const CapabilityEvidence = {
         }
       }
       // Permission entries via classifier
-      if (resolved.incapable) {
+      if (resolved.incapable && !resolved._scannedBackstory && !resolved._completeness) {
         for (let i = 0; i < resolved.incapable.length; i++) {
           const incapId = resolved.incapable[i];
           const eid = 'backstory:' + bsId + ':' + slot + ':incapable:' + incapId;

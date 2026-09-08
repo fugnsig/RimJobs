@@ -1149,7 +1149,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
   // next scan a file whose mtime+size still match is reused from the cache and its
   // bytes are never touched again. Bump CACHE_VERSION whenever the extraction
   // below changes, so stale fragments are discarded wholesale.
-  const CACHE_VERSION = 8; // v8: ideology role PreceptDef fragments and provenance
+  const CACHE_VERSION = 9; // v9: backstory metadata and complete role inheritance inputs
   let cacheFile = null;
   try { cacheFile = pathMod.join(app.getPath('userData'), 'scan-cache.json'); } catch (_) { cacheFile = null; }
   let oldFiles = {};
@@ -1191,6 +1191,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
     }
   };
   const definitionSources = {
+    BackstoryDef: {},
     BodyDef: {},
     BodyPartDef: {},
     PawnCapacityDef: {},
@@ -1211,6 +1212,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
   };
   const definitionUncertainty = {
     byType: {
+      BackstoryDef: {},
       BodyDef: {},
       BodyPartDef: {},
       PawnCapacityDef: {},
@@ -1230,6 +1232,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
       RaceWorkSettings: {},
     },
     dataset: {
+      BackstoryDef: [],
       BodyDef: [],
       BodyPartDef: [],
       PawnCapacityDef: [],
@@ -1273,6 +1276,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
     },
   };
   const C3_FRAGMENT_TYPES = {
+    bs: 'BackstoryDef',
     bd: 'BodyDef',
     bp: 'BodyPartDef',
     cd: 'PawnCapacityDef',
@@ -1297,7 +1301,10 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
       if (!xml) continue;
       const tag = type === 'RaceThingDef' || type === 'RaceWorkSettings' ? 'ThingDef'
         : type === 'PreceptRoleDef' ? 'PreceptDef' : type;
-      const blocks = xml.match(new RegExp('<' + tag + '[\\s>][\\s\\S]*?<\\/' + tag + '>', 'g')) || [];
+      const blocks = type === 'BackstoryDef'
+        ? xml.match(/<((?:\w+\.)*\w*BackstoryDef)\b[^>]*(?:\/>|>[\s\S]*?<\/\1\s*>)/g) || []
+        : type === 'PreceptRoleDef' ? xml.match(/<PreceptDef\b[^>]*(?:\/>|>[\s\S]*?<\/PreceptDef\s*>)/g) || []
+        : xml.match(new RegExp('<' + tag + '[\\s>][\\s\\S]*?<\\/' + tag + '>', 'g')) || [];
       for (let i = 0; i < blocks.length; i++) {
         const mm = blocks[i].match(/<defName>\s*([^<]+?)\s*<\/defName>/i);
         const named = blocks[i].match(/\bName\s*=\s*["']([^"']+)["']/i);
@@ -1425,22 +1432,29 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
     if (content.includes('<TraitDef')) { const m = content.match(/<TraitDef[\s>][\s\S]*?<\/TraitDef>/g); if (m) out.tr = m.join('\n'); }
     if (content.includes('<GeneDef')) { const m = content.match(/<GeneDef[\s>][\s\S]*?<\/GeneDef>/g); if (m) out.ge = m.join('\n'); }
     if (content.includes('<GeneTemplateDef')) { const m = content.match(/<GeneTemplateDef[\s>][\s\S]*?<\/GeneTemplateDef>/g); if (m) out.gt = m.join('\n'); }
-    if (content.includes('<BackstoryDef')) { const m = content.match(/<BackstoryDef[\s>][\s\S]*?<\/BackstoryDef>/g); if (m) out.bs = m.join('\n'); }
+    // Frameworks may derive their own BackstoryDef type. Preserve those and
+    // self-closing inheritance nodes; patch payloads are not loaded definitions.
+    const backstoryContent = content.replace(/<!--[\s\S]*?-->/g, '');
+    if (!/PatchOperation/i.test(backstoryContent)) {
+      const m = backstoryContent.match(/<((?:\w+\.)*\w*BackstoryDef)\b[^>]*(?:\/>|>[\s\S]*?<\/\1\s*>)/g);
+      if (m) out.bs = m.join('\n');
+    }
     if (content.includes('<PawnRelationDef')) { const m = content.match(/<PawnRelationDef[\s>][\s\S]*?<\/PawnRelationDef>/g); if (m) out.re = m.join('\n'); }
     // Ideology planner content: memes, plus ritual-pattern precepts (only PreceptDefs
     // whose preceptClass mentions Ritual - full precept defs would bloat the cache).
     if (content.includes('<MemeDef')) { const m = content.match(/<MemeDef[\s>][\s\S]*?<\/MemeDef>/g); if (m) out.me = m.join('\n'); }
     if (content.includes('<PreceptDef')) {
-      const m = content.match(/<PreceptDef[\s>][\s\S]*?<\/PreceptDef>/g);
+      const m = content.replace(/<!--[\s\S]*?-->/g, '')
+        .match(/<PreceptDef\b[^>]*(?:\/>|>[\s\S]*?<\/PreceptDef\s*>)/g);
       if (m) {
         const rituals = m.filter(b => /<preceptClass>[^<]*Ritual/.test(b));
         if (rituals.length) out.pc = rituals.join('\n');
         // Role definitions are capability-critical. PatchOperation files remain
         // uncertainty evidence and are not treated as already-applied definitions.
         if (!/PatchOperation/i.test(content)) {
-          const roles = m.filter(b => /<preceptClass>[^<]*Role/i.test(b)
-            || /<role(?:Tags|DisabledWorkTags|RequiredWorkTags|RequiredWorkTagAny|Effects|Requirements)>/i.test(b)
-            || /\b(?:Name|ParentName)=["']PreceptRole/i.test(b));
+          // Role identity can be inherited through arbitrarily named bases in
+          // another file. Classify only after the renderer resolves the chain.
+          const roles = m;
           if (roles.length) out.ro = roles.join('\n');
         }
       }
@@ -1475,7 +1489,7 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
       }
     }
     if (/PatchOperation/i.test(content)) {
-      const byType = { BodyDef: [], BodyPartDef: [], PawnCapacityDef: [], RaceThingDef: [], HediffDef: [], WorkTypeDef: [], WorkGiverDef: [], PreceptRoleDef: [], RaceWorkSettings: [] };
+      const byType = { BackstoryDef: [], BodyDef: [], BodyPartDef: [], PawnCapacityDef: [], RaceThingDef: [], HediffDef: [], WorkTypeDef: [], WorkGiverDef: [], PreceptRoleDef: [], RaceWorkSettings: [] };
       const datasetTypes = [];
       const c4 = {
         workType: {}, workGiver: {}, raceWork: {},
@@ -1524,7 +1538,9 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
       for (const match of xpathMatches) {
         const xpath = match[1].replace(/&quot;/gi, '"').replace(/&apos;/gi, "'").replace(/&gt;/gi, '>').replace(/&lt;/gi, '<').replace(/&amp;/gi, '&');
         let type = null;
-        if (/\bBodyPartDef\b/.test(xpath) && /\b(?:tags|hitPoints)\b/i.test(xpath)) type = 'BodyPartDef';
+        if (/\b\w*BackstoryDef\b/.test(xpath)
+          && (/workDisables|ParentName/i.test(xpath) || !/\]\s*\//.test(xpath))) type = 'BackstoryDef';
+        else if (/\bBodyPartDef\b/.test(xpath) && /\b(?:tags|hitPoints)\b/i.test(xpath)) type = 'BodyPartDef';
         else if (/\bBodyDef\b/.test(xpath) && /\b(?:corePart|parts|def|coverage|depth|height)\b/i.test(xpath)) type = 'BodyDef';
         else if (/\bPawnCapacityDef\b/.test(xpath)) type = 'PawnCapacityDef';
         else if (/\bHediffDef\b/.test(xpath) && /\b(?:stages|capMods|partEfficiencyOffset|partIgnoreMissingHP|addedPartProps|partEfficiency)\b/i.test(xpath)) type = 'HediffDef';
@@ -1542,6 +1558,11 @@ ipcMain.handle('scan-trait-gene-defs', async (event, dirPath, options) => {
           for (const nameMatch of xpath.matchAll(pattern)) {
             const name = nameMatch[1].trim();
             if (name && names.indexOf(name) < 0) names.push(name);
+          }
+        }
+        if (type === 'BackstoryDef') {
+          for (const named of xpath.matchAll(/@Name\s*=\s*["']([^"']+)["']/g)) {
+            names.push('@' + named[1].trim());
           }
         }
         if (/\bSkillDef\b/.test(xpath)) markC5('SkillDef', names,

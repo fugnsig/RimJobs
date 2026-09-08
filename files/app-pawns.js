@@ -186,22 +186,34 @@ Object.assign(App, {
   // @deprecated C7: retained only for context-free legacy API compatibility and
   // historical C1 parity evidence. Production C7 request paths use Permission
   // and Availability peer facts; do not add new consumers.
-  isIncapable(pawn, job) {
+  isIncapable(pawn, job, reasons) {
     // Downed (from save import): the pawn is incapacitated in bed - a wound, missing
     // organ or modded part (e.g. an android awaiting a reactor) keeps them down for an
     // unknowable time, so NO job can be assigned until they are back up or the user
     // clears the flag manually.
-    if (pawn.downed) return true;
+    if (pawn.downed) { if (reasons) reasons.push('Currently downed and unable to work.'); return true; }
     // Biotech age gates: children can only take certain jobs at certain ages
     // (verified against Races_Humanlike.xml lifeStageWorkSettings - see JOB_MIN_AGE).
     if (job && typeof JOB_MIN_AGE !== 'undefined' && JOB_MIN_AGE[job.id] != null &&
-        pawn.bioAge != null && pawn.bioAge < JOB_MIN_AGE[job.id]) return true;
+        pawn.bioAge != null && pawn.bioAge < JOB_MIN_AGE[job.id]) {
+      if (reasons) reasons.push('Too young: requires age ' + JOB_MIN_AGE[job.id] + ' (currently ' + pawn.bioAge + ').');
+      return true;
+    }
     // Capacity-based: a pawn with zero Manipulation cannot do the manipulation-gated
     // work columns, exactly as the in-game work tab greys them (verified against
     // WorkGivers.xml - see MANIPULATION_GATED_JOBS). Runs first so it covers gated jobs
     // whether or not they also carry incapBlocks.
-    if (job && typeof MANIPULATION_GATED_JOBS !== 'undefined' && MANIPULATION_GATED_JOBS.includes(job.id) && this._manipulationLost(pawn)) return true;
+    if (job && typeof MANIPULATION_GATED_JOBS !== 'undefined' && MANIPULATION_GATED_JOBS.includes(job.id) && this._manipulationLost(pawn)) {
+      if (reasons) reasons.push('No usable manipulation capacity for this work.');
+      return true;
+    }
     if (!job.incapBlocks) return false;
+    // Optional explanations use the same matched restrictions as the boolean.
+    const explain = (label, restrictions) => {
+      if (reasons && job.incapBlocks.some(id => (restrictions || []).includes(id))) {
+        reasons.push(label + ' prevents this work.');
+      }
+    };
     const xeno = this.getXeno(pawn.xenotype);
     const xenoIncap = xeno.incapable || [];
     // Gene-based incapabilities
@@ -210,16 +222,22 @@ Object.assign(App, {
       xeno.genes.forEach(gId => {
         const gene = this._resolveGeneDef(gId);
         if (gene && gene.incapable) geneIncap.push(...gene.incapable);
+        if (gene) explain('Gene: ' + (gene.label || gId), gene.incapable);
       });
     }
     const role = this.getRole(pawn.role || 'none');
-    const roleIncap = role.incap || [];
+    // Old persisted scans may predate a legacy tag mapping. Derive this
+    // projection from exact saved tags too, including Constructing, while the
+    // canonical requirement definitions are still loading in the background.
+    const roleIncap = (role.incap || []).concat((role.disabledWorkTagsExact || [])
+      .map(tag => WORKTAG_TO_INCAP[tag]).filter(Boolean));
     // Trait-based incapabilities (Pyromaniac disables Firefighting; modded traits via disabledWorkTags)
     let traitIncap = [];
     if (Array.isArray(pawn.traits)) {
       pawn.traits.forEach(tId => {
         const t = this.getTrait(tId);
         if (t && t.incapable) traitIncap.push(...t.incapable);
+        if (t) explain('Trait: ' + (t.label || tId), t.incapable);
       });
     }
     // Backstory-derived incapabilities
@@ -233,7 +251,18 @@ Object.assign(App, {
     // pawn's CURRENT stage applies, picked by severity (see _hediffActiveIncaps).
     const hediffIncap = this._hediffActiveIncaps(pawn.health);
     const allIncap = [...new Set([...pawn.incapable, ...xenoIncap, ...geneIncap, ...roleIncap, ...traitIncap, ...bsIncap, ...hediffIncap])];
-    return job.incapBlocks.some(b => allIncap.includes(b));
+    const blocked = job.incapBlocks.some(b => allIncap.includes(b));
+    if (reasons && blocked) {
+      explain('Role: ' + (role.label || pawn.role), roleIncap);
+      if (cbs) explain('Childhood backstory: ' + (cbs.title || pawn.childhood), cbs.incapable);
+      if (abs) explain('Adulthood backstory: ' + (abs.title || pawn.adulthood), abs.incapable);
+      explain('Xenotype: ' + (xeno.label || pawn.xenotype), xenoIncap);
+      for (const condition of pawn.health || []) {
+        explain('Health condition: ' + (condition.label || condition.def || 'unknown'), this._hediffActiveIncaps([condition]));
+      }
+      explain('Pawn work restriction', pawn.incapable);
+    }
+    return blocked;
   },
 
   // Incap ids a pawn's conditions disable RIGHT NOW: for each hediff with stage-level
@@ -335,6 +364,8 @@ Object.assign(App, {
   // Resolve a backstory ID to { skills, incapable, title, ... } -checks vanilla BACKSTORIES first, then custom
   _resolveBackstory(id) {
     if (!id) return null;
+    const scanned = this.state.customBackstories && this.state.customBackstories[id];
+    if (scanned && scanned._scannedBackstory) return scanned;
     // Try vanilla lookup via data.js helper
     const vanilla = resolveBackstory(id);
     if (vanilla) return vanilla;
@@ -353,7 +384,8 @@ Object.assign(App, {
     if (!this._bsCache) {
       this._bsCache = {};
       for (const s of ['child', 'adult']) {
-        const vanilla = BACKSTORIES.filter(b => b.slot === s).map(b => {
+        const vanilla = BACKSTORIES.filter(b => b.slot === s
+          && !Object.prototype.hasOwnProperty.call(this.state.customBackstories || {}, b.id)).map(b => {
           const resolved = resolveBackstory(b.id);
           return { id: b.id, title: b.title, titleShort: b.titleShort, ...resolved };
         });

@@ -34,7 +34,7 @@ Object.assign(App, {
 
   _DIFFICULTY_LABELS: {
     peaceful: 'Peaceful', community: 'Community Builder', adventure: 'Adventure Story',
-    strive: 'Strive to Survive', blood: 'Blood and Dust', losing: 'Losing is Fun'
+    strive: 'Strive to Survive', blood: 'Blood and Dust', losing: 'Losing is Fun', custom: 'Custom / imported'
   },
 
   // Map RimWorld save file DifficultyDef defNames to our internal keys
@@ -46,6 +46,22 @@ Object.assign(App, {
   // Map RimWorld save file StorytellerDef defNames to our internal keys
   _STORYTELLER_DEF_MAP: {
     Cassandra: 'cassandra', Phoebe: 'phoebe', Randy: 'randy'
+  },
+
+  _raidDifficulty() {
+    const r = this.state.raid;
+    if (Object.hasOwn(this._DIFFICULTY_SCALES, r.difficulty)) {
+      return { known: true, threatScale: this._DIFFICULTY_SCALES[r.difficulty],
+        adaptationEffectFactor: ({ strive: 0.9, blood: 0.7, losing: 0.4 })[r.difficulty] ?? 1,
+        allowBigThreats: r.difficulty !== 'peaceful' };
+    }
+    const custom = r.customDifficulty;
+    const known = !!custom && Number.isFinite(custom.threatScale) && custom.threatScale >= 0
+      && Number.isFinite(custom.adaptationEffectFactor) && custom.adaptationEffectFactor >= 0
+      && typeof custom.allowBigThreats === 'boolean' && custom.fixedWealthMode === false;
+    return { known, threatScale: known ? custom.threatScale : 1,
+      adaptationEffectFactor: known ? Math.min(1, custom.adaptationEffectFactor) : 1,
+      allowBigThreats: custom?.allowBigThreats === false ? false : true };
   },
 
   // Actual gameplay modifiers per difficulty (from Difficulties.xml)
@@ -110,7 +126,8 @@ Object.assign(App, {
     const totalPawnPoints = humanPawnPoints + animalPoints + mechPoints;
 
     // Difficulty (threat scale)
-    const threatScale = this._DIFFICULTY_SCALES[r.difficulty] || 1.0;
+    const difficulty = this._raidDifficulty();
+    const threatScale = difficulty.threatScale;
 
     // Starting factor (days passed)
     const startingFactor = this._lerpTable(n(r.daysPassed) || 1, [
@@ -118,9 +135,10 @@ Object.assign(App, {
     ]);
 
     // Adaption factor
-    const adaptFactor = this._lerpTable(n(r.adaptDays), [
+    const rawAdaptFactor = this._lerpTable(n(r.adaptDays), [
       [-30, 0.4], [0, 0.8], [30, 1.0], [60, 1.2], [120, 1.6], [180, 2.0]
     ]);
+    const adaptFactor = 1 + (rawAdaptFactor - 1) * difficulty.adaptationEffectFactor;
 
     // Final calculation
     let raidPoints = (wealthPoints + totalPawnPoints) * threatScale * startingFactor * adaptFactor;
@@ -129,6 +147,8 @@ Object.assign(App, {
 
     return {
       raidPoints: Math.round(raidPoints),
+      estimateKnown: difficulty.known && r.adaptDays !== null,
+      allowBigThreats: difficulty.allowBigThreats,
       wealthPoints: Math.round(wealthPoints),
       pawnPoints: Math.round(totalPawnPoints),
       threatScale,
@@ -141,7 +161,8 @@ Object.assign(App, {
   getRaidEstimateText() {
     const calc = this.calculateRaidPoints();
     const r = this.state.raid;
-    const daysSinceRaid = (r.daysPassed || 1) - (r.lastRaidDay || 0);
+    const daysSinceRaid = r.lastRaidSource === 'manual' && Number.isFinite(r.lastRaidDay)
+      && r.lastRaidDay <= (r.daysPassed ?? 0) ? (r.daysPassed ?? 0) - r.lastRaidDay : null;
 
     // Storyteller raid windows (approximate)
     let minDays, maxDays;
@@ -157,26 +178,6 @@ Object.assign(App, {
       }
     }
 
-    let status, urgency;
-    const daysUntilSafe = minDays - daysSinceRaid;
-    if (daysSinceRaid < minDays) {
-      status = `~${daysUntilSafe}d safe`;
-      urgency = 'low';
-    } else if (daysSinceRaid >= minDays && daysSinceRaid < maxDays) {
-      status = 'Due';
-      urgency = 'mid';
-    } else {
-      status = 'Overdue';
-      urgency = 'high';
-    }
-
-    // Estimate the earliest/latest raid day in in-game calendar terms
-    const lastDay = r.lastRaidDay || 0;
-    const earliestRaidDay = lastDay + minDays;
-    const latestRaidDay = lastDay + maxDays;
-    const earliestDate = this._daysToQuadrum(this._raidCalDays(earliestRaidDay));
-    const latestDate = this._daysToQuadrum(this._raidCalDays(latestRaidDay));
-
     // Randy and custom storytellers with randomFactor apply variable multiplier
     const hasRandom = r.storyteller === 'randy' || (customST && customST.randomFactor);
     const rLow = (customST && customST.randomLow) || 0.5;
@@ -184,7 +185,17 @@ Object.assign(App, {
     const pointsLow  = hasRandom ? Math.round(calc.raidPoints * rLow) : calc.raidPoints;
     const pointsHigh = hasRandom ? Math.round(calc.raidPoints * rHigh) : calc.raidPoints;
 
-    return { status, urgency, points: calc.raidPoints, pointsLow, pointsHigh, hasRandom, randomLow: rLow, randomHigh: rHigh, daysSinceRaid, earliestDate, latestDate, minDays, maxDays };
+    const disabled = !calc.allowBigThreats;
+    const status = disabled ? 'Raids disabled' : hasRandom ? 'Unpredictable' : 'Timing uncertain';
+    const timingText = disabled ? 'Major storyteller threats are disabled by this difficulty.'
+      : hasRandom ? 'Random incidents: no guaranteed cooldown or next raid date.'
+      : 'Storyteller cycles and other incidents prevent a reliable next raid date.';
+    const pointsText = disabled ? 'Disabled' : !calc.estimateKnown ? 'Unknown'
+      : hasRandom ? `${pointsLow}-${pointsHigh}` : String(calc.raidPoints);
+    const historyText = daysSinceRaid === null ? 'Last raid unknown' : `${daysSinceRaid}d since recorded raid`;
+    return { status, urgency: 'unknown', points: calc.raidPoints, pointsLow, pointsHigh, hasRandom,
+      randomLow: rLow, randomHigh: rHigh, daysSinceRaid, minDays, maxDays,
+      disabled, timingText, pointsText, historyText };
   },
 
   updateRaidToolbar() {
@@ -197,21 +208,21 @@ Object.assign(App, {
     }
     el.style.display = '';
     const est = this.getRaidEstimateText();
-    const colors = { low: 'var(--ok-txt)', mid: 'var(--accent)', high: 'var(--p4-txt)' };
+    const colors = { unknown: 'var(--text2)' };
     // Build tooltip with detailed info
     const r = this.state.raid;
     const calc = this.calculateRaidPoints();
-    const dateInfo = this._daysToQuadrum(this._raidCalDays(r.daysPassed || 1));
-    const ptText = est.hasRandom ? `${est.pointsLow}-${est.pointsHigh}` : `${est.points}`;
+    const dateInfo = this._daysToQuadrum(this._raidCalDays(r.daysPassed ?? 0));
+    const ptText = est.pointsText;
     const tooltipLines = [
-      `Raid Points: ${ptText}${est.hasRandom ? ' (random ×0.5-1.5)' : ''}`,
-      `Status: ${est.status} (${est.daysSinceRaid}d since last raid)`,
+      `Raid Points: ${ptText}${est.hasRandom && !est.disabled ? ' (random x' + est.randomLow + '-' + est.randomHigh + ')' : ''}`,
+      `Status: ${est.status} (${est.historyText})`,
       `Storyteller Wealth: ${Math.round(calc.storytellerWealth).toLocaleString()}`,
       `Date: ${dateInfo.quadrum} ${dateInfo.day}, ${dateInfo.year}`,
       `Difficulty: ${this._DIFFICULTY_LABELS[r.difficulty] || r.difficulty}`
     ];
     el.title = tooltipLines.join('\n');
-    el.innerHTML = `<span style="color:${colors[est.urgency]}; font-weight:700; font-size:calc(10px * var(--font-scale))">${est.status}</span><span style="color:var(--text3); font-size:calc(9px * var(--font-scale)); margin-left:4px">${ptText}pt</span>`;
+    el.innerHTML = `<span style="color:${colors[est.urgency]}; font-weight:700; font-size:calc(10px * var(--font-scale))">${est.status}</span><span style="color:var(--text3); font-size:calc(9px * var(--font-scale)); margin-left:4px">${ptText}${!est.disabled && calc.estimateKnown ? 'pt' : ''}</span>`;
   },
 
   renderRaid() {
@@ -220,9 +231,9 @@ Object.assign(App, {
     const r = this.state.raid;
     const calc = this.calculateRaidPoints();
     const est = this.getRaidEstimateText();
-    const colors = { low: 'var(--ok-txt)', mid: 'var(--p3-txt)', high: 'var(--warn-txt)' };
-    const dateInfo = this._daysToQuadrum(this._raidCalDays(r.daysPassed || 1));
-    const lastRaidDate = r.lastRaidDay ? this._daysToQuadrum(this._raidCalDays(r.lastRaidDay)) : null;
+    const colors = { unknown: 'var(--text2)' };
+    const dateInfo = this._daysToQuadrum(this._raidCalDays(r.daysPassed ?? 0));
+    const lastRaidDate = r.lastRaidSource === 'manual' && Number.isFinite(r.lastRaidDay) ? this._daysToQuadrum(this._raidCalDays(r.lastRaidDay)) : null;
 
     // Build storyteller options
     const builtinSTs = [
@@ -233,18 +244,11 @@ Object.assign(App, {
     const allSTs = [...builtinSTs, ...(r.customStorytellers || [])];
     const stOptions = allSTs.map(s => `<option value="${_escapeHtml(s.id)}" ${r.storyteller === s.id ? 'selected' : ''}>${_escapeHtml(s.name)}</option>`).join('');
 
-    // Get current storyteller's raid window for display
-    const customST = (r.customStorytellers || []).find(s => s.id === r.storyteller);
-    let raidWindowText;
-    if (customST) {
-      raidWindowText = `${customST.minDays}-${customST.maxDays} days` + (customST.randomFactor ? ` (random x${customST.randomLow || 0.5}-${customST.randomHigh || 1.5})` : '');
-    } else {
-      raidWindowText = r.storyteller === 'randy' ? '2-12 days (random x0.5-1.5)' : r.storyteller === 'phoebe' ? '8-16 days' : '4-6 days';
-    }
+    const raidWindowText = est.timingText;
 
-    // Raid window date range
-    const earlyStr = `${est.earliestDate.quadrum} ${est.earliestDate.day}`;
-    const lateStr = `${est.latestDate.quadrum} ${est.latestDate.day}`;
+    // Raid timing date range
+    const timingText = est.timingText;
+
 
     // Custom storytellers list HTML
     const customSTList = (r.customStorytellers || []).map(s =>
@@ -269,7 +273,7 @@ Object.assign(App, {
           <p style="margin:0 0 8px 0"><strong style="color:var(--text2)">Wealth Points</strong> scale from 0 (at 14k wealth) to 4,200 (at 1M wealth).</p>
           <p style="margin:0 0 8px 0"><strong style="color:var(--text2)">Pawn Points</strong> per colonist scale from 15 (at low wealth) to 200 (at 1M wealth). Slaves x0.75, Children x0.5.</p>
           <p style="margin:0 0 8px 0"><strong style="color:var(--text2)">Starting Factor</strong> is 0.7 for the first 10 days, ramping to 1.0 by day 40.</p>
-          <p style="margin:0"><strong style="color:var(--text2)">Adaption Factor</strong> rises if no colonists die/get downed (max 1.47 at 100 AdaptDays). Resets partially on deaths.</p>
+          <p style="margin:0"><strong style="color:var(--text2)">Adaptation</strong> is read from the save and weighted by difficulty. The vanilla raw factor reaches about 1.47 at 100 Adapt Days. Unknown values require a fresh save import or a manual entry. Timing is uncertain; recording a raid does not establish a safe period.</p>
         </div>
       </div>
 
@@ -278,12 +282,12 @@ Object.assign(App, {
         <div id="raidResultPanel" style="padding:16px; background:var(--surface3); border-radius:var(--radius-md); border:1px solid var(--border-med); margin-bottom:16px">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
             <div>
-              <div style="font-size:calc(var(--f-base) * 1.4); font-weight:800; color:var(--text)">${est.hasRandom ? est.pointsLow + '-' + est.pointsHigh : calc.raidPoints} <span style="font-size:var(--f-sm); color:var(--text3); font-weight:400">raid points</span></div>
+              <div style="font-size:calc(var(--f-base) * 1.4); font-weight:800; color:var(--text)">${est.pointsText} <span style="font-size:var(--f-sm); color:var(--text3); font-weight:400">raid points</span></div>
               <div style="font-size:var(--f-xs); color:var(--text3); margin-top:2px">Storyteller Wealth: ${Math.round(calc.storytellerWealth).toLocaleString()}${est.hasRandom ? ' · random x' + est.randomLow + '-' + est.randomHigh : ''}</div>
             </div>
             <div style="text-align:right">
               <div style="font-size:var(--f-sm); font-weight:700; color:${colors[est.urgency]}">${est.status}</div>
-              <div style="font-size:var(--f-xs); color:var(--text3)">${est.daysSinceRaid}d since last raid</div>
+              <div style="font-size:var(--f-xs); color:var(--text3)">${est.historyText}</div>
             </div>
           </div>
           <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; font-size:var(--f-xs)">
@@ -301,7 +305,7 @@ Object.assign(App, {
             </div>
             <div style="padding:8px; background:var(--surface2); border-radius:6px; text-align:center">
               <div style="color:var(--text3); margin-bottom:2px">Threat</div>
-              <div style="font-weight:700; color:var(--text)">x${calc.threatScale}</div>
+              <div style="font-weight:700; color:var(--text)">x${this._raidDifficulty().known ? calc.threatScale : '?'}</div>
             </div>
             <div style="padding:8px; background:var(--surface2); border-radius:6px; text-align:center">
               <div style="color:var(--text3); margin-bottom:2px">Starting</div>
@@ -309,13 +313,13 @@ Object.assign(App, {
             </div>
             <div style="padding:8px; background:var(--surface2); border-radius:6px; text-align:center">
               <div style="color:var(--text3); margin-bottom:2px">Adapt</div>
-              <div style="font-weight:700; color:var(--text)">x${calc.adaptFactor}</div>
+              <div style="font-weight:700; color:var(--text)">x${calc.estimateKnown ? calc.adaptFactor : '?'}</div>
             </div>
           </div>
           <div style="margin-top:12px; padding:10px; background:var(--surface2); border-radius:6px; font-size:var(--f-xs)">
             <div style="display:flex; justify-content:space-between; align-items:center">
-              <div style="color:var(--text3)">Raid window</div>
-              <div style="color:var(--text); font-weight:600">${earlyStr} - ${lateStr}</div>
+              <div style="color:var(--text3)">Raid timing</div>
+              <div style="color:var(--text); font-weight:600">${timingText}</div>
             </div>
           </div>
         </div>
@@ -324,7 +328,7 @@ Object.assign(App, {
           <button class="btn btn-primary" onclick="App.markRaidOccurred(); App.renderRaid()" style="flex:1; min-width:100px">Raid Occurred</button>
           <button class="btn" onclick="App.advanceRaidDay(); App.renderRaid()" style="flex:0">+1 Day</button>
           <div style="padding:8px 14px; background:var(--surface3); border-radius:var(--radius-sm); border:1px solid var(--border); font-size:var(--f-xs); color:var(--text3); display:flex; align-items:center">
-            Last raid: ${lastRaidDate ? `${lastRaidDate.quadrum} ${lastRaidDate.day}, ${lastRaidDate.year}` : '-'}
+            Last raid: ${lastRaidDate ? `${lastRaidDate.quadrum} ${lastRaidDate.day}, ${lastRaidDate.year}` : 'Unknown'}
           </div>
         </div>
       </div>
@@ -347,7 +351,7 @@ Object.assign(App, {
             <input type="number" id="raidYear" class="skill-input" style="width:100%; text-align:center" min="5500" value="${dateInfo.year}" onchange="App.updateRaidDate()">
           </div>
         </div>
-        <div style="font-size:var(--f-xs); color:var(--text3); margin-bottom:4px">Day ${r.daysPassed || 1} - ${dateInfo.quadrum} ${dateInfo.day}, ${dateInfo.year}</div>
+        <div style="font-size:var(--f-xs); color:var(--text3); margin-bottom:4px">Day ${r.daysPassed ?? 0} - ${dateInfo.quadrum} ${dateInfo.day}, ${dateInfo.year}</div>
       </div>
 
       <div class="settings-card">
@@ -411,7 +415,7 @@ Object.assign(App, {
           </div>
           <div>
             <label style="font-size:var(--f-xs); color:var(--text3); font-weight:700; text-transform:uppercase; display:block; margin-bottom:4px">Adapt Days</label>
-            <input type="number" class="skill-input" style="width:100%; text-align:center" min="-60" max="100" value="${r.adaptDays}" onchange="App.updateRaidField('adaptDays', this.value)" title="AdaptDays: clamped to -60 to 100 (game bounds)">
+            <input type="number" class="skill-input" style="width:100%; text-align:center" min="-60" max="100" value="${r.adaptDays ?? ''}" placeholder="Unknown" onchange="App.updateRaidField('adaptDays', this.value)" title="AdaptDays: clamped to -60 to 100 (game bounds)">
           </div>
         </div>
       </div>
@@ -433,9 +437,9 @@ Object.assign(App, {
           </div>
         </div>
         <div style="font-size:var(--f-xs); color:var(--text3); padding:4px 0; margin-bottom:10px">
-          Raid window: ${raidWindowText}
+          Raid timing: ${raidWindowText}
         </div>
-        ${this._renderDifficultyModifiers(r.difficulty)}
+        ${r.difficulty === 'custom' ? this._renderRaidCustomDifficulty() : this._renderDifficultyModifiers(r.difficulty)}
 
         <div style="border-top:1px solid var(--border); padding-top:12px">
           <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px">
@@ -449,6 +453,14 @@ Object.assign(App, {
       </div>
 
     `;
+  },
+
+  _renderRaidCustomDifficulty() {
+    const difficulty = this._raidDifficulty();
+    const content = difficulty.known
+      ? `Imported threat scale: x${difficulty.threatScale}. Adaptation effect: ${Math.round(difficulty.adaptationEffectFactor * 100)}%. Major threats: ${difficulty.allowBigThreats ? 'enabled' : 'disabled'}.`
+      : 'Custom difficulty is missing, invalid or uses an unsupported wealth mode. Import a supported save or select a preset to estimate points.';
+    return `<div style="font-size:var(--f-xs); color:var(--text3); margin-bottom:12px">${content}</div>`;
   },
 
   _renderDifficultyModifiers(diffKey) {
@@ -513,18 +525,18 @@ Object.assign(App, {
     if (!el) return;
     const calc = this.calculateRaidPoints();
     const est = this.getRaidEstimateText();
-    const colors = { low: 'var(--ok-txt)', mid: 'var(--p3-txt)', high: 'var(--warn-txt)' };
-    const earlyStr = `${est.earliestDate.quadrum} ${est.earliestDate.day}`;
-    const lateStr = `${est.latestDate.quadrum} ${est.latestDate.day}`;
+    const colors = { unknown: 'var(--text2)' };
+    const timingText = est.timingText;
+
     el.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
         <div>
-          <div style="font-size:calc(var(--f-base) * 1.4); font-weight:800; color:var(--text)">${est.hasRandom ? est.pointsLow + '-' + est.pointsHigh : calc.raidPoints} <span style="font-size:var(--f-sm); color:var(--text3); font-weight:400">raid points</span></div>
+          <div style="font-size:calc(var(--f-base) * 1.4); font-weight:800; color:var(--text)">${est.pointsText} <span style="font-size:var(--f-sm); color:var(--text3); font-weight:400">raid points</span></div>
           <div style="font-size:var(--f-xs); color:var(--text3); margin-top:2px">Storyteller Wealth: ${Math.round(calc.storytellerWealth).toLocaleString()}${est.hasRandom ? ' · random x' + est.randomLow + '-' + est.randomHigh : ''}</div>
         </div>
         <div style="text-align:right">
           <div style="font-size:var(--f-sm); font-weight:700; color:${colors[est.urgency]}">${est.status}</div>
-          <div style="font-size:var(--f-xs); color:var(--text3)">${est.daysSinceRaid}d since last raid</div>
+          <div style="font-size:var(--f-xs); color:var(--text3)">${est.historyText}</div>
         </div>
       </div>
       <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; font-size:var(--f-xs)">
@@ -542,7 +554,7 @@ Object.assign(App, {
         </div>
         <div style="padding:8px; background:var(--surface2); border-radius:6px; text-align:center">
           <div style="color:var(--text3); margin-bottom:2px">Threat</div>
-          <div style="font-weight:700; color:var(--text)">x${calc.threatScale}</div>
+          <div style="font-weight:700; color:var(--text)">x${this._raidDifficulty().known ? calc.threatScale : '?'}</div>
         </div>
         <div style="padding:8px; background:var(--surface2); border-radius:6px; text-align:center">
           <div style="color:var(--text3); margin-bottom:2px">Starting</div>
@@ -550,13 +562,13 @@ Object.assign(App, {
         </div>
         <div style="padding:8px; background:var(--surface2); border-radius:6px; text-align:center">
           <div style="color:var(--text3); margin-bottom:2px">Adapt</div>
-          <div style="font-weight:700; color:var(--text)">x${calc.adaptFactor}</div>
+          <div style="font-weight:700; color:var(--text)">x${calc.estimateKnown ? calc.adaptFactor : '?'}</div>
         </div>
       </div>
       <div style="margin-top:12px; padding:10px; background:var(--surface2); border-radius:6px; font-size:var(--f-xs)">
         <div style="display:flex; justify-content:space-between; align-items:center">
-          <div style="color:var(--text3)">Raid window</div>
-          <div style="color:var(--text); font-weight:600">${earlyStr} - ${lateStr}</div>
+          <div style="color:var(--text3)">Raid timing</div>
+          <div style="color:var(--text); font-weight:600">${timingText}</div>
         </div>
       </div>`;
   },
@@ -593,15 +605,19 @@ Object.assign(App, {
     if (!qSel || !dInput || !yInput) return;
     const quadrumIdx = parseInt(qSel.value) || 0;
     const dayInQuadrum = Math.max(1, Math.min(15, parseInt(dInput.value) || 1));
-    const year = parseInt(yInput.value) || 5500;
+    const year = Math.max(5500, parseInt(yInput.value) || 5500);
     const totalDays = this._quadrumToDays(quadrumIdx, dayInQuadrum, year);
     // The inputs are a CALENDAR date; convert back to survival-days by removing the founding
     // offset so daysPassed stays survival-based (and raid difficulty is unaffected).
     this.state.raid.daysPassed = Math.max(0, totalDays - ((this.state.raid.dateOffset) || 0));
     // Update the hidden raw daysPassed field if present
     const dpInput = document.getElementById('raidDaysPassed');
-    if (dpInput) dpInput.value = totalDays;
-    this._updateRaidDisplay();
+    if (dpInput) dpInput.value = this.state.raid.daysPassed;
+    if (this.state.raid.lastRaidDay > this.state.raid.daysPassed) {
+      this.state.raid.lastRaidDay = null;
+      this.state.raid.lastRaidSource = null;
+    }
+    this.renderRaid();
     this.updateRaidToolbar();
     this.triggerAutoSave();
   },
@@ -642,15 +658,17 @@ Object.assign(App, {
     if (this.state.raid.storyteller === id) {
       this.state.raid.storyteller = 'cassandra';
     }
+    this.updateRaidToolbar();
     this.triggerAutoSave();
     this.renderRaid();
     this.toast('Storyteller removed');
   },
 
   markRaidOccurred() {
-    this.state.raid.lastRaidDay = this.state.raid.daysPassed || 1;
+    this.state.raid.lastRaidDay = this.state.raid.daysPassed ?? 0;
+    this.state.raid.lastRaidSource = 'manual';
     this.updateRaidToolbar();
     this.triggerAutoSave();
-    this.toast('Raid marked, timer reset');
+    this.toast('Raid date recorded');
   },
 });

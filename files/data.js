@@ -499,7 +499,7 @@ const JOBS = [
   {id:'entertain',    name:'Entertain',           cat:'social',    filter:'social',   skill:'social',    hint:'Cheer up colonists.', important:false, incapBlocks:['social'], naturalPriority:600, relevantSkills:['social']},
   {id:'cooking',      name:'Cooking',                cat:'food',      filter:'crafting', skill:'cook',      hint:'Higher = better food.', important:true,  incapBlocks:['cooking'], naturalPriority:850, speedFormula:{base:0, perLevel:1, curve:true}, relevantSkills:['cook']},
   {id:'hunting',      name:'Hunt',                cat:'food',      filter:'combat',   skill:'shoot',     hint:'Risk vs Reward.', important:false, incapBlocks:['violence','hunting'], naturalPriority:950, relevantSkills:['shoot','animal']},
-  {id:'construction', name:'Construct',           cat:'labor',     filter:'labor',    skill:'construct', hint:'Build speed & quality.', important:true, incapBlocks:['skilled_labor'], naturalPriority:750, speedFormula:{base:0.3, perLevel:0.0875}, relevantSkills:['construct']},
+  {id:'construction', name:'Construct',           cat:'labor',     filter:'labor',    skill:'construct', hint:'Build speed & quality.', important:true, incapBlocks:['skilled_labor','construction'], naturalPriority:750, speedFormula:{base:0.3, perLevel:0.0875}, relevantSkills:['construct']},
   {id:'growing',      name:'Grow',                cat:'labor',     filter:'labor',    skill:'plant',     hint:'Harvest yield & speed.', important:true, incapBlocks:['plantwork'], naturalPriority:700, speedFormula:{base:0.08, perLevel:0.115}, relevantSkills:['plant']},
   {id:'mining',       name:'Mine',                cat:'labor',     filter:'labor',    skill:'mine',      hint:'Mining speed & yield.', important:false, incapBlocks:['mining'], naturalPriority:650, speedFormula:{base:0.04, perLevel:0.12}, relevantSkills:['mine']},
   {id:'plant_cut',    name:'Plant Cut',           cat:'labor',     filter:'labor',    skill:'plant',     hint:'Clear forests.', important:false, incapBlocks:['plantwork'], naturalPriority:500, speedFormula:{base:0.08, perLevel:0.115}, relevantSkills:['plant']},
@@ -508,7 +508,7 @@ const JOBS = [
   {id:'tailoring',    name:'Tailor',              cat:'crafting',  filter:'crafting', skill:'craft',     hint:'Craft apparel.', important:false, incapBlocks:['crafting','skilled_labor'], naturalPriority:450, relevantSkills:['craft']},
   {id:'art_work',     name:'Art',                 cat:'crafting',  filter:'crafting', skill:'art',       hint:'Boost colony beauty.', important:false, incapBlocks:['artistic'], naturalPriority:430, relevantSkills:['art']},
   {id:'crafting',     name:'Craft',               cat:'crafting',  filter:'crafting', skill:'craft',     hint:'General recipes.', important:false, incapBlocks:['crafting','skilled_labor'], naturalPriority:440, relevantSkills:['craft']},
-  {id:'fishing',      name:'Fish',                cat:'crafting',  filter:'labor',    skill:'plant',     hint:'Water-based food.', important:false, incapBlocks:['plantwork'], naturalPriority:350, relevantSkills:['plant']},
+  {id:'fishing',      name:'Fish',                cat:'crafting',  filter:'labor',    skill:'plant',     hint:'Water-based food.', important:false, incapBlocks:['animals'], naturalPriority:350, relevantSkills:['plant']},
   {id:'hauling',      name:'Haul',                cat:'maintenance',filter:'labor',   skill:null,        hint:'Vital logistics.', important:true,  incapBlocks:['hauling','dumb_labor'], naturalPriority:300},
   {id:'cleaning',     name:'Clean',               cat:'maintenance',filter:'labor',   skill:null,        hint:'Improve mood/hygiene.', important:false, incapBlocks:['cleaning','dumb_labor'], naturalPriority:200},
   {id:'dark_study',   name:'Dark Study',          cat:'maintenance',filter:'social',  skill:'intel',     hint:'Anomaly research.', important:false, naturalPriority:550, speedFormula:{base:0.08, perLevel:0.115}, relevantSkills:['intel']},
@@ -583,6 +583,13 @@ const JOB_SOURCE_LABEL = {
   vanilla: 'Vanilla', Biotech: 'Biotech DLC', Anomaly: 'Anomaly DLC',
   Odyssey: 'Odyssey DLC', modded: 'Modded / custom',
 };
+
+// Record values may arrive as numeric strings in older JSON projects.
+function _recordValue(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return 0;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
 
 // Vanilla RecordDefs in DefDatabase index order (= Records_Misc.xml file order),
 // verified against the source AND cross-checked against real save <vals> data
@@ -902,7 +909,7 @@ function _storeDefinition(result, defName, value) {
 
 function _resolveInheritance(rawDefs, fieldMerger) {
   // Build lookups without silently choosing between duplicate parent candidates.
-  const byName = {};
+  const byName = Object.create(null);
   for (let i = 0; i < rawDefs.length; i++) {
     const rd = rawDefs[i];
     const names = _uniqueStrings([rd.abstractName, rd.defName]);
@@ -1316,10 +1323,6 @@ function parseRolesFromXML(xmlString, options) {
     if (active.completeness === 'complete' && modId && !activeIds.has(modId)) continue;
     if (!sourceMatchesRuntime(source)) continue;
     const preceptClass = _textDirect(node, 'preceptClass') || '';
-    const isRole = /Role/i.test(preceptClass) || /PreceptRole/i.test(String(node.getAttribute('ParentName') || ''))
-      || !!_directChild(node, 'roleTags') || !!_directChild(node, 'roleEffects')
-      || !!_directChild(node, 'roleDisabledWorkTags') || !!_directChild(node, 'roleRequiredWorkTags');
-    if (!isRole) continue;
     const effects = parseEffects(node);
     const reasons = effects.malformed ? ['unparseableRoleEffect'] : [];
     raw.push({
@@ -1328,6 +1331,7 @@ function parseRolesFromXML(xmlString, options) {
       parentName: node.getAttribute('ParentName') || null,
       isAbstract: _boolAttribute(node, 'Abstract') === true,
       rawFields: {
+        preceptClass: preceptClass || null,
         definitionSource: {
           modId: source && source.modId ? source.modId : (opts.modId || null),
         },
@@ -1350,6 +1354,7 @@ function parseRolesFromXML(xmlString, options) {
   }
 
   const resolved = _resolveInheritance(raw, (parent, child) => ({
+    preceptClass: child.preceptClass != null ? child.preceptClass : parent.preceptClass,
     definitionSource: child.definitionSource || parent.definitionSource,
     label: child.label != null ? child.label : parent.label,
     description: child.description != null ? child.description : parent.description,
@@ -1363,6 +1368,10 @@ function parseRolesFromXML(xmlString, options) {
   }));
   const groups = {};
   for (const definition of resolved) {
+    const isRole = /Role/i.test(definition.preceptClass || '')
+      || ['roleTags', 'disabledWorkTags', 'requiredWorkTags', 'requiredWorkTagAny', 'effects']
+        .some(field => definition[field] && definition[field].present);
+    if (!isRole) continue;
     if (!groups[definition.defName]) groups[definition.defName] = [];
     groups[definition.defName].push(definition);
   }
@@ -1451,7 +1460,7 @@ function parseRolesFromXML(xmlString, options) {
       definitionCompleteness: safe ? 'complete' : 'partial',
       definitionCompletenessReasons: reasons,
       modSource: modId && !/^ludeon\.rimworld(?:\.|$)/i.test(modId) ? modId : '',
-      _provenance: { modId: modId || null, sources: [] },
+      _provenance: { modId: modId || null, sources: provenance.sources || [] },
     };
     results[defName] = role;
   }
@@ -1846,73 +1855,183 @@ function _cleanBackstoryDesc(raw) {
 // Parse scanned <BackstoryDef> XML into { id: backstoryObj } with the story text
 // (baseDesc), slot, skillGains (app ids) and workDisables (incap ids).
 // Renderer-only (uses DOMParser).
-function parseBackstoriesFromXML(xmlString) {
+function parseBackstoriesFromXML(xmlString, options) {
   const results = {};
-  let doc;
-  try { doc = new DOMParser().parseFromString(xmlString || '', 'text/xml'); } catch (_) { return results; }
+  const opts = options || {};
+  const doc = _parseXmlDoc(xmlString || '');
+  if (!doc) return results;
+  const active = opts.activePackageResolution || {};
+  const activeIds = new Set((active.ids || []).map(id => String(id).toLowerCase()));
+  const version = String((opts.runtimeFingerprint || {}).version || '').match(/^(\d+\.\d+)/);
+  const counts = Object.create(null);
   const skillMap = (typeof BACKSTORY_SKILL_MAP !== 'undefined') ? BACKSTORY_SKILL_MAP : {};
   const incapMap = (typeof WORKTAG_TO_INCAP !== 'undefined') ? WORKTAG_TO_INCAP : {};
   const skillIdOf = (name) => skillMap[String(name || '').trim()] || _rwSkillToAppId(name);
-  for (const b of doc.querySelectorAll('BackstoryDef')) {
-    if (b.getAttribute('Abstract') === 'True') continue;
-    const defName = (b.querySelector('defName') || {}).textContent;
-    if (!defName || !defName.trim()) continue;
-    const dn = defName.trim();
-    const slotRaw = ((b.querySelector('slot') || {}).textContent || '').trim().toLowerCase();
-    const slot = slotRaw.indexOf('child') === 0 ? 'child' : slotRaw.indexOf('adult') === 0 ? 'adult' : '';
-    if (!slot) continue;
-    // RimWorld stores backstory titles lowercase ("vatgrown soldier") - capitalise
-    // the first letter for display, matching the baked vanilla list's style.
-    const title = _capFirst((((b.querySelector('title') || {}).textContent) || dn).trim());
-    const titleShort = _capFirst((((b.querySelector('titleShort') || {}).textContent) || title).trim());
-    // The story lives in <description> (older/modded defs may use <baseDesc>).
-    // Keep it raw (with [PAWN_*] tokens) so it can be personalised to the selected
-    // pawn at display time (see _personalizeBackstory in app-pawns.js).
-    const descNode = b.querySelector('description') || b.querySelector('baseDesc');
-    const desc = String((descNode && descNode.textContent) || '').replace(/\\n/g, '\n').trim();
+
+  const parseSkills = (el) => {
+    const sg = _directChild(el, 'skillGains');
+    if (!sg) return null;
     const skills = {};
-    const sg = b.querySelector('skillGains');
-    if (sg) {
-      const lis = Array.from(sg.children).filter(c => c.tagName.toLowerCase() === 'li');
-      if (lis.length) {
-        for (const li of lis) {
-          const id = skillIdOf((li.querySelector('key, skill') || {}).textContent);
-          const v = parseInt(((li.querySelector('value, amount') || {}).textContent) || '', 10);
-          if (id && Number.isFinite(v) && v !== 0) skills[id] = (skills[id] || 0) + v;
-        }
-      } else {
-        for (const ch of Array.from(sg.children)) {
-          const id = skillIdOf(ch.tagName);
-          const v = parseInt(ch.textContent || '', 10);
-          if (id && Number.isFinite(v) && v !== 0) skills[id] = (skills[id] || 0) + v;
-        }
+    const lis = Array.from(sg.children).filter(c => c.tagName.toLowerCase() === 'li');
+    if (lis.length) {
+      for (const li of lis) {
+        const id = skillIdOf((li.querySelector('key, skill') || {}).textContent);
+        const v = parseInt(((li.querySelector('value, amount') || {}).textContent) || '', 10);
+        if (id && Number.isFinite(v)) skills[id] = (skills[id] || 0) + v;
+      }
+    } else {
+      for (const ch of Array.from(sg.children)) {
+        const id = skillIdOf(ch.tagName);
+        const v = parseInt(ch.textContent || '', 10);
+        if (id && Number.isFinite(v)) skills[id] = v;
       }
     }
+    return { values: skills, list: lis.length > 0, reset: _boolAttribute(sg, 'Inherit') === false };
+  };
+
+  const parseWorkDisables = (el) => {
+    const wd = _directChild(el, 'workDisables');
+    if (!wd) return null;
+    const lis = Array.from(wd.children).filter(c => c.tagName.toLowerCase() === 'li');
+    const tags = lis.length ? lis.map(li => li.textContent.trim())
+                            : String(wd.textContent || '').split(',').map(x => x.trim()).filter(Boolean);
+    return { values: _uniqueStrings(tags), list: lis.length > 0,
+      empty: !String(wd.textContent || '').trim(), reset: _boolAttribute(wd, 'Inherit') === false };
+  };
+
+  // XML text replaces inherited flags; <li> values append. Empty list elements
+  // retain inherited children unless Inherit="False" explicitly clears them.
+  const mergeTags = (parent, child) => {
+    if (!child) return parent;
+    if (!parent || child.reset) return child;
+    if (child.empty && parent.list) return parent;
+    if (!child.list) return child;
+    return Object.assign({}, child, { values: _uniqueStrings(parent.values.concat(child.values)) });
+  };
+  const mergeSkills = (parent, child) => {
+    if (!child) return parent;
+    if (!parent || child.reset) return child;
+    const values = Object.assign({}, parent.values);
+    for (const [id, value] of Object.entries(child.values)) {
+      values[id] = child.list ? (values[id] || 0) + value : value;
+    }
+    return Object.assign({}, child, { values });
+  };
+
+  const rawDefs = [];
+  for (const b of _elementChildren(doc.documentElement).filter(node => /(?:^|\.)\w*BackstoryDef$/.test(node.tagName))) {
+    const isAbstract = _boolAttribute(b, 'Abstract') === true;
+    const abstractName = b.getAttribute('Name') || null;
+    const parentName = b.getAttribute('ParentName') || null;
+    const defNameRaw = _textDirect(b, 'defName');
+    const defName = defNameRaw ? defNameRaw.trim() : null;
+    const key = defName || (abstractName ? '@' + abstractName : null);
+    const occurrence = counts[key] || 0;
+    counts[key] = occurrence + 1;
+    const source = ((opts.sourceMap || {})[key] || [])[occurrence];
+    if (source && active.completeness === 'complete' && source.modId
+      && !activeIds.has(String(source.modId).toLowerCase())) continue;
+    const branch = source && String(source.file || '').match(/[\\/](1\.\d+)[\\/]/);
+    if (branch && version && branch[1] !== version[1]) continue;
+    const required = String(b.getAttribute('MayRequire') || '').split(',').map(id => id.trim().toLowerCase()).filter(Boolean);
+    if (required.length && active.completeness === 'complete' && !required.every(id => activeIds.has(id))) continue;
+    const reasons = required.length && active.completeness !== 'complete' ? ['backstoryActivationUnknown'] : [];
+    const uncertainty = opts.uncertainty || {};
+    reasons.push(...(((uncertainty.byType || {}).BackstoryDef || {})[key] || []),
+      ...((uncertainty.dataset || {}).BackstoryDef || []));
+
+    const slotRaw = (_textDirect(b, 'slot') || '').toLowerCase();
+    const slot = slotRaw.indexOf('child') === 0 ? 'child' : slotRaw.indexOf('adult') === 0 ? 'adult' : null;
+    const titleRaw = _textDirect(b, 'title');
+    const titleShortRaw = _textDirect(b, 'titleShort');
+    const descNode = _directChild(b, 'description') || _directChild(b, 'baseDesc');
+    const desc = descNode ? String(descNode.textContent || '').replace(/\\n/g, '\n').trim() : null;
+
+    rawDefs.push({
+      defName: defName || null,
+      isAbstract,
+      abstractName,
+      parentName,
+      rawFields: {
+        slot,
+        title: titleRaw,
+        titleShort: titleShortRaw,
+        desc,
+        skills: parseSkills(b),
+        workDisables: parseWorkDisables(b),
+        modId: source && source.modId || opts.modId || null,
+      },
+      _completeness: reasons.length ? 'partial' : 'complete',
+      _completenessReasons: _uniqueStrings(reasons),
+      _provenance: source ? { modId: source.modId || null, sources: [source] }
+        : _definitionProvenance(opts, occurrence, key),
+    });
+  }
+
+  const resolved = _resolveInheritance(rawDefs, (parent, child) => ({
+    slot: child.slot != null ? child.slot : parent.slot,
+    title: child.title != null ? child.title : parent.title,
+    titleShort: child.titleShort != null ? child.titleShort : parent.titleShort,
+    desc: child.desc != null ? child.desc : parent.desc,
+    skills: mergeSkills(parent.skills, child.skills),
+    workDisables: mergeTags(parent.workDisables, child.workDisables),
+    modId: child.modId,
+  }));
+
+  for (const def of resolved) {
+    const dn = def.defName;
+    if (!dn) continue;
+    const slot = def.slot;
+    if (!slot && def._completeness === 'complete') continue;
+    const title = _capFirst((def.title || dn).trim());
     const incapable = [];
     const disabledWorkTagsExact = [];
-    const wd = b.querySelector('workDisables');
-    if (wd) {
-      const lis = Array.from(wd.children).filter(c => c.tagName.toLowerCase() === 'li');
-      const tags = lis.length ? lis.map(li => li.textContent.trim())
-                              : String(wd.textContent || '').split(',').map(x => x.trim()).filter(Boolean);
-      for (const t of tags) {
-        if (t && disabledWorkTagsExact.indexOf(t) < 0) disabledWorkTagsExact.push(t);
-        const inc = incapMap[t] || incapMap[t.toLowerCase()];
-        if (inc && incapable.indexOf(inc) < 0) incapable.push(inc);
-      }
+    const tags = def.workDisables ? def.workDisables.values : [];
+    for (const t of tags) {
+      if (/^none$/i.test(t)) continue;
+      if (t && disabledWorkTagsExact.indexOf(t) < 0) disabledWorkTagsExact.push(t);
+      const inc = incapMap[t] || incapMap[t.toLowerCase()];
+      if (inc && incapable.indexOf(inc) < 0) incapable.push(inc);
     }
-    results[dn] = {
+    const permissionSource = {
+      sourceField: 'workDisables', targetKind: 'workTag',
+      presence: def.workDisables ? 'present' : def._completeness === 'complete' ? 'absent' : 'unknown',
+      rawValue: tags.join(', ') || null,
+      targets: disabledWorkTagsExact.map(rawTarget => ({ rawTarget,
+        canonicalTarget: Object.prototype.hasOwnProperty.call(RIMWORLD_WORK_TAG_VALUES, rawTarget) ? rawTarget : null })),
+      completeness: def._completeness,
+    };
+    if (permissionSource.targets.some(target => !target.canonicalTarget)) {
+      permissionSource.completeness = 'partial';
+      def._completeness = 'partial';
+      def._completenessReasons.push('unknownWorkDisableTag');
+    }
+    _storeDefinition(results, dn, {
       id: dn,
       slot,
       title,
-      titleShort,
-      desc,
-      skills,
+      titleShort: _capFirst((def.titleShort || title).trim()),
+      desc: def.desc || '',
+      skills: def.skills ? def.skills.values : {},
       incapable,
       disabledWorkTagsExact,
-      permissionSources: [_parsePermissionSource(b, 'workDisables', 'workTag')],
+      permissionSources: [permissionSource],
+      _completeness: def._completeness,
+      _completenessReasons: def._completenessReasons,
+      _provenance: def._provenance,
+      modId: def.modId,
       modSource: 'Scanned',
-    };
+    });
+  }
+  for (const story of Object.values(results)) {
+    // Conflicting definitions and unapplied patches may remove restrictions.
+    // Keep the raw source for diagnostics, but do not claim a definite block.
+    if (story._completenessReasons.some(reason => /PatchNotApplied|duplicateDefinitionConflict|cyclicInheritance|ActivationUnknown/.test(reason))) {
+      story.incapable = [];
+      story.disabledWorkTagsExact = [];
+      story.permissionSources = story.permissionSources.map(source => Object.assign({}, source,
+        { presence: 'unknown', completeness: 'partial' }));
+    }
   }
   return results;
 }
@@ -1985,9 +2104,8 @@ const TRAITS = [
 // Role work restrictions verified against Ideology's Precepts_Role.xml
 // (<roleDisabledWorkTags>). Leader and Moral Guide disable NOTHING in-game - only the
 // specialist roles refuse work. Tags map to app incap ids via the same scheme as
-// WORKTAG_TO_INCAP; "Constructing" has no dedicated incap id so it rides on
-// 'skilled_labor', which is safe because every role that disables Constructing also
-// disables Crafting (the other jobs skilled_labor blocks).
+// WORKTAG_TO_INCAP. Scanned Constructing restrictions have their own narrow
+// construction incap id so a mod can restrict building without restricting crafts.
 const ROLE_DEF_TO_APP_ID = Object.freeze({
   IdeoRole_Leader: 'leader',
   IdeoRole_Moralist: 'guide',
@@ -2031,6 +2149,7 @@ const INCAP_OPTIONS = [
   {id:'animals',        label:'Animals'},
   {id:'artistic',       label:'Artistic'},
   {id:'crafting',       label:'Crafting'},
+  {id:'construction',   label:'Construction'},
   {id:'plantwork',      label:'Plant Work'},
   {id:'mining',         label:'Mining'},
 ];
@@ -2047,6 +2166,7 @@ const WORKTAG_TO_INCAP = {
   'Animals': 'animals', 'animals': 'animals',
   'Artistic': 'artistic', 'artistic': 'artistic',
   'Crafting': 'crafting', 'crafting': 'crafting',
+  'Constructing': 'construction', 'constructing': 'construction',
   'Cooking': 'cooking', 'cooking': 'cooking',
   'Firefighting': 'firefight', 'firefighting': 'firefight',
   'Cleaning': 'cleaning', 'cleaning': 'cleaning',
