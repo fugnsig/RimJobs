@@ -740,13 +740,14 @@ Object.assign(App, {
 
   async exportEditedSave() {
     if (!this._lastSaveFilePath) { this.toast('Import a RimWorld save first.'); return; }
+    const sourcePath = this._lastSaveFilePath;
     if (!window.overlay?.readSaveFile || !window.overlay?.exportEditedSave) {
       this.toast('Save export requires the desktop app.'); return;
     }
     this.toast('Building edited save...');
     let original;
     try {
-      const res = await window.overlay.readSaveFile(this._lastSaveFilePath);
+      const res = await window.overlay.readSaveFile(sourcePath);
       if (!res || res.error) { this.toast('Could not read the original save. Has it moved or been deleted?'); return; }
       original = await this._readSaveText(res);
     } catch (e) { this.toast('Failed to read the original save: ' + (e.message || 'error')); return; }
@@ -766,9 +767,9 @@ Object.assign(App, {
       return;
     }
 
-    const base = this._lastSaveFilePath.split(/[/\\]/).pop().replace(/\.rws$/i, '');
+    const base = sourcePath.split(/[/\\]/).pop().replace(/\.rws$/i, '');
     let out;
-    try { out = await window.overlay.exportEditedSave(base + '_rimjobs', built.text); }
+    try { out = await window.overlay.exportEditedSave(base + '_rimjobs', built.text, sourcePath); }
     catch (e) { this.toast('Export failed: ' + (e.message || 'error')); return; }
     if (!out) return; // user cancelled the save dialog
     if (out.ok) {

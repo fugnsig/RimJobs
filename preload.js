@@ -65,7 +65,7 @@ contextBridge.exposeInMainWorld('overlay', {
   openSaveFile: () => ipcRenderer.invoke('open-save-file'),
   readSaveFile: (filePath) => ipcRenderer.invoke('read-save-file', filePath),
   readSaveFileChunk: (filePath, offset, bytes) => ipcRenderer.invoke('read-save-file-chunk', filePath, offset, bytes),
-  exportEditedSave: (defaultName, text) => ipcRenderer.invoke('export-edited-save', defaultName, text),
+  exportEditedSave: (defaultName, text, sourcePath) => ipcRenderer.invoke('export-edited-save', defaultName, text, sourcePath),
   scanXenotypeDefs: (dirPath) => ipcRenderer.invoke('scan-xenotype-defs', dirPath),
   scanTraitGeneDefs: (dirPath, options) => ipcRenderer.invoke('scan-trait-gene-defs', dirPath, options),
   findRimworldPath: () => ipcRenderer.invoke('find-rimworld-path'),

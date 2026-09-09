@@ -61,13 +61,14 @@ It started life as a way to *clearly and easily compare weapons and armour* (a 1
 
 ## Features
 
-- **Import your real colony:** read a RimWorld `.rws` save (colonists, skills, traits, health, relations, ideology, lifetime records) and auto-create any unknown modded content so nothing is lost.
-- **Offline mod scanning (the rabbit hole):** point it at your mods folder and it reads them entirely offline to pull in custom traits, passions, injuries and conditions, ideology memes and rituals, and weapon and armour stats, so even a 1200+ mod list is understood without a single online lookup. This part turned into a proper rabbit hole.
+- **Import your real colony:** read a RimWorld `.rws` save (colonists, skills, traits, health, relations, ideology, lifetime records), with placeholder entries for supported types of unknown modded content. Unedited XML is preserved when exporting an edited save, even where the app cannot interpret it.
+- **Offline mod scanning (the rabbit hole):** point it at your mods folder and it reads supported XML definitions entirely offline to pull in custom traits, passions, injuries and conditions, ideology memes and rituals, and weapon and armour stats. Scanning does not execute XML patches or mod C# code, so unsupported effects and incomplete definitions can remain unknown. This part turned into a proper rabbit hole.
 - **Edit colonists and write back to your save:** change skill levels and passions (including modded passions from frameworks like Alpha Skills and Vanilla Skills Expanded, picked by name and preserved losslessly), add or remove any vanilla or modded trait (conflict-aware, no trait cap), add or remove injuries and conditions (with Heal all and Remove scars), edit relationships between colonists, and set ideology certainty. Then export a new `.rws` you can load straight back into RimWorld. It edits a fresh copy and never touches your original, and only the values you change are written, so the rest of the save is left exactly as it was.
 - **Work priorities and optimiser:** a full priority grid with click, scroll and keyboard editing, and an optimiser that flags gaps, single-points-of-failure and weak assignments.
   - Configurable 1-4 to 1-9 priority range with green-to-red colour scaling.
-  - Auto-assigner that guarantees job coverage across the selected range.
+  - Auto-assigner that assigns coverage for each visible job with an eligible pawn, using the selected priority range.
   - Colony Focus choices (construction, farming, mining, etc.) to bias assignments towards a strategic goal.
+  - Priorities and shift schedules are planning data inside RimJobs and are not written into RimWorld saves or applied to the running game.
 - **Armoury:** compare weapons, apparel and full kits side by side with a verdict, with DPS, range accuracy, armour-penetration and quality maths checked against RimWorld's own decompiled source rather than guessed at (the feature that started it all).
 - **Blueprints:** a grid layout designer with multi-cell furniture, correct footprints and facing, collision and force-replace, grab-and-move, reusable stamps, and Blueprints-mod XML import and export.
 - **Relations:** an interactive, force-directed social graph with romance compatibility, fight-risk and opinion estimates, including off-map and deceased relatives.
@@ -85,7 +86,7 @@ Plus a **shift planner**, **ideology planner**, **raid-points calculator**, **jo
 - **Wider mod coverage.** Keep broadening the offline parser as people report modded weapons, traits or conditions it reads oddly.
 - **Custom themes.** Recolour the overlay and accents to taste.
 - **Translations.** Support for other languages so the app is not English-only.
-- **In-game bridge mod.** A companion RimWorld mod that lets you push data like work priorities and shift schedules straight from the app into the running game, instead of going through a save file.
+- **In-game bridge mod.** A companion RimWorld mod that would let you push work priorities and shift schedules from the app into the running game. These currently remain planning data inside RimJobs.
 - **Update checker.** A quiet nudge when a new version is out, since it is a portable exe with no auto-update.
 
 ## Install
@@ -100,12 +101,12 @@ Short answer: yes, and you can verify every line yourself.
 - **It is fully offline.** Everything is stored locally on your machine. RimJobs never touches the network, has no telemetry, and never sees your data.
 - **Open source.** The entire app is in this repo. If you would rather not trust a binary from a stranger, [build it yourself](#build-from-source).
 - **"Windows protected your PC"?** That is expected. RimJobs is not code-signed, so Microsoft SmartScreen flags it on first run. Code-signing certificates cost hundreds of dollars a year, and this is a free hobby project, so paying for one isn't on the cards. Click **More info**, then **Run anyway**, and scan it with whatever you like.
-- **Why administrator?** Only so it can capture its overlay hotkeys (like `F12`) while RimWorld holds keyboard focus. I think windowed RimWorld works around that, too.
-- **Crash resilience.** If the app hits a graphics driver issue or runs low on memory, it detects the problem and automatically switches to a safe rendering mode on the next launch so you are not stuck.
+- **Why administrator?** So it can capture its overlay hotkeys (like `F12`) while RimWorld holds keyboard focus. RimJobs requests administrator privileges at startup, including when RimWorld runs in windowed mode.
+- **Crash resilience.** If a renderer out-of-memory crash follows at least two GPU process failures, RimJobs enables software rendering on the next launch and offers a safe restart. Other renderer crashes offer Reload or Close; low memory alone does not trigger software rendering.
 
 ## Build from source
 
-Requires [Node.js](https://nodejs.org/) (18+).
+Requires Windows and [Node.js](https://nodejs.org/) 22.12.0 or newer. Release CI uses Node.js 22.
 
 ```bash
 npm install

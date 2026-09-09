@@ -2970,8 +2970,11 @@ function savesDir() {
   const os = require('os');
   return path.join(os.homedir(), 'AppData', 'LocalLow', 'Ludeon Studios', 'RimWorld by Ludeon Studios', 'Saves');
 }
-ipcMain.handle('export-edited-save', async (_, defaultName, text) => {
+ipcMain.handle('export-edited-save', async (_, defaultName, text, sourcePath) => {
   const fs = require('fs');
+  if (typeof sourcePath !== 'string' || !sourcePath.trim()) {
+    return { ok: false, error: 'The original save path is required. Import the save again before exporting.' };
+  }
   const safe = (typeof defaultName === 'string' && defaultName ? defaultName.replace(/[^\w\- ]+/g, '_').trim() : '') || 'RimJobs_Edited';
   let defaultPath = safe + '.rws';
   try { const d = savesDir(); if (fs.existsSync(d)) defaultPath = path.join(d, defaultPath); } catch (e) { /* default cwd */ }
@@ -2982,6 +2985,23 @@ ipcMain.handle('export-edited-save', async (_, defaultName, text) => {
   });
   if (result.canceled || !result.filePath) return null;
   try {
+    // Resolve aliases and compare file identities before writing. A different
+    // spelling, symbolic link or hard link must not overwrite the imported save.
+    const sourceRealPath = fs.realpathSync(sourcePath);
+    const sourceStat = fs.statSync(sourceRealPath, { bigint: true });
+    let sameFile = path.resolve(result.filePath).toLowerCase() === path.resolve(sourceRealPath).toLowerCase();
+    try {
+      const targetRealPath = fs.realpathSync(result.filePath);
+      const targetStat = fs.statSync(targetRealPath, { bigint: true });
+      sameFile = sameFile
+        || targetRealPath.toLowerCase() === sourceRealPath.toLowerCase()
+        || (sourceStat.ino !== 0n && sourceStat.dev === targetStat.dev && sourceStat.ino === targetStat.ino);
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+    if (sameFile) {
+      return { ok: false, error: 'Choose a different filename. The original save cannot be overwritten.' };
+    }
     fs.writeFileSync(result.filePath, typeof text === 'string' ? text : '', 'utf-8');
     return { ok: true, filePath: result.filePath };
   } catch (e) { return { ok: false, error: e.message }; }
