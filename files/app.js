@@ -196,6 +196,7 @@ const App = {
       priorityLocked: false, // UI edit lock for the Priorities table and its assignment actions
       strategicFocusId: '', // empty = balanced; otherwise stable group: or job: identifier
       strategicFocusStrength: 'normal',
+      researchBenchCount: null,
       jobOrder: null, // ordered list of visible job-column ids (null = default: vanilla+DLC+custom)
       tableFontSize: 14,
       jobFontSize: 12,

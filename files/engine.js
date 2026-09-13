@@ -47,16 +47,52 @@ const Engine = {
    */
   calculateWorkCapacity(pawns, job, priorities, contextMap) {
     let capacity = 0;
+    const contributions = [];
     pawns.forEach(p => {
       const prio = Number(priorities[p.id]?.[job.id]);
       if (!Number.isFinite(prio) || prio <= 0) return;
+      if (job.id === 'firefight' && this._c7AvoidsFirefighting(p)) return;
 
       const pawnContext = contextMap && contextMap.get(p.id);
       const speed = this._c7WorkCapacitySpeed(p, job, pawnContext);
       const efficiency = speed * (1 / prio);
       capacity += efficiency;
+      contributions.push(efficiency);
     });
+    const benches = job.id === 'research' ? this._researchBenchCount() : null;
+    if (benches !== null) return contributions.sort((a, b) => b - a)
+      .slice(0, benches).reduce((sum, value) => sum + value, 0);
     return capacity;
+  },
+
+  _researchBenchCount() {
+    const value = App.state.settings && App.state.settings.researchBenchCount;
+    return Number.isInteger(value) && value >= 0 && value <= 999 ? value : null;
+  },
+
+  _canAddResearchAssignment(pawnId, priorities) {
+    const benches = this._researchBenchCount();
+    return benches === null || benches > 0 && (this._hasWorkPriority(priorities[pawnId]?.research)
+      || Object.values(priorities).filter(row => this._hasWorkPriority(row?.research)).length < benches);
+  },
+
+  // FireTerror causes panic near fire, not a vanilla work incapability. This is
+  // an automatic planning preference and does not rewrite canonical Permission.
+  _c7AvoidsFirefighting(pawn) {
+    if (this._c7SchedulerGenePolicy(pawn).hasFireTerror) return true;
+    const facts = Array.isArray(pawn.traitRuntimeFacts) ? pawn.traitRuntimeFacts : [];
+    return (Array.isArray(pawn.traits) ? pawn.traits : []).some(id => {
+      const def = typeof App.getTrait === 'function' ? App.getTrait(id) : null;
+      const identity = def && (def.defName || def.def)
+        || (/^mod_trait_bot_pyrophobia(?:_\d+)?$/.test(id) ? 'BOT_Pyrophobia'
+          : /^mod_trait_pyrophobia(?:_\d+)?$/.test(id) ? 'Pyrophobia' : id);
+      const states = facts.filter(fact => fact && (fact.appTraitId === id
+        || fact.traitDefId === id || fact.traitDefId === identity));
+      if (states.length && states.every(fact => fact.suppressedBy
+        || fact.suppression && fact.suppression.state === 'known' && fact.suppression.value)) return false;
+      const identities = [id, identity, ...states.map(fact => fact.traitDefId)];
+      return identities.some(value => ['BOT_Pyrophobia', 'Pyrophobia', 'pyrophobia', 'pyrophobic', 'bot_pyrophobia'].includes(value));
+    });
   },
 
   // C5 deliberately has no scalar effectiveness score. C7 therefore retains
@@ -81,7 +117,8 @@ const Engine = {
 
   getCriticalWorkCoverage(pawns, priorities, contextMap) {
     const jobs = [...JOBS, ...(App.state.customJobs || [])];
-    const criticals = jobs.filter(j => j.important);
+    const criticals = jobs.filter(j => j.important
+      && !(j.id === 'research' && this._researchBenchCount() === 0));
     const covered = criticals.filter(j => pawns.some(p =>
       this._hasWorkPriority(priorities[p.id]?.[j.id])
       && this._c7IsEligible(contextMap, p, j))).length;
@@ -135,7 +172,8 @@ const Engine = {
   getBottlenecks(pawns, priorities, contextMap) {
     const gaps = [];
     const jobs = [...JOBS, ...(App.state.customJobs || [])];
-    const importantJobs = jobs.filter(j => j.important);
+    const importantJobs = jobs.filter(j => j.important
+      && !(j.id === 'research' && this._researchBenchCount() === 0));
     const simpleMode = App.state.settings?.manualPriorities === false;
     const highPriorityCeiling = typeof PriorityScale !== 'undefined'
       && typeof PriorityScale.autoPriority === 'function'
@@ -192,6 +230,7 @@ const Engine = {
   },
 
   _c7IsEligible(contextMap, pawn, job) {
+    if (job.id === 'firefight' && this._c7AvoidsFirefighting(pawn)) return false;
     const pawnContext = contextMap && contextMap.get(pawn.id);
     if (pawnContext) {
       return pawnContext.permission(job).state !== 'blocked'
@@ -417,6 +456,56 @@ const Engine = {
     return protectedPawns;
   },
 
+  _haulingPriorityPlan(pawns, jobs, priorities, capableByJob, focus) {
+    const hauling = jobs.find(job => job.id === 'hauling');
+    if (!hauling) return null;
+    if (App.state.settings?.manualPriorities === false) return {
+      status: 'simple', changes: [],
+      message: 'Numbered priorities are needed to put hauling ahead of routine work. Equal priorities follow the game work order.',
+    };
+    const emergency = job => job.cat === 'emergency'
+      || ['firefight', 'patient', 'bed_rest', 'doctoring', 'tending', 'childcare'].includes(job.id);
+    const regular = jobs.filter(job => job.id !== 'hauling' && !emergency(job));
+    const visibleIds = new Set(jobs.map(job => job.id));
+    const allKnownJobs = typeof JOBS !== 'undefined'
+      ? [...JOBS, ...(App.state.customJobs || [])] : jobs;
+    const hidden = allKnownJobs.filter(job => !visibleIds.has(job.id) && !emergency(job));
+    const enabled = (p, job) => this._hasWorkPriority(priorities[p.id]?.[job.id]);
+    const competing = p => regular.filter(job => enabled(p, job) && priorities[p.id][job.id] === 1);
+    const capable = (capableByJob.get('hauling') || [])
+      .filter(p => p.moodPreset !== 'panic' && p.moodPreset !== 'chill');
+    const hiddenConflict = p => hidden.some(job => enabled(p, job)
+      && (job.important || priorities[p.id][job.id] === 1));
+    const ready = capable.find(p => priorities[p.id]?.hauling === 1
+      && !competing(p).length && !hiddenConflict(p));
+    if (ready) return { status: 'ready', pawnId: ready.id, changes: [],
+      message: `${_pawnDisplayName(ready)} has Hauling ahead of routine work. Emergency duties still take precedence.` };
+    const candidates = capable.filter(p => {
+      if (hiddenConflict(p)) return false;
+      // Do not pull the only available worker away from an essential routine job,
+      // or remove that job's only P1 assignment. Hidden priorities are never edited.
+      if (regular.some(job => job.important && enabled(p, job)
+        && (capableByJob.get(job.id) || []).length === 1)) return false;
+      return !competing(p).some(job => {
+        if (focus && focus.targetIds.has(job.id)) return true;
+        return job.important && !(capableByJob.get(job.id) || []).some(other =>
+          other.id !== p.id && priorities[other.id]?.[job.id] === 1);
+      });
+    }).map(p => ({ pawn: p, conflicts: competing(p),
+      duties: regular.filter(job => enabled(p, job)).length }));
+    candidates.sort((a, b) => a.conflicts.length - b.conflicts.length || a.duties - b.duties);
+    if (!candidates.length) return { status: 'blocked', changes: [],
+      message: 'Hauling may be left behind other work. No spare hauler can be prioritised without disturbing essential work, Colony Focus, mood presets or hidden priorities.',
+    };
+    const best = candidates[0];
+    const secondary = typeof PriorityScale !== 'undefined' ? PriorityScale.autoPriority(2) : 2;
+    return { status: 'suggested', pawnId: best.pawn.id,
+      message: `Give ${_pawnDisplayName(best.pawn)} Hauling at P1 and move their competing routine P1 jobs to P${secondary}. Emergency duties stay unchanged.`,
+      changes: [{ pawnId: best.pawn.id, jobId: 'hauling', priority: 1 },
+        ...best.conflicts.map(job => ({ pawnId: best.pawn.id, jobId: job.id, priority: secondary }))],
+    };
+  },
+
   runMinMaxAssignment(pawns, roles, priorities, jobs, contextMap, assignmentOptions) {
     if (pawns.length === 0) return;
     // Scope to the provided job set (the table's visible columns) when given.
@@ -426,6 +515,7 @@ const Engine = {
     const autoPriority = tier => typeof assignmentPriorityScale.autoPriority === 'function'
       ? assignmentPriorityScale.autoPriority(tier) : tier;
     const strategicFocus = this.resolveStrategicFocus(jobList, assignmentOptions);
+    const capableByAssignedJob = new Map();
     let focusCapableByJob = null;
     let focusProtectedPawns = new Set();
     if (strategicFocus) {
@@ -450,10 +540,13 @@ const Engine = {
 
     // 2. Iterate through every job to ensure colony-wide coverage
     jobList.forEach(j => {
+      const researchBenches = j.id === 'research' ? this._researchBenchCount() : null;
+      if (researchBenches === 0) return;
       const capable = focusCapableByJob
         ? focusCapableByJob.get(j.id)
         : pawns.filter(p => this._c7AnalyserEligible(
           p, j, contextMap && contextMap.get(p.id)));
+      capableByAssignedJob.set(j.id, capable);
       if (capable.length === 0) return;
 
       // Mandatory Emergency Handlers
@@ -537,6 +630,7 @@ const Engine = {
 
       // Assign priorities using real work speed thresholds + skill/passion context
       rankings.forEach((rank, index) => {
+        if (researchBenches !== null && index >= researchBenches) return;
         let pLevel = null;
 
         // --- Mood Overrides (Phase 0) ---
@@ -586,6 +680,11 @@ const Engine = {
       if (!isJobAssigned) {
         priorities[rankings[0].pId][j.id] = assignmentPriorityScale.lowestAuto();
       }
+    });
+    const haulingPlan = this._haulingPriorityPlan(
+      pawns, jobList, priorities, capableByAssignedJob, strategicFocus);
+    if (haulingPlan) haulingPlan.changes.forEach(change => {
+      priorities[change.pawnId][change.jobId] = change.priority;
     });
   },
 
@@ -657,12 +756,15 @@ const Engine = {
       }
     });
     const avoidHoursFromConditions = new Set();
+    const nonXenotypeAvoidHours = new Set();
     (profile.conditions || []).forEach(condition => {
       const fallback = condition && condition.condition === 'daylight'
         && condition.policy && condition.policy.fallbackHours;
       if (!fallback) return;
       for (let hour = fallback.start; hour < fallback.end; hour++) {
         avoidHoursFromConditions.add(hour);
+        if (!condition.source || !condition.source.provenance
+            || condition.source.provenance.sourceKind !== 'xenotype') nonXenotypeAvoidHours.add(hour);
       }
     });
 
@@ -696,22 +798,52 @@ const Engine = {
         hasRecommendations: recommendations.length > 0,
       },
       windows: { avoidHours: avoidHoursFromWindows },
-      conditions: { daylightAvoidHours: avoidHoursFromConditions },
+      conditions: { daylightAvoidHours: avoidHoursFromConditions, nonXenotypeAvoidHours },
       activities: { hasResolvedMeditation, hasUnresolvedMeditation },
+    };
+  },
+
+  _c7SchedulerGenePolicy(pawn) {
+    const xeno = (typeof App.getXeno === 'function' ? App.getXeno(pawn.xenotype) : null) || {};
+    const facts = Array.isArray(pawn.geneRuntimeFacts) ? pawn.geneRuntimeFacts : [];
+    // Empty gene lists are also the app's default for manually created pawns.
+    const explicit = Array.isArray(pawn.geneDefIds) && pawn.geneDefIds.length > 0;
+    const ids = explicit ? pawn.geneDefIds : facts.length
+      ? facts.map(fact => fact && fact.geneDefId) : xeno.genes;
+    const genes = (Array.isArray(ids) ? ids : []).filter(id => typeof id === 'string').map(id => {
+      const def = typeof App._resolveGeneDef === 'function' ? App._resolveGeneDef(id)
+        : (typeof GENES !== 'undefined' && GENES.find(gene => gene.id === id))
+          || (App.state.customGenes || {})[id];
+      // Exact identities only: labels and substrings are not gene semantics.
+      const knownIds = ['VRE_Photosynthesis', 'Neversleep', 'LowSleep', 'Sleepy',
+        'VerySleepy', 'UVSensitivity_Mild', 'UVSensitivity_Intense', 'gene_no_sleep', 'FireTerror'];
+      const identity = def && def.defName || knownIds.find(known =>
+        id === 'mod_gene_' + known.replace(/[^a-z0-9]+/gi, '_').toLowerCase()) || id;
+      const states = facts.filter(fact => fact && (fact.geneDefId === id || fact.geneDefId === identity));
+      const inactive = states.length > 0 && states.every(fact =>
+        fact.overriddenByGeneId || fact.active && fact.active.state === 'known' && fact.active.value === false);
+      return { id: identity, def, inactive };
+    }).filter(gene => !gene.inactive);
+    const has = id => genes.some(gene => gene.id === id);
+    const uvLevel = has('UVSensitivity_Intense') ? 2 : has('UVSensitivity_Mild') ? 1
+      : explicit || facts.length ? 0 : Number(xeno.uvSensitivity) || 0;
+    return {
+      explicit: explicit || facts.length > 0,
+      hasFireTerror: has('FireTerror'),
+      uvLevel,
+      hasPhotosynthesis: has('VRE_Photosynthesis'),
+      hasSleeplessGene: has('Neversleep') || has('gene_no_sleep')
+        || genes.some(gene => gene.def && Array.isArray(gene.def.disablesNeeds)
+          && gene.def.disablesNeeds.includes('Rest')),
+      hasLowSleepGene: has('LowSleep'),
+      sleepyFactor: has('VerySleepy') ? 1.8 : has('Sleepy') ? 1.4 : 1,
     };
   },
 
   _c7LegacySchedulerPolicyInputs(pawn) {
     const traits = Array.isArray(pawn.traits) ? pawn.traits : [];
-    const xeno = App.getXeno(pawn.xenotype);
-    const genes = xeno.genes || [];
-    const allGenes = typeof GENES !== 'undefined' ? GENES : [];
-    const customGenes = App.state.customGenes || {};
-    const hasSleeplessGene = genes.some(geneId => {
-      const gene = allGenes.find(item => item.id === geneId) || customGenes[geneId];
-      return gene && (gene.id === 'gene_no_sleep' || gene.label === 'Sleepless');
-    });
-    const hasLowSleepGene = genes.some(geneId => /low_?sleep/i.test(String(geneId)));
+    const genePolicy = this._c7SchedulerGenePolicy(pawn);
+    const { hasSleeplessGene, hasLowSleepGene } = genePolicy;
     const isQuickSleeper = traits.includes('quick_sleeper');
     const isBodyMastery = traits.includes('body_mastery');
     let sleepHours = 8;
@@ -719,13 +851,20 @@ const Engine = {
     else {
       if (isQuickSleeper) sleepHours = 6;
       if (hasLowSleepGene) sleepHours = Math.max(3, Math.round(sleepHours * 0.4));
+      else if (genePolicy.sleepyFactor > 1) {
+        // Planning estimate: balance waking rest drain against sleep recovery,
+        // anchored to the existing 8h baseline (6h for Quick Sleeper).
+        const recovery = (24 - sleepHours) / sleepHours;
+        sleepHours = Math.round(24 * genePolicy.sleepyFactor / (recovery + genePolicy.sleepyFactor));
+      }
     }
     const health = (Array.isArray(pawn.health) ? pawn.health : [])
       .concat(Array.isArray(pawn._saveHediffs) ? pawn._saveHediffs : []);
     return {
       sleepHours,
+      genePolicy,
       isNightOwl: traits.includes('night_owl'),
-      isUVSensitive: (xeno.uvSensitivity || 0) >= 1,
+      isUVSensitive: genePolicy.uvLevel >= 1,
       isQuickSleeper,
       isBodyMastery,
       hasSleeplessGene,
@@ -774,12 +913,15 @@ const Engine = {
       const windowAvoidHours = windowFactsKnown
         ? mechanism.windows.avoidHours
         : new Set(legacyPolicy.isNightOwl ? [11,12,13,14,15,16,17] : []);
-      const conditionAvoidHours = conditionFactsKnown
-        ? mechanism.conditions.daylightAvoidHours
+      const conditionAvoidHours = legacyPolicy.genePolicy.explicit
+        ? new Set([...(mechanism ? mechanism.conditions.nonXenotypeAvoidHours : []),
+          ...(legacyPolicy.isUVSensitive ? [6,7,8,9,10,11,12,13,14,15,16,17] : [])])
+        : conditionFactsKnown ? mechanism.conditions.daylightAvoidHours
         : new Set(legacyPolicy.isUVSensitive
           ? [6,7,8,9,10,11,12,13,14,15,16,17] : []);
       const isNightOwl = windowAvoidHours.size > 0;
       const isUVSensitive = conditionAvoidHours.size > 0;
+      const hasPhotosynthesis = legacyPolicy.genePolicy.hasPhotosynthesis;
       const hasSleeplessGene = legacyPolicy.hasSleeplessGene;
       const hasLowSleepGene = legacyPolicy.hasLowSleepGene;
       const isBodyMastery = legacyPolicy.isBodyMastery;
@@ -815,7 +957,10 @@ const Engine = {
       } else if (mechanism && mechanism.rest.needState === 'required'
           && mechanism.rest.policyUsable) {
         sleepHours = mechanism.rest.sleepHoursOverride == null
-          ? 8 : mechanism.rest.sleepHoursOverride;
+          ? legacyPolicy.sleepHours : mechanism.rest.sleepHoursOverride;
+        if (legacyPolicy.genePolicy.sleepyFactor > 1) {
+          sleepHours = Math.max(sleepHours, legacyPolicy.sleepHours);
+        }
       }
 
       // Joy hours needed - base 2, adjusted by mood risk
@@ -840,17 +985,17 @@ const Engine = {
       const meditateHours = (isPsycaster && !isBaby) ? 2 : 0;
 
       // Needs night shift?
-      // UV-sensitive pawns need night shift unless they're undergrounders
-      const needsNight = isNightOwl || (isUVSensitive && !isUndergrounder);
+      // Undergrounder changes mood preferences, not UV sensitivity.
+      const needsNight = isNightOwl || isUVSensitive;
 
       // Hours this pawn should NOT be awake, used to pick the sleep slot: Night Owl
-      // loses mood when awake 11h-18h (and gains 23h-6h); UV-sensitive pawns burn in
-      // daylight 6h-18h (Undergrounders exempt). Verified against the trait/gene defs.
-      const avoidAwake = new Set();
-      windowAvoidHours.forEach(hour => avoidAwake.add(hour));
-      if (!isUndergrounder) {
-        conditionAvoidHours.forEach(hour => avoidAwake.add(hour));
-      }
+      // loses mood when awake 11h-18h (and gains 23h-6h); UV sensitivity penalises
+      // daylight 6h-18h. These are planning windows, not live light measurements.
+      const avoidAwake = new Map();
+      // Overlapping Night Owl and UV penalties both matter.
+      [...windowAvoidHours, ...conditionAvoidHours].forEach(hour =>
+        avoidAwake.set(hour, (avoidAwake.get(hour) || 0) + 1));
+      const preferAwake = new Set(hasPhotosynthesis ? [6,7,8,9,10,11,12,13,14,15,16,17] : []);
 
       // Workload: count P1 assignments
       const pPrios = priorities[p.id] || {};
@@ -873,7 +1018,8 @@ const Engine = {
 
       return {
         pawn: p, needsNight, sleepHours, workHours, joyHours, meditateHours, freeHours,
-        isCritical, p1Count, breakRisk, isUndergrounder, avoidAwake,
+        isCritical, p1Count, breakRisk, isUndergrounder, avoidAwake, preferAwake,
+        hasPhotosynthesis, sleepyFactor: legacyPolicy.genePolicy.sleepyFactor,
         isNightOwl, isUVSensitive, hasSleeplessGene, hasLowSleepGene, isBodyMastery,
         isQuickSleeper, isChild, isBaby, isYoungChild, isDowned,
         isDepressive, isNeurotic, isAscetic, isPsycaster,
@@ -892,12 +1038,17 @@ const Engine = {
       if (pr.isBaby) d.push('Baby - free schedule, naps and feeds on demand');
       else if (pr.isYoungChild) d.push('Young child - too young for scheduled work (most jobs unlock at 7); play and learning time');
       else if (pr.isChild) d.push('Child - short work block; age-gated jobs only (skilled work unlocks at 10-13)');
-      if (pr.isNightOwl) d.push('Night Owl - sleeps through the 11h-18h mood-loss window, awake for the 23h-6h bonus');
-      if (pr.isUVSensitive && !pr.isUndergrounder) d.push('UV-sensitive - sleeps through daylight (6h-18h) to avoid sunlight');
-      if (pr.isUndergrounder) d.push('Undergrounder - unaffected by darkness, so kept flexible');
+      if (pr.isNightOwl) d.push('Night Owl - favours sleep in the 11h-18h mood-loss window and waking at night');
+      if (pr.isUVSensitive) d.push('UV-sensitive - favours daytime sleep to reduce sunlight exposure');
+      if (pr.hasPhotosynthesis) d.push(pr.needsNight
+        ? 'Photosynthesis - daylight benefit conflicts with night preference; avoiding penalties takes priority'
+        : 'Photosynthesis - favours waking daylight hours (6h-18h); sunlight exposure still depends on location');
+      if (pr.isUndergrounder) d.push('Undergrounder - comfortable indoors; UV sensitivity still applies');
       if (pr.hasSleeplessGene) d.push('Sleepless gene - no sleep block needed');
       else if (pr.isBodyMastery) d.push('Body Mastery - no sleep needed');
       else if (pr.hasLowSleepGene) d.push('Low Sleep gene - tires 60% slower, short ' + pr.sleepHours + 'h sleep block');
+      else if (pr.sleepyFactor > 1) d.push((pr.sleepyFactor === 1.8 ? 'Very Sleepy' : 'Sleepy')
+        + ' gene - faster rest loss; estimated ' + pr.sleepHours + 'h sleep block');
       else if (pr.isQuickSleeper) d.push('Quick Sleeper - only 6h of sleep');
       if (pr.isCritical) d.push('Critical specialist (doctor/cook) - scheduled first for cover');
       if (pr.joyHours >= 4 && !pr.isChild) d.push('High break risk - extra recreation to protect mood');
@@ -928,39 +1079,50 @@ const Engine = {
     const dayPool = sorted.filter(p => !p.needsNight);
 
     // Assign sleep slots to minimise coverage gaps
-    const assignSleepSlot = (profile, pool, isNight) => {
+    const sleepCandidates = isNight => isNight
+      ? [6, 7, 8, 9, 10, 11, 12, 13, 14]
+      : [21, 22, 23, 0, 1, 2, 3, 4, 5];
+    const sleepPenalty = (profile, start) => {
+      let harmfulAwake = [...profile.avoidAwake.values()].reduce((sum, weight) => sum + weight, 0);
+      let preferredAsleep = 0;
+      for (let h = 0; h < profile.sleepHours; h++) {
+        const hour = (start + h) % 24;
+        harmfulAwake -= profile.avoidAwake.get(hour) || 0;
+        if (profile.preferAwake.has(hour)) preferredAsleep++;
+      }
+      // A daylight benefit never overrides an awake penalty. Both outrank coverage.
+      return harmfulAwake * 25 + preferredAsleep;
+    };
+    const assignSleepSlot = (profile, isNight) => {
       if (profile.sleepHours === 0) return -1; // sleepless
 
       // Candidate sleep start hours
       // Night pawns: sleep during daylight (6-14 range)
-      // Day pawns: sleep during night (20-4 range)
-      const candidates = isNight
-        ? [6, 7, 8, 9, 10, 11, 12, 13, 14]
-        : [21, 22, 23, 0, 1, 2, 3, 4, 5];
+      // Day pawns: sleep starts during night (21-5 range)
+      const candidates = sleepCandidates(isNight);
 
       // Score each candidate: prefer slots where coverage is highest
       // (sleeping when others are awake = better coverage)
       let bestStart = candidates[0];
       let bestScore = -Infinity;
+      let bestPenalty = Infinity;
 
       candidates.forEach(start => {
+        const penalty = sleepPenalty(profile, start);
         let score = 0;
         for (let h = 0; h < profile.sleepHours; h++) {
           const hour = (start + h) % 24;
           score += coverage[hour]; // higher coverage = better time to sleep
-          // Strongly prefer sleeping through hours where being awake hurts this pawn
-          // (Night Owl 11h-18h mood loss, UV daylight 6h-18h). Each such hour slept
-          // outweighs a coverage point, so mood/sunlight wins ties against stagger.
-          if (profile.avoidAwake && profile.avoidAwake.has(hour)) score += 4;
         }
-        // Penalise sleep slots that leave low-coverage wake hours
+        // Reward being awake when nobody already assigned can cover the hour.
         for (let h = profile.sleepHours; h < 24; h++) {
           const hour = (start + h) % 24;
-          if (coverage[hour] === 0) score -= 2;
+          if (coverage[hour] === 0) score += 2;
         }
-        if (score > bestScore) {
+        if (penalty < bestPenalty || penalty === bestPenalty && score > bestScore) {
           bestScore = score;
           bestStart = start;
+          bestPenalty = penalty;
         }
       });
 
@@ -978,9 +1140,9 @@ const Engine = {
         // pawn is incapacitated in bed, so give them a fully free day - no sleep, work,
         // joy or meditate blocks - and contribute no coverage. Overrides mood presets;
         // a downed pawn cannot keep a night shift either.
-        if (profile.isDowned) {
+        if (profile.isDowned || profile.isBaby) {
           p.schedule = Array(24).fill(idxAny);
-          report.push({ id: p.id, name: _pawnDisplayName(p), mode: 'downed', drivers: driversFor(profile) });
+          report.push({ id: p.id, name: _pawnDisplayName(p), mode: profile.isDowned ? 'downed' : 'baby', drivers: driversFor(profile) });
           return;
         }
 
@@ -1040,7 +1202,7 @@ const Engine = {
         }
 
         // Find optimal sleep slot using coverage-aware algorithm
-        const sleepStart = assignSleepSlot(profile, pool, isNight);
+        const sleepStart = assignSleepSlot(profile, isNight);
 
         // Apply sleep
         for (let h = 0; h < profile.sleepHours; h++) {
@@ -1060,13 +1222,16 @@ const Engine = {
         }
 
         // Work: fill remaining 'Any' slots, prioritising hours with low coverage
-        const workStart = (wakeHour + profile.joyHours + profile.meditateHours) % 24;
+        const workSearchStart = profile.hasPhotosynthesis && !isNight ? 6
+          : (wakeHour + profile.joyHours + profile.meditateHours) % 24;
+        let workStart = workSearchStart;
         let workAssigned = 0;
 
         // First: assign work in order from wake+joy
         for (let h = 0; h < 24 && workAssigned < profile.workHours; h++) {
-          const hour = (workStart + h) % 24;
+          const hour = (workSearchStart + h) % 24;
           if (p.schedule[hour] === idxAny) {
+            if (workAssigned === 0) workStart = hour;
             p.schedule[hour] = idxWork;
             workAssigned++;
           }
@@ -1090,42 +1255,140 @@ const Engine = {
     });
 
     // -- Phase 5: Coverage gap repair --
-    // If any hour has 0 coverage, try to shift a flexible pawn's sleep away from it
+    // Move a whole schedule only when it closes a gap without opening another.
+    // Never scatter sleep, lose a sleep hour, or undo gene/trait preferences.
     for (let hour = 0; hour < 24; hour++) {
       if (coverage[hour] > 0) continue;
 
-      // Find a pawn sleeping at this hour who could sleep elsewhere
-      const candidate = profiles.find(pr => {
-        if (pr.sleepHours === 0) return false;
-        if (pr.isYoungChild || pr.isDowned) return false; // a young child or downed pawn being awake doesn't staff the colony
-        if (pr.moodPreset === 'panic' || pr.moodPreset === 'chill' || pr.moodPreset === 'night') return false;
-        if (pr.needsNight && hour >= 18) return false; // don't wake night pawns at night
-        if (!pr.needsNight && hour >= 6 && hour < 18) return false; // don't wake day pawns during day
-        return pr.pawn.schedule[hour] === idxSleep;
-      });
-
-      if (!candidate) continue;
-
-      // Shift this pawn's sleep 1 hour later, freeing this gap hour
-      const p = candidate.pawn;
-      const oldSched = [...p.schedule];
-      p.schedule[hour] = idxAny;
-      // Find a free hour to add sleep back
-      for (let h = 23; h >= 0; h--) {
-        if (p.schedule[h] === idxAny && h !== hour) {
-          p.schedule[h] = idxSleep;
-          coverage[hour]++;
-          coverage[h]--;
-          gapsRepaired++;
+      for (const pr of profiles) {
+        if (!pr.sleepHours || pr.isYoungChild || pr.isDowned) continue;
+        const record = report.find(item => item.id === pr.pawn.id);
+        if (!record || record.mode === 'manual') continue;
+        const schedule = pr.pawn.schedule;
+        if (schedule[hour] !== idxSleep) continue;
+        const oldPenalty = sleepPenalty(pr, record.sleepStart);
+        let repaired = false;
+        for (const start of sleepCandidates(pr.needsNight)) {
+          if (sleepPenalty(pr, start) > oldPenalty) continue;
+          const delta = (start - record.sleepStart + 24) % 24;
+          const shifted = schedule.map((_, h) => schedule[(h - delta + 24) % 24]);
+          if (shifted[hour] === idxSleep) continue;
+          const nextCoverage = coverage.map((count, h) => count
+            + (shifted[h] !== idxSleep ? 1 : 0) - (schedule[h] !== idxSleep ? 1 : 0));
+          if (nextCoverage.some((count, h) => count === 0 && coverage[h] > 0)) continue;
+          gapsRepaired += coverage.filter((count, h) => count === 0 && nextCoverage[h] > 0).length;
+          nextCoverage.forEach((count, h) => { coverage[h] = count; });
+          pr.pawn.schedule = shifted;
+          record.sleepStart = start;
+          record.joyStart = (record.joyStart + delta) % 24;
+          record.workStart = (record.workStart + delta) % 24;
+          repaired = true;
           break;
+        }
+        if (repaired) break;
+      }
+    }
+
+    // Couple alignment is a final preference within the existing sleep and
+    // coverage constraints. Relations establish partners, not bed ownership.
+    const partnerDefs = new Set(['Spouse', 'Fiance', 'Lover']);
+    const partnerProfiles = new Map(profiles.filter(pr => !pr.pawn.dead
+      && !pr.isDowned && !pr.isChild
+      && !(pr.pawn.bioAge != null && pr.pawn.bioAge < 18))
+      .map(pr => [pr.pawn.id, pr]));
+    const partnerRefs = new Map([...partnerProfiles.values()]
+      .filter(pr => pr.pawn.loadID).map(pr => [pr.pawn.loadID, pr.pawn.id]));
+    const pairMap = new Map();
+    const addPair = (from, to, def) => {
+      if (!partnerDefs.has(def) || from === to
+        || !partnerProfiles.has(from) || !partnerProfiles.has(to)) return;
+      const ids = [from, to].sort((a, b) => String(a).localeCompare(String(b)));
+      pairMap.set(JSON.stringify(ids), ids);
+    };
+    for (const pr of partnerProfiles.values()) {
+      for (const rel of Array.isArray(pr.pawn.relations) ? pr.pawn.relations : []) {
+        if (rel && typeof rel === 'object') {
+          addPair(pr.pawn.id, partnerRefs.get(rel.otherPawnRef), rel.def);
         }
       }
     }
+    for (const rel of Array.isArray(App.state.manualRelations) ? App.state.manualRelations : []) {
+      if (rel && typeof rel === 'object') addPair(rel.from, rel.to, rel.def);
+    }
+    const pairs = [...pairMap.entries()].sort(([a], [b]) => a.localeCompare(b))
+      .map(([, ids]) => ids);
+    const recordsById = new Map(report.map(row => [row.id, row]));
+    const overlap = (ids, changes = new Map()) => {
+      const schedules = ids.map(id => changes.get(id) || partnerProfiles.get(id).pawn.schedule);
+      return schedules[0].reduce((n, type, h) =>
+        n + (type === idxSleep && schedules[1][h] === idxSleep ? 1 : 0), 0);
+    };
+    const variants = id => {
+      const pr = partnerProfiles.get(id);
+      const row = recordsById.get(id);
+      const original = { schedule: pr.pawn.schedule, delta: 0, start: row.sleepStart };
+      if (row.mode === 'manual' || !pr.sleepHours) return [original];
+      const penalty = sleepPenalty(pr, row.sleepStart);
+      return [original, ...sleepCandidates(pr.needsNight)
+        .filter(start => start !== row.sleepStart && sleepPenalty(pr, start) <= penalty)
+        .map(start => {
+          const delta = (start - row.sleepStart + 24) % 24;
+          return { start, delta, schedule: original.schedule.map((_, h) =>
+            original.schedule[(h - delta + 24) % 24]) };
+        })];
+    };
+    // At most four deterministic passes, with at most 10 x 10 variants per pair.
+    // Strict improvement and per-edge protection prevent multi-partner oscillation.
+    for (let pass = 0; pairs.length && pass < 4; pass++) {
+      let improved = false;
+      for (const ids of pairs) {
+        const before = pairs.map(pair => overlap(pair));
+        let best = null, bestGain = 0;
+        for (const a of variants(ids[0])) for (const b of variants(ids[1])) {
+          if (!a.delta && !b.delta) continue;
+          const changes = new Map([[ids[0], a.schedule], [ids[1], b.schedule]]);
+          const after = pairs.map(pair => overlap(pair, changes));
+          if (after.some((hours, i) => hours < before[i])) continue;
+          const gain = after.reduce((n, hours, i) => n + hours - before[i], 0);
+          if (gain <= bestGain) continue;
+          const nextCoverage = coverage.map((count, h) => count
+            + ids.reduce((delta, id) => delta
+              + (changes.get(id)[h] !== idxSleep ? 1 : 0)
+              - (partnerProfiles.get(id).pawn.schedule[h] !== idxSleep ? 1 : 0), 0));
+          // Extra awake redundancy may be traded for shared sleep, but an hour
+          // with staffing must never become completely uncovered.
+          if (nextCoverage.some((count, h) => count === 0 && coverage[h] > 0)) continue;
+          best = { choices: [a, b], coverage: nextCoverage };
+          bestGain = gain;
+        }
+        if (!best) continue;
+        ids.forEach((id, i) => {
+          const choice = best.choices[i];
+          if (!choice.delta) return;
+          partnerProfiles.get(id).pawn.schedule = choice.schedule;
+          const row = recordsById.get(id);
+          row.sleepStart = choice.start;
+          row.joyStart = (row.joyStart + choice.delta) % 24;
+          row.workStart = (row.workStart + choice.delta) % 24;
+        });
+        gapsRepaired += coverage.filter((count, h) => count === 0 && best.coverage[h] > 0).length;
+        best.coverage.forEach((count, h) => { coverage[h] = count; });
+        improved = true;
+      }
+      if (!improved) break;
+    }
+    const coupleSleep = pairs.map(ids => ({
+      pawnIds: ids,
+      overlapHours: overlap(ids),
+      possibleHours: Math.min(...ids.map(id => partnerProfiles.get(id).pawn.schedule
+        .filter(type => type === idxSleep).length)),
+    }));
 
     // -- Summary for the UI --
     const minCoverage = Math.min(...coverage);
     return {
       pawns: report,
+      coupleSleep,
       gapsRepaired,
       fullCoverage: minCoverage > 0,
       minCoverage,
@@ -1148,6 +1411,7 @@ const Engine = {
   },
 
   _c7TemporalParticipates(pawn, job, contextMap) {
+    if (job.id === 'firefight' && this._c7AvoidsFirefighting(pawn)) return false;
     const pawnContext = contextMap && contextMap.get(pawn.id);
     if (!pawnContext) {
       const directTags = Array.isArray(pawn.incapable) ? pawn.incapable : [];
@@ -1267,16 +1531,21 @@ const Engine = {
   _shiftPenalties(pawn, schedule, sleepIdx) {
     const traits = Array.isArray(pawn.traits) ? pawn.traits : [];
     const isNightOwl = traits.includes('night_owl');
-    const xeno = App.getXeno(pawn.xenotype);
-    const isUV = (xeno.uvSensitivity || 0) >= 1 && !traits.includes('undergrounder');
+    const genePolicy = this._c7SchedulerGenePolicy(pawn);
+    const isUV = genePolicy.uvLevel >= 1;
     let nightOwl = 0;
     let uv = 0;
+    let daylightSleep = 0;
     for (let h = 0; h < 24; h++) {
-      if (schedule[h] === sleepIdx) continue;
+      if (schedule[h] === sleepIdx) {
+        if (genePolicy.hasPhotosynthesis && h >= 6 && h < 18) daylightSleep++;
+        continue;
+      }
       if (isNightOwl && h >= 11 && h < 18) nightOwl++;
       if (isUV && h >= 6 && h < 18) uv++;
     }
-    return { nightOwlPenaltyHours: nightOwl, uvPenaltyHours: uv };
+    return { nightOwlPenaltyHours: nightOwl, uvPenaltyHours: uv,
+      ...(genePolicy.hasPhotosynthesis ? { daylightSleepHours: daylightSleep } : {}) };
   },
 
   proposeTemporalAdjustments(pawns, jobs, schedules, resilience, contextMap) {
@@ -1324,6 +1593,7 @@ const Engine = {
             const newPen = this._shiftPenalties(p, hypo, idxSleep);
             if (newPen.nightOwlPenaltyHours > origPen.nightOwlPenaltyHours) continue;
             if (newPen.uvPenaltyHours > origPen.uvPenaltyHours) continue;
+            if ((newPen.daylightSleepHours || 0) > (origPen.daylightSleepHours || 0)) continue;
 
             const testScheds = {};
             for (const k in schedules) testScheds[k] = schedules[k];
@@ -1391,13 +1661,10 @@ const Engine = {
       }
     }
 
-    // Free fragile-to-healthy improvements (zero-cost only)
-    const proposedScheds = {};
-    for (const k in schedules) proposedScheds[k] = schedules[k];
-    proposals.forEach(pr => { proposedScheds[pr.pawnId] = pr.proposedSchedule; });
-    const postGapRes = proposals.length > 0
-      ? this.analyzeTemporalResilience(pawns, jobs, proposedScheds, contextMap)
-      : resilience;
+    // Each button applies one change. Optional improvements must work against
+    // the current schedules without assuming another suggestion was accepted.
+    const proposedScheds = schedules;
+    const postGapRes = resilience;
 
     for (const jobR of postGapRes.jobs) {
       if (jobR.fragileHours.length === 0) continue;
@@ -1429,6 +1696,7 @@ const Engine = {
             const newPen = this._shiftPenalties(p, hypo, idxSleep);
             if (newPen.nightOwlPenaltyHours > origPen.nightOwlPenaltyHours) continue;
             if (newPen.uvPenaltyHours > origPen.uvPenaltyHours) continue;
+            if ((newPen.daylightSleepHours || 0) > (origPen.daylightSleepHours || 0)) continue;
 
             const testScheds2 = {};
             for (const k in proposedScheds) testScheds2[k] = proposedScheds[k];
@@ -1446,7 +1714,14 @@ const Engine = {
             }
             if (anyNewGap) continue;
 
-            candidates.push({ pawn: p, shift, newStart, sleepInfo, hypo, penalties: newPen });
+            const improvedJob = testRes.jobs.find(j => j.jobId === jobR.jobId);
+            const fragileImprovement = jobR.fragileHours.length - (improvedJob ? improvedJob.fragileHours.length : 0);
+            if (fragileImprovement <= 0 || testRes.fragileHours >= postGapRes.fragileHours) continue;
+            if (testRes.jobs.some(j => {
+              const original = postGapRes.jobs.find(old => old.jobId === j.jobId);
+              return original && j.fragileHours.length > original.fragileHours.length;
+            })) continue;
+            candidates.push({ pawn: p, shift, newStart, sleepInfo, hypo, penalties: newPen, fragileImprovement });
           }
         }
 
@@ -1460,9 +1735,7 @@ const Engine = {
 
         const best = candidates[0];
         usedPawns.add(best.pawn.id);
-        proposedScheds[best.pawn.id] = best.hypo;
-
-        const fragOrigSched = proposedScheds[best.pawn.id];
+        const fragOrigSched = schedules[best.pawn.id];
         proposals.push({
           pawnId: best.pawn.id,
           pawnName: _pawnDisplayName(best.pawn),
@@ -1472,7 +1745,7 @@ const Engine = {
           gap: { hours: [fragileHour] },
           currentSleep: { start: best.sleepInfo.start, hours: best.sleepInfo.count },
           proposedSleep: { start: best.newStart, hours: best.sleepInfo.count },
-          benefit: { gapsRemoved: 0, fragileHoursImproved: 1 },
+          benefit: { gapsRemoved: 0, fragileHoursImproved: best.fragileImprovement },
           costs: {
             nightOwlPenaltyHours: best.penalties.nightOwlPenaltyHours,
             uvPenaltyHours: best.penalties.uvPenaltyHours,
@@ -1520,6 +1793,7 @@ const Engine = {
    * Returns { gaps, recommendations, singlePoints }
    */
   _c7AnalyserEligible(pawn, job, pawnContext) {
+    if (job.id === 'firefight' && this._c7AvoidsFirefighting(pawn)) return false;
     if (pawnContext) {
       const permission = pawnContext.permission(job);
       const permissionParticipates = permission
@@ -1564,6 +1838,7 @@ const Engine = {
       ? priorityScale.autoPriority(tier) : tier;
     const professionalPriority = autoPriority(2);
     const strategicFocus = this.resolveStrategicFocus(allJobs, assignmentOptions);
+    const capableByAnalysedJob = new Map();
     let focusEvaluationMaps = null;
     let focusProtectedPawns = new Set();
     if (strategicFocus) {
@@ -1592,6 +1867,8 @@ const Engine = {
     }
 
     allJobs.forEach(j => {
+      const researchBenches = j.id === 'research' ? this._researchBenchCount() : null;
+      if (researchBenches === 0) return;
       const evaluationMap = focusEvaluationMaps
         ? focusEvaluationMaps.get(j.id)
         : new Map();
@@ -1607,22 +1884,25 @@ const Engine = {
       }
 
       const capable = pawns.filter(p => evaluationMap.get(p.id).eligible);
+      capableByAnalysedJob.set(j.id, capable);
       if (capable.length === 0 && j.important) {
         gaps.push({ jobId: j.id, jobName: j.name, severity: 'critical', reason: `No pawn is capable of ${j.name}`, bestPawn: null });
         return;
       }
 
       const assigned = capable.filter(p => priorities[p.id]?.[j.id] != null);
+      const researchFull = researchBenches !== null && assigned.length >= researchBenches;
+      const recommendationPool = researchFull ? assigned : capable;
       const atP1 = assigned.filter(p => priorities[p.id]?.[j.id] === 1);
 
       // Gap: important job with no assignment
       if (j.important && assigned.length === 0) {
-        const best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
+        const best = this._bestPawnForJob(recommendationPool, j, contextMap, evaluationMap);
         gaps.push({ jobId: j.id, jobName: j.name, severity: 'critical', reason: `No pawn assigned to ${j.name}`, bestPawn: best });
       }
       // Gap: important job with no P1
       else if (j.important && atP1.length === 0 && assigned.length > 0) {
-        const best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
+        const best = this._bestPawnForJob(recommendationPool, j, contextMap, evaluationMap);
         gaps.push({ jobId: j.id, jobName: j.name, severity: 'warning', reason: `${j.name} has no P1 assignment (best assigned at P${priorities[assigned[0].id][j.id]})`, bestPawn: best });
       }
       // Gap: skill-linked important job with low effective speed
@@ -1633,7 +1913,7 @@ const Engine = {
           evaluationMap.get(p.id).projection.realSpeed));
         if (bestSpeed < 0.6 || bestSkill < 4) {
           const speedPct = (bestSpeed * 100).toFixed(0);
-          let best = this._bestPawnForJob(capable, j, contextMap, evaluationMap);
+          let best = this._bestPawnForJob(recommendationPool, j, contextMap, evaluationMap);
           if (best && priorities[best.pawnId]?.[j.id] === 1) best = null;
           gaps.push({ jobId: j.id, jobName: j.name, severity: 'warning', reason: `Best ${j.name} pawn: skill ${bestSkill}, ${speedPct}% speed (recommend 80%+)${best ? '' : ' - a skill limitation, not an assignment problem'}`, bestPawn: best });
         }
@@ -1650,8 +1930,8 @@ const Engine = {
         const focusTier = isFocused && strategicFocus.strength === 'strong' ? 1 : 2;
         const focusPriority = autoPriority(focusTier);
         let focusCapable = isFocused
-          ? capable.filter(p => !focusProtectedPawns.has(p.id))
-          : capable;
+          ? recommendationPool.filter(p => !focusProtectedPawns.has(p.id))
+          : recommendationPool;
         if (isFocused) {
           const needingFocus = focusCapable.filter(p => {
             const current = priorities[p.id]?.[j.id];
@@ -1705,6 +1985,27 @@ const Engine = {
     });
 
     const result = { gaps, recommendations: uniqueRecs, singlePoints };
+    const haulingPlan = this._haulingPriorityPlan(
+      pawns, allJobs, priorities, capableByAnalysedJob, strategicFocus);
+    if (haulingPlan) {
+      result.haulingPlan = haulingPlan;
+      // Applying all general recommendations must not undo the hauler's clear
+      // priority by immediately restoring a competing routine P1 assignment.
+      if (haulingPlan.status === 'ready') {
+        const competes = (pawnId, jobId) => pawnId === haulingPlan.pawnId
+          && jobId !== 'hauling'
+          && !['firefight', 'patient', 'bed_rest', 'doctoring', 'tending', 'childcare'].includes(jobId)
+          && allJobs.find(job => job.id === jobId)?.cat !== 'emergency';
+        result.recommendations = result.recommendations.filter(rec =>
+          rec.suggestedPriority !== 1 || !competes(rec.pawnId, rec.jobId));
+        result.gaps.forEach(gap => {
+          if (gap.bestPawn && competes(gap.bestPawn.pawnId, gap.jobId)) {
+            gap.bestPawn = null;
+            gap.reason += ' - choose another worker to preserve dedicated hauling';
+          }
+        });
+      }
+    }
     if (strategicFocus) result.strategicFocus = {
       id: strategicFocus.id, label: strategicFocus.label, strength: strategicFocus.strength,
     };

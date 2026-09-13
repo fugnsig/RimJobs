@@ -3346,6 +3346,9 @@ Object.assign(App, {
       ? this.state.settings.strategicFocusId : '';
     this.state.settings.strategicFocusStrength = this.state.settings.strategicFocusStrength === 'strong'
       ? 'strong' : 'normal';
+    const researchBenchCount = this.state.settings.researchBenchCount;
+    this.state.settings.researchBenchCount = Number.isInteger(researchBenchCount)
+      && researchBenchCount >= 0 && researchBenchCount <= 999 ? researchBenchCount : null;
     const priorityMax = Math.max(4, Math.min(9, Math.trunc(Number(this.state.settings.manualPriorityMax)) || 4));
     this.state.settings.manualPriorityMax = priorityMax;
     if (typeof PriorityScale !== 'undefined') {

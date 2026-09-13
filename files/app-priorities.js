@@ -529,17 +529,63 @@ Object.assign(App, {
     }
 
     // ALL CLEAR
-    if (r.gaps.length === 0 && r.recommendations.length === 0 && r.singlePoints.length === 0) {
+    if (r.gaps.length === 0 && r.recommendations.length === 0 && r.singlePoints.length === 0
+      && (!r.haulingPlan || r.haulingPlan.status === 'ready')) {
       html = `<div class="settings-card" style="text-align:center; padding:20px; border-left:4px solid var(--ok-txt)">
         <div style="font-weight:700; color:var(--ok-txt); margin-bottom:4px">Colony looks good!</div>
         <div style="font-size:var(--f-xs); color:var(--text3)">All critical jobs are covered with capable pawns. No gaps detected.</div>
       </div>`;
     }
 
+    if (r.haulingPlan) {
+      const plan = r.haulingPlan;
+      html += `<div class="settings-card" style="margin-top:var(--gap-sm); padding:12px 16px">
+        <div style="font-weight:700; margin-bottom:4px">Hauling priority</div>
+        <div style="font-size:var(--f-xs); color:var(--text2)">${_escapeHtml(plan.message)}</div>
+        ${plan.status === 'suggested' ? `<button class="btn btn-sm" onclick="App.applyHaulingPriorityPlan()"${suggestionDisabled} style="margin-top:8px">Prioritise one hauler</button>` : ''}
+      </div>`;
+    }
+
     return html;
   },
 
+  applyHaulingPriorityPlan() {
+    if (!this._guardPriorityEdit('prioritise hauling', true)) return false;
+    const jobs = this._visibleJobs();
+    const contextMap = this._c7PawnContextMap(this.state.pawns, this._c7EvidenceOptionsByPawn);
+    const result = Engine.analyzeColony(this.state.pawns, this.state.priorities,
+      jobs, contextMap, this._strategicFocusConfig());
+    const plan = result.haulingPlan;
+    if (!plan || plan.status !== 'suggested') {
+      this._refreshPlanner();
+      this.toast('Hauling suggestions refreshed. No priorities were changed.');
+      return false;
+    }
+    plan.changes.forEach(change => {
+      if (!this.state.priorities[change.pawnId]) this.state.priorities[change.pawnId] = {};
+      this.state.priorities[change.pawnId][change.jobId] = change.priority;
+    });
+    this.renderTable(contextMap);
+    this._refreshPlanner();
+    this.triggerAutoSave();
+    this.toast('Hauling now comes before routine work for one pawn. Emergency priorities are unchanged.');
+    return true;
+  },
+
   // -- WORK PLANNER MODAL --
+  setResearchBenchCount(raw) {
+    const text = String(raw).trim();
+    const value = text === '' ? null : Number(text);
+    if (value !== null && (!Number.isInteger(value) || value < 0 || value > 999)) {
+      this.toast('Enter a whole number from 0 to 999, or leave it blank.');
+      return false;
+    }
+    this.state.settings.researchBenchCount = value;
+    this.openWorkPlanner();
+    this.triggerAutoSave();
+    return true;
+  },
+
   // Consolidates: visible-task overview, one-click Auto-Assign, add custom task,
   // column management, and the colony analysis with apply buttons.
   openWorkPlanner() {
@@ -558,8 +604,24 @@ Object.assign(App, {
     const applyAll = (r.recommendations.length > 0 || r.gaps.some(g => g.bestPawn))
       ? `<button class="btn btn-sm btn-accent" onclick="App.applyAllOptimizerSuggestions()"${this._lockedPriorityActionAttrs('apply suggestions')} style="font-size:var(--f-xs)">Apply All</button>` : '';
     const autoAssignDisabled = this._lockedPriorityActionAttrs('use Auto-Assign');
+    const benches = Engine._researchBenchCount();
+    const researchers = pawns.filter(p => Engine._hasWorkPriority(this.state.priorities[p.id]?.research)).length;
+    const researchNote = benches === null ? 'Leave blank for no bench limit. Count usable research benches or spots.'
+      : `${researchers} assigned researcher${researchers === 1 ? '' : 's'} for ${benches} bench${benches === 1 ? '' : 'es'}. Auto-Assign keeps up to ${benches} researchers enabled; research capacity estimates use at most ${benches}.`
+        + (researchers > benches ? ' More researchers are enabled than benches available. Use Auto-Assign or adjust Research priorities.' : '');
+    const fireAvoidance = pawns.filter(p => Engine._c7AvoidsFirefighting(p)).length;
     const body = `
       <div id="workPlannerBody">
+        <div style="margin-bottom:12px; font-size:var(--f-xs); color:var(--text2)">
+          <label class="colony-focus-pill" for="researchBenchCount">
+            <span>Usable research benches</span>
+            <input id="researchBenchCount" type="number" min="0" max="999" step="1" placeholder="Not set"
+              value="${benches === null ? '' : benches}" onchange="App.setResearchBenchCount(this.value)"
+              aria-describedby="researchBenchHelp">
+          </label>
+          <div id="researchBenchHelp" style="margin-top:4px; color:var(--text3)">${researchNote}</div>
+          ${fireAvoidance ? `<div style="margin-top:4px">Auto-Assign excludes ${fireAvoidance} pyrophobic pawn${fireAvoidance === 1 ? '' : 's'} from firefighting to avoid fire-related panic.</div>` : ''}
+        </div>
         <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px">
           <button class="btn btn-sm btn-accent" onclick="App.autoAssignAll(); App.openWorkPlanner()"${autoAssignDisabled} style="font-size:var(--f-xs)">Auto-Assign</button>
           <button class="btn btn-sm" onclick="App._addTaskFromPlanner()" style="font-size:var(--f-xs)">+ Add task</button>
@@ -589,6 +651,11 @@ Object.assign(App, {
 
   applyOptimizerSuggestion(pawnId, jobId, priority) {
     if (!this._guardPriorityEdit('apply this suggestion', true)) return false;
+    if (jobId === 'research' && !Engine._canAddResearchAssignment(pawnId, this.state.priorities)) {
+      this.toast('All research benches already have an assigned researcher. Adjust the bench count or Research priorities.');
+      this._refreshPlanner();
+      return false;
+    }
     if (!this.state.priorities[pawnId]) this.state.priorities[pawnId] = {};
     this.state.priorities[pawnId][jobId] = priority;
     this.renderTable();
@@ -604,12 +671,14 @@ Object.assign(App, {
     // Apply gap fixes
     r.gaps.forEach(g => {
       if (g.bestPawn) {
+        if (g.jobId === 'research' && !Engine._canAddResearchAssignment(g.bestPawn.pawnId, this.state.priorities)) return;
         if (!this.state.priorities[g.bestPawn.pawnId]) this.state.priorities[g.bestPawn.pawnId] = {};
         this.state.priorities[g.bestPawn.pawnId][g.jobId] = 1;
       }
     });
     // Apply recommendations
     r.recommendations.forEach(rec => {
+      if (rec.jobId === 'research' && !Engine._canAddResearchAssignment(rec.pawnId, this.state.priorities)) return;
       if (!this.state.priorities[rec.pawnId]) this.state.priorities[rec.pawnId] = {};
       this.state.priorities[rec.pawnId][rec.jobId] = rec.suggestedPriority;
     });

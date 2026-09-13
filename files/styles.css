@@ -911,6 +911,19 @@ body.light-theme .window-resize-dimensions { background: var(--surface); }
   color: var(--text2);
   font-weight: 800;
 }
+.colony-focus-pill input[type="number"] {
+  width: 80px;
+  min-width: 0;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 5px;
+  outline: none;
+  background-color: var(--surface2);
+  color: var(--text);
+  font: inherit;
+  color-scheme: dark;
+}
+body.light-theme .colony-focus-pill input[type="number"] { color-scheme: light; }
 .colony-focus-pill select option {
   background-color: var(--surface3);
   color: var(--text);

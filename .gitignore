@@ -25,6 +25,7 @@ Desktop.ini
 !.github/
 
 # Local working files
+/Rimjob WIP.txt
 *.jsonl
 *.tasks.json
 logo-toasts.txt
@@ -41,6 +42,7 @@ docs/*.md
 !docs/screenshots/README.md
 
 # Local dev tools and assets
+/tools/
 files/fonts/
 files/perf.js
 test/

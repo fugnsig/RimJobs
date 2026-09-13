@@ -1649,6 +1649,13 @@ const CapabilityEvidence = {
         }
       }
 
+      // Temporal policy must not revive an overridden gene. Keep legacy work
+      // projections above unchanged.
+      const geneStates = (Array.isArray(pawn.geneRuntimeFacts) ? pawn.geneRuntimeFacts : [])
+        .filter(fact => fact && fact.geneDefId === gId);
+      if (geneStates.length && geneStates.every(fact => fact.overriddenByGeneId
+          || fact.active && fact.active.state === 'known' && fact.active.value === false)) continue;
+
       // Generic need-suppression from definition data
       if (Array.isArray(def.disablesNeeds)) {
         for (let n = 0; n < def.disablesNeeds.length; n++) {
@@ -1660,14 +1667,14 @@ const CapabilityEvidence = {
       }
 
       // Sleepless gene (gene_no_sleep) - emit sleepHoursOverride 0
-      if (def.id === 'gene_no_sleep' || def.label === 'Sleepless') {
+      if (def.id === 'gene_no_sleep') {
         const eid = 'gene:' + gId + ':sleepHoursOverride';
         effects.push(_makeEvidence(eid, 'sleepHoursOverride', null, 0,
           provenance, confidence, baseOpts));
       }
 
-      // Low Sleep gene (matched by id pattern, same as engine.js)
-      if (def.id !== 'gene_no_sleep' && /low_?sleep/i.test(String(def.id || gId))) {
+      // Exact vanilla identity, including the scanner's stable key.
+      if (gId === 'LowSleep' || def.defName === 'LowSleep' || def.id === 'mod_gene_lowsleep') {
         const eid = 'gene:' + gId + ':sleepHoursOverride';
         effects.push(_makeEvidence(eid, 'sleepHoursOverride', null, 3,
           provenance, confidence, baseOpts));

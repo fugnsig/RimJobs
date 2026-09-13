@@ -143,10 +143,24 @@ Object.assign(App, {
       ? 'at least one colonist is awake every hour'
       : '<span style="color:var(--accent)">warning: some hours have nobody awake - add colonists or adjust sleep</span>');
 
+    const couples = (Array.isArray(r.coupleSleep) ? r.coupleSleep : [])
+      .filter(pair => pair && Array.isArray(pair.pawnIds) && pair.pawnIds.length === 2
+        && pair.pawnIds.every(id => byId.has(id)))
+      .map(pair => {
+        const names = pair.pawnIds.map(id => _escapeHtml(_pawnDisplayName(byId.get(id)))).join(' and ');
+        const hours = Number.isFinite(pair.overlapHours) ? pair.overlapHours : 0;
+        const detail = pair.possibleHours === 0 ? 'one or both partners have no scheduled sleep'
+          : hours < pair.possibleHours ? 'overlap limited by sleep preferences, fixed schedules or colony coverage'
+          : 'shared sleep window aligned';
+        return `<div>${names}: <strong>${hours}h</strong> scheduled sleep overlap - ${detail}.</div>`;
+      }).join('');
+
     const rows = r.pawns.map(p => {
       let windows;
       if (p.mode === 'downed') {
         windows = `<span style="color:var(--p4-txt); font-weight:700">Downed</span>, free schedule until they recover`;
+      } else if (p.mode === 'baby') {
+        windows = 'Baby - free schedule for naps and feeds';
       } else if (p.mode === 'manual') {
         windows = `Kept your <strong>${_escapeHtml(presetLabel[p.preset] || p.preset || 'manual')}</strong> preset`;
       } else {
@@ -179,6 +193,7 @@ Object.assign(App, {
       </summary>
       <div style="padding:var(--gap-sm) var(--gap-lg) var(--gap-md)">
         <div style="font-size:var(--f-sm); color:var(--text2); padding:6px 0 2px">${bits.join('<span style="color:var(--text3)"> &middot; </span>')}</div>
+        ${couples ? `<div style="font-size:var(--f-xs); color:var(--text2); padding:6px 0">${couples}<div style="color:var(--text3)">Scheduled overlap does not confirm a shared bed.</div></div>` : ''}
         ${rows}
       </div>
     </details>`;
@@ -266,8 +281,8 @@ Object.assign(App, {
         const isGap = pr.type === 'gap';
         const benefitText = isGap
           ? `Restores ${pr.benefit.gapsRemoved} uncovered hour${pr.benefit.gapsRemoved !== 1 ? 's' : ''}`
-          : `Improves single-point coverage`;
-        const btnLabel = isGap ? 'Apply' : 'Apply optional improvement';
+          : `Reduces single-pawn coverage by ${pr.benefit.fragileHoursImproved} hour${pr.benefit.fragileHoursImproved !== 1 ? 's' : ''}`;
+        const btnLabel = 'Apply sleep change';
         const btnColor = isGap ? 'var(--accent)' : 'var(--text3)';
         lines.push(`<div style="margin-top:6px; padding:6px 8px; background:var(--surface2); border-radius:var(--radius-sm); border:1px solid var(--border)">
           <div style="font-size:var(--f-xs); color:var(--text2)">Shift <strong>${_escapeHtml(pr.pawnName)}</strong> sleep <span style="color:var(--text3)">${sleepFrom}-${sleepTo}</span> to <strong>${newFrom}-${newTo}</strong></div>
@@ -301,10 +316,10 @@ Object.assign(App, {
     }
 
     if (!Engine.verifyProposalPrecondition(pr, pawn.schedule)) {
-      this.toast('Schedule has changed since this recommendation was made. Recomputing.');
       this._schedProposals = null;
       this._schedRationale = null;
       this.renderSchedule();
+      this.toast('This suggestion is out of date. Nothing was changed; suggestions have been refreshed.');
       return;
     }
 
